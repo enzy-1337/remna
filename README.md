@@ -55,6 +55,7 @@ docker compose up -d
 - Сервис **`bot`** — `python -m bot.main`
 - Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей)
 - **Postgres** и **Redis** поднимаются автоматически; `DATABASE_URL` / `REDIS_URL` в compose переопределены под сеть Docker.
+- Порты **5432** и **6379** на хост **не пробрасываются** (чтобы не конфликтовать с уже установленным PostgreSQL/Redis на VPS). Подключение к БД из контейнеров идёт по имени `postgres` / `redis`. Нужен доступ с хоста — см. `docker-compose.override.example.yml`.
 
 ### Интерфейс (фото + профиль)
 

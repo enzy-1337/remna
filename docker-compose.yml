@@ -7,8 +7,8 @@ services:
       POSTGRES_DB: vpnbot
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Порты не пробрасываем на хост: иначе конфликт с локальным PostgreSQL (5432).
+    # Бот и API ходят в БД по имени сервиса postgres внутри сети compose.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vpnbot -d vpnbot"]
       interval: 5s
@@ -17,8 +17,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Аналогично — без публикации 6379 на хост (часто занят локальным Redis).
 
   bot:
     build: .

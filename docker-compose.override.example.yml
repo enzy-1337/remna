@@ -1,0 +1,16 @@
+# Скопируйте в docker-compose.override.yml, если нужен доступ к БД/Redis с хоста
+# (например DBeaver). Используйте нестандартные порты, чтобы не конфликтовать с
+# уже установленным PostgreSQL/Redis на сервере.
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# services:
+#   postgres:
+#     ports:
+#       - "15432:5432"
+#   redis:
+#     ports:
+#       - "16379:6379"
+
+services: {}
+
