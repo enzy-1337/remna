@@ -60,9 +60,9 @@ async def cmd_start(
     if created:
         intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
         if user.referred_by is not None:
-            intro_lines.append("Вы присоединились по приглашению друга.")
+            intro_lines.append(esc("Вы присоединились по приглашению друга."))
     else:
-        intro_lines.append("С возвращением!")
+        intro_lines.append(esc("С возвращением!"))
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = trial_eligible(user, has_act)

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.md2 import bold, esc, join_lines
+from shared.md2 import bold, join_lines
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.payments.base import ParsedWebhookTopup
@@ -197,7 +197,7 @@ async def notify_topup_success(
                     title="💳 " + bold("Пополнение баланса"),
                     lines=[
                         f"Сумма: {bold(str(amount_rub))} ₽",
-                        f"Провайдер: {bold(esc(provider_name or '—'))}",
+                        f"Провайдер: {bold(provider_name or '—')}",
                     ],
                     event_type="topup",
                     subject_user=u,
