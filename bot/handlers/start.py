@@ -33,6 +33,7 @@ async def cmd_start(
     message: Message,
     session: AsyncSession,
     is_channel_member: bool,
+    is_bot_admin: bool = False,
 ) -> None:
     settings = get_settings()
     if not is_channel_member:
