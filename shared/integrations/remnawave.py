@@ -127,7 +127,8 @@ class RemnaWaveClient:
                     "%Y-%m-%dT%H:%M:%S.000Z"
                 ),
                 "hwidDeviceLimit": 2,
-                "trafficLimitBytes": 0,
+                "trafficLimitBytes": 1024**3,
+                "usedTrafficBytes": 0,
                 "status": "ACTIVE",
             }
         data = await self._request("GET", f"/api/users/{user_uuid}")

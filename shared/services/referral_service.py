@@ -43,6 +43,31 @@ async def sum_referrer_bonus_rub(session: AsyncSession, referrer_user_id: int) -
     return Decimal(str(val)) if val is not None else Decimal("0")
 
 
+async def sum_referrer_bonus_days(session: AsyncSession, referrer_user_id: int) -> int:
+    r = await session.execute(
+        select(func.coalesce(func.sum(ReferralReward.bonus_days), 0)).where(
+            ReferralReward.referrer_id == referrer_user_id,
+            ReferralReward.status == "applied",
+        )
+    )
+    return int(r.scalar_one() or 0)
+
+
+async def list_invited_users(
+    session: AsyncSession,
+    referrer_user_id: int,
+    *,
+    limit: int = 40,
+) -> list[User]:
+    r = await session.execute(
+        select(User)
+        .where(User.referred_by == referrer_user_id)
+        .order_by(User.id.desc())
+        .limit(limit)
+    )
+    return list(r.scalars().all())
+
+
 async def grant_referrer_reward_first_paid_plan(
     session: AsyncSession,
     *,

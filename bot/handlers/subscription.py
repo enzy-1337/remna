@@ -1,10 +1,6 @@
-"""Раздел «Моя подписка»: статус, покупка/продление, ссылка, авто-продление."""
+"""Подписка: детальный экран, тарифы, покупка, авто-продление."""
 
 from __future__ import annotations
-
-import html
-import logging
-from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton
@@ -12,87 +8,51 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
+from bot.ui.subscription_detail import build_subscription_detail_caption
+from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.user import User
 from shared.services.subscription_service import (
     get_active_subscription,
     list_paid_plans,
+    plan_tariff_button_label,
     purchase_plan_with_balance,
     set_subscription_auto_renew,
 )
-
-logger = logging.getLogger(__name__)
-
 router = Router(name="subscription")
 
 
-def _subscription_actions_markup(*, has_active: bool, auto_renew: bool):
+def _sub_main_keyboard(*, has_active: bool, auto_renew: bool) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="📦 Тарифы / продлить", callback_data="sub:plans"))
-    b.row(InlineKeyboardButton(text="🔗 Ссылка подписки", callback_data="sub:link"))
     if has_active:
-        ar_text = "⏸ Выключить авто-продление" if auto_renew else "▶️ Включить авто-продление"
+        b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
+        b.row(
+            InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
+            InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
+        )
+        ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
-    return b.as_markup()
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    return b
 
 
-async def _screen_text(session: AsyncSession, user: User) -> str:
-    sub = await get_active_subscription(session, user.id)
-    now = datetime.now(timezone.utc)
-    if not sub:
-        return (
-            "🔑 <b>Моя подписка</b>\n\n"
-            "Сейчас нет активной подписки.\n"
-            "Выберите тариф или активируйте триал в главном меню."
-        )
-    plan_name = html.escape(sub.plan.name) if sub.plan else "—"
-    st = html.escape(sub.status)
-    exp = sub.expires_at
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=timezone.utc)
-    left = exp - now
-    days = max(0, left.days)
-    ar = "да" if sub.auto_renew else "нет"
-    trial_note = ""
-    if sub.status == "trial":
-        trial_note = (
-            "\n\nℹ️ Активен <b>триал</b>. Покупка тарифа добавит срок от текущей даты окончания."
-        )
-    return (
-        f"🔑 <b>Моя подписка</b>\n\n"
-        f"Тариф: <b>{plan_name}</b>\n"
-        f"Статус: <b>{st}</b>\n"
-        f"Истекает: <b>{exp.strftime('%d.%m.%Y %H:%M')} UTC</b>\n"
-        f"Осталось дней (оценка): <b>{days}</b>\n"
-        f"Слотов устройств: <b>{sub.devices_count}</b>\n"
-        f"Авто-продление: <b>{ar}</b>{trial_note}"
-    )
-
-
-@router.callback_query(F.data == "menu:subscription")
-async def cb_subscription_home(
+async def _show_subscription_main(
     cq: CallbackQuery,
     session: AsyncSession,
-    db_user: User | None,
+    db_user: User,
 ) -> None:
-    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
-        return
-    assert db_user is not None
+    settings = get_settings()
+    cap, _url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
     sub = await get_active_subscription(session, db_user.id)
-    text = await _screen_text(session, db_user)
-    kb = _subscription_actions_markup(
+    kb = _sub_main_keyboard(
         has_active=sub is not None,
         auto_renew=sub.auto_renew if sub else False,
-    )
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(text, reply_markup=kb)
+    ).as_markup()
+    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
 
-@router.callback_query(F.data == "sub:plans")
-async def cb_plans(
+@router.callback_query(F.data.in_(("menu:sub_main", "menu:subscription")))
+async def cb_subscription_main(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
@@ -100,26 +60,47 @@ async def cb_plans(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    await _show_subscription_main(cq, session, db_user)
+
+
+@router.callback_query(F.data.in_(("sub:plans", "sub:extend")))
+async def cb_plans_or_extend(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
     plans = await list_paid_plans(session)
     if not plans:
         await cq.answer("Нет доступных тарифов", show_alert=True)
         return
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    is_extend = cq.data == "sub:extend"
+    title = (
+        "🔄 <b>Продлить подписку</b>\n\n"
+        if (is_extend and has_act)
+        else "🛒 <b>Купить подписку</b>\n\n"
+    )
+    body = title + "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
     b = InlineKeyboardBuilder()
     for p in plans:
         b.row(
             InlineKeyboardButton(
-                text=f"{p.name} — {p.price_rub} ₽",
+                text=plan_tariff_button_label(p),
                 callback_data=f"sub:buy:{p.id}",
             )
         )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:subscription"))
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            "📦 <b>Выберите тариф</b>\n\n"
-            "Оплата с баланса. Если средств не хватает — тариф сохранится в корзине на 30 мин.",
-            reply_markup=b.as_markup(),
-        )
+    back_cb = "menu:sub_main" if has_act else "menu:main"
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=body,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
 
 
 @router.callback_query(F.data.startswith("sub:buy:"))
@@ -146,58 +127,95 @@ async def cb_buy_plan(
         settings=settings,
         save_to_cart_if_insufficient=True,
     )
-    await cq.answer()
-    if not cq.message:
+    if not cq.message or cq.bot is None:
         return
     if ok:
-        body = msg + "\n\n" + await _screen_text(session, db_user)
+        cap, _u = await build_subscription_detail_caption(session, user=db_user, settings=settings)
+        full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
-        await cq.message.edit_text(
-            body,
-            reply_markup=_subscription_actions_markup(
-                has_active=sub is not None,
-                auto_renew=sub.auto_renew if sub else False,
-            ),
+        kb = _sub_main_keyboard(
+            has_active=sub is not None,
+            auto_renew=sub.auto_renew if sub else False,
+        ).as_markup()
+        await answer_callback_with_photo_screen(
+            cq,
+            caption=full,
+            reply_markup=kb,
+            settings=settings,
         )
-    else:
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data="sub:plans"))
-        b.row(InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"))
-        b.row(InlineKeyboardButton(text="🔑 Подписка", callback_data="menu:subscription"))
-        await cq.message.edit_text(msg, reply_markup=b.as_markup())
+        return
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data="sub:plans"))
+    b.row(InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"))
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    b.row(
+        InlineKeyboardButton(
+            text="🔑 Подписка",
+            callback_data="menu:sub_main" if has_act else "menu:main",
+        )
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=msg,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
 
 
-@router.callback_query(F.data == "sub:link")
-async def cb_sub_link(
+@router.callback_query(F.data == "sub:instr")
+async def cb_sub_instructions(
     cq: CallbackQuery,
-    session: AsyncSession,
     db_user: User | None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
-    assert db_user is not None
-    if not db_user.remnawave_uuid:
-        await cq.answer("Сначала активируйте триал или купите подписку.", show_alert=True)
-        return
     settings = get_settings()
-    rw = RemnaWaveClient(settings)
-    try:
-        u = await rw.get_user(str(db_user.remnawave_uuid))
-    except RemnaWaveError:
-        logger.exception("get_user for subscription link")
-        await cq.answer("Не удалось получить ссылку.", show_alert=True)
-        return
-    url = u.get("subscriptionUrl") or ""
-    if not url:
-        await cq.answer("Ссылка пуста в панели.", show_alert=True)
-        return
-    href = html.escape(url, quote=True)
-    text = f"🔗 <b>Ссылка подписки</b>\n\n<a href=\"{href}\">Открыть / скопировать в приложении</a>"
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:subscription"))
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(text, reply_markup=b.as_markup())
+    if settings.instruction_telegraph_phone_url:
+        b.row(
+            InlineKeyboardButton(
+                text="📱 Телефон (Telegra.ph)",
+                url=settings.instruction_telegraph_phone_url,
+            )
+        )
+    if settings.instruction_telegraph_pc_url:
+        b.row(
+            InlineKeyboardButton(
+                text="💻 Компьютер (Telegra.ph)",
+                url=settings.instruction_telegraph_pc_url,
+            )
+        )
+    if not settings.instruction_telegraph_phone_url and not settings.instruction_telegraph_pc_url:
+        if settings.instruction_android_url:
+            b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
+        if settings.instruction_ios_url:
+            b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
+        if settings.instruction_windows_url:
+            b.row(InlineKeyboardButton(text="🪟 Windows", url=settings.instruction_windows_url))
+        if settings.instruction_macos_url:
+            b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
+    b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
+    text = (
+        "📖 <b>Инструкции</b>\n\n"
+        "Выберите платформу — откроется статья в Telegra.ph.\n"
+    )
+    if (
+        not settings.instruction_telegraph_phone_url
+        and not settings.instruction_telegraph_pc_url
+        and not (
+            settings.instruction_android_url
+            or settings.instruction_ios_url
+            or settings.instruction_windows_url
+            or settings.instruction_macos_url
+        )
+    ):
+        text += "\n⚠️ Задайте <code>INSTRUCTION_TELEGRAPH_PHONE_URL</code> и <code>INSTRUCTION_TELEGRAPH_PC_URL</code> в .env."
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
 
 
 @router.callback_query(F.data == "sub:toggle_ar")
@@ -218,14 +236,4 @@ async def cb_toggle_ar(
     if not ok:
         await cq.answer(tip, show_alert=True)
         return
-    await cq.answer(tip)
-    sub2 = await get_active_subscription(session, db_user.id)
-    text = await _screen_text(session, db_user)
-    if cq.message:
-        await cq.message.edit_text(
-            text,
-            reply_markup=_subscription_actions_markup(
-                has_active=sub2 is not None,
-                auto_renew=sub2.auto_renew if sub2 else False,
-            ),
-        )
+    await _show_subscription_main(cq, session, db_user)

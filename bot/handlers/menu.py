@@ -1,4 +1,4 @@
-"""Главное меню и колбэки разделов."""
+"""Главный экран «Профиль», инструкции, вспомогательные колбэки."""
 
 from __future__ import annotations
 
@@ -7,40 +7,24 @@ import logging
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, User as TgUser
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardButton, User as TgUser
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
-from bot.keyboards.inline import main_menu_keyboard, submenu_back_keyboard
+from bot.keyboards.profile_kb import profile_main_keyboard
+from bot.ui.profile_text import profile_caption_html
+from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveError
 from shared.models.user import User
-from shared.services.trial_service import activate_trial, has_active_subscription, trial_eligible
+from shared.services.admin_notify import notify_admin
+from shared.services.subscription_service import get_active_subscription
+from shared.services.trial_service import activate_trial, trial_eligible
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="menu")
-
-
-async def build_main_menu_kb(session: AsyncSession, user: User) -> tuple[bool, object]:
-    settings = get_settings()
-    has_act = await has_active_subscription(session, user.id)
-    show_trial = trial_eligible(user, has_act)
-    kb = main_menu_keyboard(
-        show_trial=show_trial,
-        support_url=support_telegram_url(settings.support_username),
-    )
-    return show_trial, kb
-
-
-def main_menu_welcome_text(user: User) -> str:
-    name = user.first_name or "друг"
-    return (
-        f"👋 Привет, <b>{html.escape(name)}</b>!\n\n"
-        "Выберите раздел в меню ниже."
-    )
 
 
 @router.callback_query(F.data == "menu:main")
@@ -49,15 +33,26 @@ async def cb_main_menu(
     session: AsyncSession,
     db_user: User | None,
     state: FSMContext,
+    tg_user: TgUser | None,
 ) -> None:
     await state.clear()
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    _, kb = await build_main_menu_kb(session, db_user)
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(main_menu_welcome_text(db_user), reply_markup=kb)
+    tg = tg_user or cq.from_user
+    if tg is None:
+        await cq.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+    settings = get_settings()
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    show_trial = trial_eligible(db_user, has_act)
+    cap = profile_caption_html(db_user, tg)
+    kb = profile_main_keyboard(
+        has_active_sub=has_act,
+        show_trial=show_trial,
+        support_url=support_telegram_url(settings.support_username),
+    )
+    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
 
 @router.callback_query(F.data == "trial:activate")
@@ -97,8 +92,6 @@ async def cb_trial_activate(
         await cq.answer("Что-то пошло не так. Попробуйте позже.", show_alert=True)
         return
 
-    from shared.services.admin_notify import notify_admin
-
     await notify_admin(
         settings,
         title="🎁 <b>Активирован триал</b>",
@@ -110,17 +103,19 @@ async def cb_trial_activate(
         session=session,
     )
 
-    await cq.answer()
-    safe_url = html.escape(sub_url)
-    _, kb = await build_main_menu_kb(session, db_user)
-    text = (
-        f"🎉 <b>Триал активирован!</b>\n"
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    show_trial = trial_eligible(db_user, has_act)
+    cap = (
+        "🎉 <b>Триал активирован!</b>\n\n"
         f"Срок: {settings.trial_duration_days} дн., трафик: {settings.trial_traffic_gb} ГБ.\n\n"
-        f"Ссылка подписки (добавьте в приложение):\n<code>{safe_url}</code>\n\n"
-        "Ниже — главное меню."
+        f"Ссылка подписки:\n<code>{html.escape(sub_url)}</code>\n\n"
+    ) + profile_caption_html(db_user, tg)
+    kb = profile_main_keyboard(
+        has_active_sub=has_act,
+        show_trial=show_trial,
+        support_url=support_telegram_url(settings.support_username),
     )
-    if cq.message:
-        await cq.message.edit_text(text, reply_markup=kb)
+    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
 
 @router.callback_query(F.data == "menu:instructions")
@@ -129,54 +124,55 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
         return
     assert db_user is not None
     settings = get_settings()
-    await cq.answer()
     b = InlineKeyboardBuilder()
-    if settings.instruction_android_url:
+    if settings.instruction_telegraph_phone_url:
         b.row(
             InlineKeyboardButton(
-                text="🤖 Android",
-                url=settings.instruction_android_url,
+                text="📱 Телефон (Telegra.ph)",
+                url=settings.instruction_telegraph_phone_url,
             )
         )
-    if settings.instruction_ios_url:
+    if settings.instruction_telegraph_pc_url:
         b.row(
             InlineKeyboardButton(
-                text="🍎 iOS",
-                url=settings.instruction_ios_url,
+                text="💻 Компьютер (Telegra.ph)",
+                url=settings.instruction_telegraph_pc_url,
             )
         )
-    if settings.instruction_windows_url:
-        b.row(
-            InlineKeyboardButton(
-                text="🪟 Windows",
-                url=settings.instruction_windows_url,
-            )
-        )
-    if settings.instruction_macos_url:
-        b.row(
-            InlineKeyboardButton(
-                text="💻 macOS",
-                url=settings.instruction_macos_url,
-            )
-        )
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
-
+    if not settings.instruction_telegraph_phone_url and not settings.instruction_telegraph_pc_url:
+        if settings.instruction_android_url:
+            b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
+        if settings.instruction_ios_url:
+            b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
+        if settings.instruction_windows_url:
+            b.row(InlineKeyboardButton(text="🪟 Windows", url=settings.instruction_windows_url))
+        if settings.instruction_macos_url:
+            b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     text = (
-        "📖 <b>Инструкции по подключению</b>\n\n"
-        "Выберите вашу платформу. Откроется статья с шагами подключения VPN.\n"
+        "📖 <b>Инструкции</b>\n\n"
+        "Откройте статью на Telegra.ph для вашего устройства.\n"
     )
-    if not (
-        settings.instruction_android_url
-        or settings.instruction_ios_url
-        or settings.instruction_windows_url
-        or settings.instruction_macos_url
+    if (
+        not settings.instruction_telegraph_phone_url
+        and not settings.instruction_telegraph_pc_url
+        and not (
+            settings.instruction_android_url
+            or settings.instruction_ios_url
+            or settings.instruction_windows_url
+            or settings.instruction_macos_url
+        )
     ):
         text += (
-            "\n⚠️ Ссылки пока не настроены. "
-            "Укажите переменные INSTRUCTION_*_URL в .env."
+            "\n⚠️ Задайте <code>INSTRUCTION_TELEGRAPH_PHONE_URL</code> и "
+            "<code>INSTRUCTION_TELEGRAPH_PC_URL</code> в .env."
         )
-    if cq.message:
-        await cq.message.edit_text(text, reply_markup=b.as_markup())
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
 
 
 @router.callback_query(F.data == "menu:support")
@@ -184,7 +180,7 @@ async def cb_support(cq: CallbackQuery, db_user: User | None) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     await cq.answer(
-        "Укажите SUPPORT_USERNAME в настройках бота или найдите контакт в канале.",
+        "Укажите SUPPORT_USERNAME в .env — тогда кнопка поддержки станет ссылкой на Telegram.",
         show_alert=True,
     )
 
@@ -194,10 +190,12 @@ async def cb_about(cq: CallbackQuery, db_user: User | None) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            "ℹ️ <b>О сервисе</b>\n\n"
-            "VPN-доступ через панель Remnawave. По вопросам — поддержка.",
-            reply_markup=submenu_back_keyboard(),
-        )
+    settings = get_settings()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption="ℹ️ <b>О сервисе</b>\n\nVPN через панель Remnawave.",
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )

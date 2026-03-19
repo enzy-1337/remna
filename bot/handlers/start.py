@@ -1,4 +1,4 @@
-"""Команда /start: канал → регистрация → реферал → главное меню."""
+"""Команда /start: канал → регистрация → профиль."""
 
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, support_telegram_url
-from bot.handlers.menu import main_menu_welcome_text
-from bot.keyboards.inline import channel_required_keyboard, main_menu_keyboard
+from bot.keyboards.inline import channel_required_keyboard
+from bot.keyboards.profile_kb import profile_main_keyboard
+from bot.ui.profile_text import profile_caption_html
+from bot.utils.screen_photo import send_profile_screen
 from shared.config import get_settings
-from shared.models.user import User
-from shared.services.trial_service import has_active_subscription, trial_eligible
+from shared.services.subscription_service import get_active_subscription
+from shared.services.trial_service import trial_eligible
 from shared.services.user_registration import register_user
 
 router = Router(name="start")
@@ -47,6 +49,9 @@ async def cmd_start(
     if await reject_if_blocked(message, user):
         return
 
+    tg = message.from_user
+    assert tg is not None
+
     intro_lines: list[str] = []
     if created:
         intro_lines.append("✅ <b>Регистрация прошла успешно!</b>")
@@ -55,12 +60,20 @@ async def cmd_start(
     else:
         intro_lines.append("С возвращением!")
 
-    has_act = await has_active_subscription(session, user.id)
+    has_act = await get_active_subscription(session, user.id) is not None
     show_trial = trial_eligible(user, has_act)
-    kb = main_menu_keyboard(
+    kb = profile_main_keyboard(
+        has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
     )
-
-    body = "\n".join(intro_lines) + "\n\n" + main_menu_welcome_text(user)
-    await message.answer(body, reply_markup=kb)
+    profile_block = profile_caption_html(user, tg)
+    body = "\n".join(intro_lines) + "\n\n" + profile_block
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=body,
+        reply_markup=kb,
+        settings=settings,
+        delete_message=None,
+    )

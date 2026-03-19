@@ -48,6 +48,26 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="INSTRUCTION_MACOS_URL",
     )
+    instruction_telegraph_phone_url: str | None = Field(
+        default=None,
+        validation_alias="INSTRUCTION_TELEGRAPH_PHONE_URL",
+        description="Telegra.ph — инструкция для телефона",
+    )
+    instruction_telegraph_pc_url: str | None = Field(
+        default=None,
+        validation_alias="INSTRUCTION_TELEGRAPH_PC_URL",
+        description="Telegra.ph — инструкция для ПК",
+    )
+
+    # Картинка для экранов (профиль, подписка, …): файл или URL
+    bot_section_photo_path: str | None = Field(
+        default=None,
+        validation_alias="BOT_SECTION_PHOTO_PATH",
+    )
+    bot_section_photo_url: str | None = Field(
+        default=None,
+        validation_alias="BOT_SECTION_PHOTO_URL",
+    )
 
     # Админ-лог (шаг 12): чат или супергруппа; topic_id — ID темы в форуме
     admin_log_chat_id: str | int | None = Field(
@@ -151,6 +171,13 @@ class Settings(BaseSettings):
     @field_validator("admin_log_topic_id", mode="before")
     @classmethod
     def _empty_admin_topic(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    @field_validator("bot_section_photo_path", "bot_section_photo_url", mode="before")
+    @classmethod
+    def _empty_photo_fields(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v

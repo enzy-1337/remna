@@ -36,6 +36,13 @@ alembic upgrade head
 python -m bot.main
 ```
 
+### Интерфейс (фото + профиль)
+
+- Главный экран — **«Профиль»** с фото (файл `bot/assets/section_header.png` или `BOT_SECTION_PHOTO_PATH` / `BOT_SECTION_PHOTO_URL` в `.env`).
+- Переходы по разделам: предыдущее сообщение удаляется и отправляется новое с тем же стилем.
+- Промокод: команда **`/promo`** (кнопки в профиле можно добавить позже).
+- Инструкции: **`INSTRUCTION_TELEGRAPH_PHONE_URL`** и **`INSTRUCTION_TELEGRAPH_PC_URL`** (при отсутствии используются старые `INSTRUCTION_*_URL`).
+
 Бот должен иметь доступ к `getChatMember` по каналу (часто нужны права администратора бота в канале).
 
 ## API (вебхуки платежей)

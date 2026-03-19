@@ -1,18 +1,21 @@
-"""Раздел «Устройства»: список, платное добавление слота, удаление."""
+"""Устройства: список по нажатию, отвязка, платный слот."""
 
 from __future__ import annotations
 
 import html
-import logging
-
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.models.device import Device
+
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
+from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.models.user import User
+from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
     MAX_DEVICES,
     MIN_DEVICES,
@@ -22,56 +25,93 @@ from shared.services.subscription_service import (
     remove_device_slot,
 )
 
-logger = logging.getLogger(__name__)
-
 router = Router(name="devices")
 
+CTX_MAIN = "main"
+CTX_SUB = "sub"
 
-def _devices_kb(devices: list, slots: int, price_label: str):
+
+def _devices_back_cb(ctx: str) -> str:
+    return "menu:sub_main" if ctx == CTX_SUB else "menu:main"
+
+
+def _device_button_label(d) -> str:
+    base = (d.name or "Устройство")[:20]
+    if d.remnawave_client_id:
+        tail = d.remnawave_client_id.strip()
+        short = tail[-12:] if len(tail) > 12 else tail
+        label = f"{base} · {short}"
+    else:
+        label = f"{base} · id{d.id}"
+    return label[:60]
+
+
+def _devices_kb(devices: list, slots: int, price_label: str, ctx: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for d in devices:
-        nm = html.escape(d.name)[:34]
-        b.row(InlineKeyboardButton(text=f"🗑 {nm}", callback_data=f"dev:ask:{d.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text=_device_button_label(d),
+                callback_data=f"dev:pick:{d.id}:{ctx}",
+            )
+        )
     if slots < MAX_DEVICES:
         b.row(
             InlineKeyboardButton(
                 text=f"➕ Добавить слот ({price_label} ₽)",
-                callback_data="dev:add",
+                callback_data=f"dev:add:{ctx}",
             )
         )
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
     return b.as_markup()
 
 
-async def _render_devices(session: AsyncSession, user: User) -> tuple[str, object]:
+async def _render_devices(
+    session: AsyncSession,
+    user: User,
+    *,
+    ctx: str,
+) -> tuple[str, object]:
     settings = get_settings()
     sub = await get_active_subscription(session, user.id)
     if not sub:
         kb = (
             InlineKeyboardBuilder()
-            .row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
+            .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
             .as_markup()
         )
-        return "🖥️ <b>Устройства</b>\n\nСначала оформите подписку или триал.", kb
+        return "🖥 <b>Устройства</b>\n\nСначала оформите подписку или триал.", kb
 
     devices = await list_user_devices(session, sub.id)
     lines = [
-        "🖥️ <b>Устройства</b>\n",
-        f"Слотов: <b>{sub.devices_count}</b> (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})\n",
+        "🖥 <b>Устройства</b>\n",
+        f"Слотов в подписке: <b>{sub.devices_count}</b> (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})\n",
+        "\nНажмите устройство, чтобы <b>отвязать</b> его.",
     ]
-    if devices:
-        lines.append("")
-        for d in devices:
-            lines.append(f"• {html.escape(d.name)}")
-    else:
-        lines.append("\n<i>Записей пока нет.</i>")
     price = str(settings.extra_device_price_rub)
     body = "\n".join(lines)
-    return body, _devices_kb(devices, sub.devices_count, price)
+    return body, _devices_kb(devices, sub.devices_count, price, ctx)
+
+
+async def _open_devices_screen(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    *,
+    ctx: str,
+) -> None:
+    settings = get_settings()
+    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=kb,
+        settings=settings,
+    )
 
 
 @router.callback_query(F.data == "menu:devices")
-async def cb_devices_home(
+async def cb_devices_main(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
@@ -79,13 +119,22 @@ async def cb_devices_home(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    text, kb = await _render_devices(session, db_user)
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(text, reply_markup=kb)
+    await _open_devices_screen(cq, session, db_user, ctx=CTX_MAIN)
 
 
-@router.callback_query(F.data == "dev:add")
+@router.callback_query(F.data == "sub:devices")
+async def cb_devices_from_sub(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    await _open_devices_screen(cq, session, db_user, ctx=CTX_SUB)
+
+
+@router.callback_query(F.data.startswith("dev:add:"))
 async def cb_dev_add(
     cq: CallbackQuery,
     session: AsyncSession,
@@ -94,17 +143,15 @@ async def cb_dev_add(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    parts = cq.data.split(":")
+    ctx = parts[2] if len(parts) > 2 else CTX_MAIN
     settings = get_settings()
     ok, msg = await add_paid_device_slot(session, user=db_user, settings=settings)
     if ok:
-        from shared.services.admin_notify import notify_admin
-
         await notify_admin(
             settings,
             title="🖥 <b>Куплен слот устройства</b>",
-            lines=[
-                f"Списано: <b>{settings.extra_device_price_rub}</b> ₽",
-            ],
+            lines=[f"Списано: <b>{settings.extra_device_price_rub}</b> ₽"],
             event_type="extra_device_purchase",
             subject_user=db_user,
             session=session,
@@ -112,40 +159,18 @@ async def cb_dev_add(
     if not ok:
         await cq.answer(msg.replace("<b>", "").replace("</b>", ""), show_alert=True)
         return
-    await cq.answer()
-    text, kb = await _render_devices(session, db_user)
-    if cq.message:
-        await cq.message.edit_text(text + "\n\n" + msg, reply_markup=kb)
-
-
-@router.callback_query(F.data.startswith("dev:ask:"))
-async def cb_dev_ask_delete(
-    cq: CallbackQuery,
-    db_user: User | None,
-) -> None:
-    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
-        return
-    try:
-        did = int(cq.data.split(":")[2])
-    except (IndexError, ValueError):
-        await cq.answer("Ошибка", show_alert=True)
-        return
-    b = InlineKeyboardBuilder()
-    b.row(
-        InlineKeyboardButton(text="✅ Удалить", callback_data=f"dev:do:{did}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data="menu:devices"),
+    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    cap = text + "\n\n" + msg
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
     )
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            "🗑 Удалить это устройство из списка?\n"
-            "(Слот в панели уменьшится; минимум 2 устройства на аккаунт.)",
-            reply_markup=b.as_markup(),
-        )
 
 
-@router.callback_query(F.data.startswith("dev:do:"))
-async def cb_dev_confirm_delete(
+@router.callback_query(F.data.startswith("dev:pick:"))
+async def cb_dev_pick(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
@@ -153,8 +178,51 @@ async def cb_dev_confirm_delete(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    parts = cq.data.split(":")
     try:
-        did = int(cq.data.split(":")[2])
+        did = int(parts[2])
+        ctx = parts[3] if len(parts) > 3 else CTX_MAIN
+    except (IndexError, ValueError):
+        await cq.answer("Ошибка", show_alert=True)
+        return
+    r = await session.execute(select(Device).where(Device.id == did, Device.user_id == db_user.id))
+    dev = r.scalar_one_or_none()
+    if dev is None:
+        await cq.answer("Устройство не найдено.", show_alert=True)
+        return
+    nm = html.escape(dev.name)
+    settings = get_settings()
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Отвязать", callback_data=f"dev:do:{did}:{ctx}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=_devices_back_cb(ctx)),
+    )
+    cap = (
+        "🖥 <b>Устройство</b>\n\n"
+        f"{nm}\n\n"
+        "Отвязать это устройство? Слот в панели уменьшится (минимум 2 на аккаунт)."
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("dev:do:"))
+async def cb_dev_do(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    parts = cq.data.split(":")
+    try:
+        did = int(parts[2])
+        ctx = parts[3] if len(parts) > 3 else CTX_MAIN
     except (IndexError, ValueError):
         await cq.answer("Ошибка", show_alert=True)
         return
@@ -163,7 +231,11 @@ async def cb_dev_confirm_delete(
     if not ok:
         await cq.answer(msg.replace("<b>", "").replace("</b>", ""), show_alert=True)
         return
-    await cq.answer()
-    text, kb = await _render_devices(session, db_user)
-    if cq.message:
-        await cq.message.edit_text(text + "\n\n" + msg, reply_markup=kb)
+    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    cap = text + "\n\n" + msg
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
+    )

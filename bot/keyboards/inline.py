@@ -75,7 +75,17 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
     for a in (100, 200, 300, 500):
         builder.row(InlineKeyboardButton(text=f"{a} ₽", callback_data=f"topup:amt:{a}"))
     builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:balance"))
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"),
+    )
+    return builder.as_markup()
+
+
+def topup_invoice_done_keyboard() -> InlineKeyboardMarkup:
+    """После создания счёта."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
+    builder.row(InlineKeyboardButton(text="🏠 Профиль", callback_data="menu:main"))
     return builder.as_markup()
 
 

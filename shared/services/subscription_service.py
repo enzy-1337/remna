@@ -28,6 +28,18 @@ MIN_DEVICES = 2
 MAX_DEVICES = 10
 
 
+def plan_tariff_button_label(plan: Plan) -> str:
+    """Текст кнопки тарифа со скидкой, напр.: «3 месяца — 370 ₽ (-5%)»."""
+    name = (plan.name or "")[:28]
+    price = plan.price_rub
+    price_s = str(int(price)) if price == price.to_integral_value() else str(price)
+    disc = plan.discount_percent
+    if disc and disc > 0:
+        d = int(disc) if disc == disc.to_integral_value() else float(disc)
+        return f"{name} — {price_s} ₽ (-{d:g}%)"
+    return f"{name} — {price_s} ₽"
+
+
 async def list_paid_plans(session: AsyncSession) -> list[Plan]:
     r = await session.execute(
         select(Plan)

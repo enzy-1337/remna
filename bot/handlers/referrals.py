@@ -1,62 +1,126 @@
-"""Реферальная программа: ссылка, условия, статистика."""
+"""Реферальная программа: статистика, список приглашённых, ссылка."""
 
 from __future__ import annotations
 
 import html
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
-from bot.keyboards.inline import submenu_back_keyboard
+from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.models.user import User
-from shared.services.referral_service import count_invited_users, sum_referrer_bonus_rub
+from shared.services.referral_service import (
+    count_invited_users,
+    list_invited_users,
+    sum_referrer_bonus_days,
+    sum_referrer_bonus_rub,
+)
 
 router = Router(name="referrals")
 
 
-@router.callback_query(F.data == "menu:referrals")
-async def cb_referrals(cq: CallbackQuery, session: AsyncSession, db_user: User | None) -> None:
-    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
-        return
-    assert db_user is not None
-    settings = get_settings()
-    await cq.answer()
-
-    invited = await count_invited_users(session, db_user.id)
-    earned = await sum_referrer_bonus_rub(session, db_user.id)
-
+def _referrals_main_body(
+    *,
+    db_user: User,
+    settings,
+    invited: int,
+    earned_rub,
+    earned_days: int,
+) -> str:
     bonus_rub = settings.referral_inviter_bonus_rub
     bonus_days = settings.referral_inviter_bonus_days
     cond_lines: list[str] = []
     if bonus_rub > 0:
-        cond_lines.append(f"• <b>{bonus_rub}</b> ₽ на баланс пригласившему")
+        cond_lines.append(f"• <b>{bonus_rub}</b> ₽ за первую платную покупку друга")
     if bonus_days > 0:
-        cond_lines.append(f"• <b>{bonus_days}</b> дн. к подписке пригласившего (если она активна)")
+        cond_lines.append(f"• <b>{bonus_days}</b> дн. к вашей подписке (если активна)")
     if not cond_lines:
-        cond_lines.append("• Бонусы не настроены (задайте <code>REFERRAL_INVITER_BONUS_RUB</code> / <code>DAYS</code> в .env)")
-
-    cond_block = "\n".join(cond_lines)
+        cond_lines.append("• Условия: первая <b>платная</b> покупка приглашённого")
 
     if settings.bot_username:
         uname = settings.bot_username.lstrip("@")
         link = f"https://t.me/{uname}?start=ref_{db_user.referral_code}"
-        link_line = f"Ваша ссылка:\n<code>{html.escape(link)}</code>"
+        link_line = f"🔗 Пригласить:\n<code>{html.escape(link)}</code>"
     else:
         link_line = (
-            f"Ваш код: <code>{html.escape(db_user.referral_code)}</code>\n"
-            "Укажите <code>BOT_USERNAME</code> в .env для готовой ссылки."
+            f"Код: <code>{html.escape(db_user.referral_code)}</code>\n"
+            "<i>Задайте BOT_USERNAME для готовой ссылки.</i>"
         )
 
-    body = (
-        "👥 <b>Реферальная программа</b>\n\n"
-        f"{link_line}\n\n"
-        "<b>Условия (первая платная покупка друга):</b>\n"
-        f"{cond_block}\n\n"
-        f"Приглашено по ссылке: <b>{invited}</b>\n"
-        f"Начислено бонусами: <b>{earned}</b> ₽"
+    cond_block = "\n".join(cond_lines)
+    return (
+        "👥 <b>Рефералы</b>\n\n"
+        f"Приглашено людей: <b>{invited}</b>\n"
+        f"Получено дней (бонусы): <b>{earned_days}</b>\n"
+        f"Получено денег (бонусы): <b>{earned_rub}</b> ₽\n\n"
+        f"<b>Как это работает</b>\n{cond_block}\n\n"
+        f"{link_line}"
     )
-    if cq.message:
-        await cq.message.edit_text(body, reply_markup=submenu_back_keyboard())
+
+
+def _referrals_main_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📋 Список приглашённых", callback_data="ref:list"))
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    return b.as_markup()
+
+
+@router.callback_query(F.data == "menu:referrals")
+async def cb_referrals(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    invited = await count_invited_users(session, db_user.id)
+    earned = await sum_referrer_bonus_rub(session, db_user.id)
+    days_sum = await sum_referrer_bonus_days(session, db_user.id)
+    body = _referrals_main_body(
+        db_user=db_user,
+        settings=settings,
+        invited=invited,
+        earned_rub=earned,
+        earned_days=days_sum,
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=body,
+        reply_markup=_referrals_main_kb(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "ref:list")
+async def cb_ref_list(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    users = await list_invited_users(session, db_user.id, limit=25)
+    if not users:
+        lines = ["Пока никого не пригласили."]
+    else:
+        lines = []
+        for u in users:
+            un = f"@{html.escape(u.username)}" if u.username else "без username"
+            lines.append(f"• <code>{u.telegram_id}</code> {un}")
+    body = "📋 <b>Приглашённые</b>\n\n" + "\n".join(lines)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=body,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )

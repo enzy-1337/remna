@@ -14,8 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
-from bot.keyboards.inline import submenu_back_keyboard, topup_amounts_keyboard, topup_providers_keyboard
+from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_done_keyboard, topup_providers_keyboard
 from bot.states.payment import TopupStates
+from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.models.transaction import Transaction
 from shared.models.user import User
@@ -36,7 +37,7 @@ def _can_platega() -> bool:
     return s.platega_stub or bool(s.platega_merchant_id.strip() and s.platega_secret_key.strip())
 
 
-async def _history_lines(session: AsyncSession, user_id: int, limit: int = 10) -> list[str]:
+async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) -> list[str]:
     r = await session.execute(
         select(Transaction)
         .where(Transaction.user_id == user_id)
@@ -69,6 +70,20 @@ def _balance_caption(user: User, history: list[str]) -> str:
     )
 
 
+async def _edit_or_send_balance(
+    cq: CallbackQuery,
+    *,
+    caption: str,
+    reply_markup,
+) -> None:
+    if cq.message is None:
+        return
+    if cq.message.photo:
+        await cq.message.edit_caption(caption=caption, reply_markup=reply_markup)
+    else:
+        await cq.message.edit_text(caption, reply_markup=reply_markup)
+
+
 @router.callback_query(F.data == "menu:balance")
 async def cb_balance_home(
     cq: CallbackQuery,
@@ -78,13 +93,15 @@ async def cb_balance_home(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    settings = get_settings()
     hist = await _history_lines(session, db_user.id)
-    await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            _balance_caption(db_user, hist),
-            reply_markup=topup_amounts_keyboard(),
-        )
+    cap = _balance_caption(db_user, hist)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=topup_amounts_keyboard(),
+        settings=settings,
+    )
 
 
 @router.callback_query(F.data == "topup:back_amt")
@@ -98,10 +115,18 @@ async def cb_topup_back_amt(
     assert db_user is not None
     hist = await _history_lines(session, db_user.id)
     await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            _balance_caption(db_user, hist),
+    settings = get_settings()
+    if cq.message and cq.message.photo:
+        await cq.message.edit_caption(
+            caption=_balance_caption(db_user, hist),
             reply_markup=topup_amounts_keyboard(),
+        )
+    else:
+        await answer_callback_with_photo_screen(
+            cq,
+            caption=_balance_caption(db_user, hist),
+            reply_markup=topup_amounts_keyboard(),
+            settings=settings,
         )
 
 
@@ -122,11 +147,8 @@ async def cb_topup_amount(
         await cq.answer("Некорректная сумма", show_alert=True)
         return
     await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            f"Пополнение на <b>{amt}</b> ₽\n\nВыберите способ оплаты:",
-            reply_markup=topup_providers_keyboard(amt),
-        )
+    text = f"Пополнение на <b>{amt}</b> ₽\n\nВыберите способ оплаты:"
+    await _edit_or_send_balance(cq, caption=text, reply_markup=topup_providers_keyboard(amt))
 
 
 @router.callback_query(F.data == "topup:custom")
@@ -141,11 +163,11 @@ async def cb_topup_custom(
     await cq.answer()
     cancel_kb = InlineKeyboardBuilder()
     cancel_kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="topup:cancel_fsm"))
-    if cq.message:
-        await cq.message.edit_text(
-            "Введите сумму в рублях (целое число), от <b>50</b> до <b>100000</b>:",
-            reply_markup=cancel_kb.as_markup(),
-        )
+    await _edit_or_send_balance(
+        cq,
+        caption="Введите сумму в рублях (целое число), от <b>50</b> до <b>100000</b>:",
+        reply_markup=cancel_kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data == "topup:cancel_fsm")
@@ -161,10 +183,18 @@ async def cb_topup_cancel_fsm(
     assert db_user is not None
     hist = await _history_lines(session, db_user.id)
     await cq.answer()
-    if cq.message:
-        await cq.message.edit_text(
-            _balance_caption(db_user, hist),
+    settings = get_settings()
+    if cq.message and cq.message.photo:
+        await cq.message.edit_caption(
+            caption=_balance_caption(db_user, hist),
             reply_markup=topup_amounts_keyboard(),
+        )
+    else:
+        await answer_callback_with_photo_screen(
+            cq,
+            caption=_balance_caption(db_user, hist),
+            reply_markup=topup_amounts_keyboard(),
+            settings=settings,
         )
 
 
@@ -210,7 +240,6 @@ async def cb_topup_provider(
         return
     assert db_user is not None
     parts = cq.data.split(":")
-    # topup:prov:cryptobot:100
     if len(parts) != 4 or parts[0] != "topup" or parts[1] != "prov":
         await cq.answer("Ошибка данных", show_alert=True)
         return
@@ -257,4 +286,7 @@ async def cb_topup_provider(
         "После оплаты баланс обновится автоматически (обычно в течение минуты)."
     )
     if cq.message:
-        await cq.message.edit_text(text, reply_markup=submenu_back_keyboard())
+        if cq.message.photo:
+            await cq.message.edit_caption(caption=text, reply_markup=topup_invoice_done_keyboard())
+        else:
+            await cq.message.edit_text(text, reply_markup=topup_invoice_done_keyboard())
