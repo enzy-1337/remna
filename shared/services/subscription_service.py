@@ -1,0 +1,376 @@
+"""Покупка/продление подписки с баланса, синхронизация Remnawave, устройства."""
+
+from __future__ import annotations
+
+import html
+import logging
+import uuid as uuid_lib
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from shared.config import Settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.models.device import Device
+from shared.models.plan import Plan
+from shared.models.subscription import Subscription
+from shared.models.transaction import Transaction
+from shared.models.user import User
+from shared.services.remnawave_username import build_remnawave_username_from_db_user
+from shared.services.smart_cart import set_cart_plan
+
+logger = logging.getLogger(__name__)
+
+MIN_DEVICES = 2
+MAX_DEVICES = 10
+
+
+async def list_paid_plans(session: AsyncSession) -> list[Plan]:
+    r = await session.execute(
+        select(Plan)
+        .where(Plan.is_active.is_(True), Plan.price_rub > 0)
+        .order_by(Plan.sort_order, Plan.id)
+    )
+    return list(r.scalars().all())
+
+
+async def get_active_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
+    now = datetime.now(timezone.utc)
+    r = await session.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(
+            Subscription.user_id == user_id,
+            Subscription.status.in_(("active", "trial")),
+            Subscription.expires_at > now,
+        )
+        .order_by(Subscription.expires_at.desc())
+        .limit(1)
+    )
+    return r.scalar_one_or_none()
+
+
+async def count_devices(session: AsyncSession, subscription_id: int) -> int:
+    r = await session.execute(
+        select(func.count()).select_from(Device).where(Device.subscription_id == subscription_id)
+    )
+    return int(r.scalar_one() or 0)
+
+
+async def ensure_placeholder_devices(session: AsyncSession, sub: Subscription) -> None:
+    n = await count_devices(session, sub.id)
+    need = max(0, sub.devices_count - n)
+    for i in range(need):
+        idx = n + i + 1
+        session.add(
+            Device(
+                subscription_id=sub.id,
+                user_id=sub.user_id,
+                name=f"Устройство {idx}",
+            )
+        )
+    if need > 0:
+        await session.flush()
+
+
+async def _create_rw_user_retries(
+    rw: RemnaWaveClient,
+    *,
+    base_username: str,
+    telegram_id: int,
+    expire_at: datetime,
+    traffic_limit_bytes: int,
+    description: str,
+    hwid_device_limit: int,
+    active_internal_squads: list[str] | None,
+) -> dict:
+    base = base_username
+    last: Exception | None = None
+    for attempt in range(4):
+        suffix = "" if attempt == 0 else f"_{attempt}"
+        uname = (base[: 36 - len(suffix)] + suffix)[:36]
+        if len(uname) < 3:
+            uname = f"tg_{telegram_id}"[-36:]
+        try:
+            return await rw.create_user(
+                username=uname,
+                expire_at=expire_at,
+                traffic_limit_bytes=traffic_limit_bytes,
+                description=description,
+                telegram_id=telegram_id,
+                hwid_device_limit=hwid_device_limit,
+                active_internal_squads=active_internal_squads,
+            )
+        except RemnaWaveError as e:
+            last = e
+            if attempt == 3:
+                raise
+    raise RemnaWaveError(str(last))
+
+
+async def purchase_plan_with_balance(
+    session: AsyncSession,
+    *,
+    user: User,
+    plan_id: int,
+    telegram_id: int,
+    settings: Settings,
+    save_to_cart_if_insufficient: bool = True,
+) -> tuple[bool, str, str]:
+    """
+    Покупка тарифа с баланса.
+    Возвращает (ok, message, kind) где kind: success | insufficient | error
+    """
+    plan = await session.get(Plan, plan_id)
+    if not plan or plan.price_rub <= 0 or not plan.is_active:
+        return False, "Тариф не найден или недоступен.", "error"
+
+    price = plan.price_rub
+    if user.balance < price:
+        if save_to_cart_if_insufficient:
+            await set_cart_plan(telegram_id, plan_id=plan.id, amount_rub=price, settings=settings)
+        need = price - user.balance
+        return (
+            False,
+            f"Недостаточно средств: нужно <b>{price}</b> ₽, не хватает <b>{need}</b> ₽.",
+            "insufficient",
+        )
+
+    rw = RemnaWaveClient(settings)
+    squads: list[str] | None = None
+    if settings.remnawave_default_squad_uuid:
+        squads = [settings.remnawave_default_squad_uuid.strip()]
+
+    now = datetime.now(timezone.utc)
+    active = await get_active_subscription(session, user.id)
+    dev_limit = active.devices_count if active else MIN_DEVICES
+
+    base = now
+    if active and active.expires_at > now:
+        base = active.expires_at
+    new_expires = base + timedelta(days=plan.duration_days)
+
+    traffic_bytes = 0
+    if plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0:
+        traffic_bytes = int(plan.traffic_limit_gb) * (1024**3)
+
+    desc = f"tg_id:{user.telegram_id}"
+
+    try:
+        if user.remnawave_uuid is None:
+            uname = build_remnawave_username_from_db_user(user)
+            created = await _create_rw_user_retries(
+                rw,
+                base_username=uname,
+                telegram_id=user.telegram_id,
+                expire_at=new_expires,
+                traffic_limit_bytes=traffic_bytes,
+                description=desc,
+                hwid_device_limit=dev_limit,
+                active_internal_squads=squads,
+            )
+            uid = created.get("uuid")
+            if not uid:
+                raise RemnaWaveError("Панель не вернула uuid пользователя")
+            user.remnawave_uuid = uuid_lib.UUID(str(uid))
+        else:
+            await rw.update_user(
+                str(user.remnawave_uuid),
+                expire_at=new_expires,
+                hwid_device_limit=dev_limit,
+                traffic_limit_bytes=traffic_bytes,
+                status="ACTIVE",
+                description=desc,
+                active_internal_squads=squads,
+            )
+    except RemnaWaveError as e:
+        logger.exception("Remnawave purchase/extend failed")
+        return False, f"Не удалось обновить доступ VPN: {e}", "error"
+
+    user.balance -= price
+    session.add(
+        Transaction(
+            user_id=user.id,
+            type="subscription",
+            amount=price,
+            currency="RUB",
+            payment_provider="balance",
+            payment_id=None,
+            status="completed",
+            description=f"Тариф «{plan.name}»",
+            meta={"plan_id": plan.id},
+        )
+    )
+
+    rw_uuid = user.remnawave_uuid
+    assert rw_uuid is not None
+
+    if active:
+        active.plan_id = plan.id
+        active.expires_at = new_expires
+        active.status = "active"
+        active.remnawave_sub_uuid = rw_uuid
+        active.auto_renew = True
+        sub = active
+    else:
+        sub = Subscription(
+            user_id=user.id,
+            plan_id=plan.id,
+            remnawave_sub_uuid=rw_uuid,
+            status="active",
+            devices_count=MIN_DEVICES,
+            started_at=now,
+            expires_at=new_expires,
+            auto_renew=True,
+        )
+        session.add(sub)
+        await session.flush()
+        for i in range(1, MIN_DEVICES + 1):
+            session.add(
+                Device(subscription_id=sub.id, user_id=user.id, name=f"Устройство {i}")
+            )
+
+    await ensure_placeholder_devices(session, sub)
+    await session.flush()
+
+    sub_url = ""
+    try:
+        uinf = await rw.get_user(str(rw_uuid))
+        sub_url = uinf.get("subscriptionUrl") or ""
+    except RemnaWaveError:
+        pass
+
+    msg = (
+        f"✅ Списано <b>{price}</b> ₽ с баланса.\n"
+        f"Тариф: <b>{plan.name}</b>\n"
+        f"Действует до: <b>{new_expires.strftime('%d.%m.%Y %H:%M')} UTC</b>\n"
+    )
+    if sub_url:
+        href = html.escape(sub_url, quote=True)
+        msg += f'\n<a href="{href}">Ссылка подписки</a>'
+
+    from shared.services.admin_notify import notify_admin
+    from shared.services.referral_service import grant_referrer_reward_first_paid_plan
+
+    await grant_referrer_reward_first_paid_plan(session, buyer=user, plan=plan, settings=settings)
+    await notify_admin(
+        settings,
+        title="🔑 <b>Покупка тарифа с баланса</b>",
+        lines=[
+            f"Тариф: <b>{html.escape(plan.name)}</b>",
+            f"Списано: <b>{price}</b> ₽",
+            f"До: <b>{new_expires.strftime('%d.%m.%Y %H:%M')} UTC</b>",
+        ],
+        event_type="purchase_plan",
+        subject_user=user,
+        session=session,
+    )
+    return True, msg, "success"
+
+
+async def set_subscription_auto_renew(
+    session: AsyncSession,
+    user_id: int,
+    enabled: bool,
+) -> tuple[bool, str]:
+    sub = await get_active_subscription(session, user_id)
+    if not sub:
+        return False, "Нет активной подписки."
+    sub.auto_renew = enabled
+    return True, "Авто-продление включено." if enabled else "Авто-продление выключено."
+
+
+async def add_paid_device_slot(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+) -> tuple[bool, str]:
+    sub = await get_active_subscription(session, user.id)
+    if not sub:
+        return False, "Сначала оформите подписку."
+    if sub.devices_count >= MAX_DEVICES:
+        return False, f"Уже максимум слотов: {MAX_DEVICES}."
+
+    price = settings.extra_device_price_rub
+    if user.balance < price:
+        return False, f"Нужно <b>{price}</b> ₽ на балансе для дополнительного устройства."
+
+    if user.remnawave_uuid is None:
+        return False, "Нет учётной записи VPN. Активируйте триал или купите подписку."
+
+    rw = RemnaWaveClient(settings)
+    new_limit = sub.devices_count + 1
+    try:
+        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+    except RemnaWaveError as e:
+        return False, f"Панель VPN: {e}"
+
+    new_idx = await count_devices(session, sub.id) + 1
+    sub.devices_count = new_limit
+    user.balance -= price
+    session.add(
+        Device(
+            subscription_id=sub.id,
+            user_id=user.id,
+            name=f"Устройство {new_idx}",
+        )
+    )
+    session.add(
+        Transaction(
+            user_id=user.id,
+            type="manual_add",
+            amount=price,
+            currency="RUB",
+            payment_provider="balance",
+            payment_id=None,
+            status="completed",
+            description="Дополнительное устройство",
+            meta={"subscription_id": sub.id},
+        )
+    )
+    await session.flush()
+    return True, f"Добавлен слот устройства (−<b>{price}</b> ₽). Всего слотов: <b>{sub.devices_count}</b>."
+
+
+async def remove_device_slot(
+    session: AsyncSession,
+    *,
+    user: User,
+    device_id: int,
+    settings: Settings,
+) -> tuple[bool, str]:
+    sub = await get_active_subscription(session, user.id)
+    if not sub:
+        return False, "Нет активной подписки."
+    if sub.devices_count <= MIN_DEVICES:
+        return False, f"Минимум <b>{MIN_DEVICES}</b> устройства — удаление недоступно."
+
+    dev = await session.get(Device, device_id)
+    if dev is None or dev.user_id != user.id or dev.subscription_id != sub.id:
+        return False, "Устройство не найдено."
+
+    if user.remnawave_uuid is None:
+        return False, "Ошибка профиля VPN."
+
+    rw = RemnaWaveClient(settings)
+    new_limit = sub.devices_count - 1
+    try:
+        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+    except RemnaWaveError as e:
+        return False, f"Панель VPN: {e}"
+
+    sub.devices_count = new_limit
+    await session.delete(dev)
+    await session.flush()
+    return True, f"Устройство удалено. Слотов: <b>{sub.devices_count}</b>."
+
+
+async def list_user_devices(session: AsyncSession, subscription_id: int) -> list[Device]:
+    r = await session.execute(
+        select(Device).where(Device.subscription_id == subscription_id).order_by(Device.id)
+    )
+    return list(r.scalars().all())
