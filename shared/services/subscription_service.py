@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from shared.config import Settings
-from shared.md2 import bold, esc, join_lines, link
+from shared.md2 import bold, esc, join_lines, link, plain
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.device import Device
 from shared.models.plan import Plan
@@ -138,7 +138,7 @@ async def purchase_plan_with_balance(
     """
     plan = await session.get(Plan, plan_id)
     if not plan or plan.price_rub <= 0 or not plan.is_active:
-        return False, "Тариф не найден или недоступен.", "error"
+        return False, plain("Тариф не найден или недоступен."), "error"
 
     price = plan.price_rub
     if user.balance < price:
@@ -148,11 +148,11 @@ async def purchase_plan_with_balance(
         return (
             False,
             join_lines(
-                "Недостаточно средств: нужно "
+                plain("Недостаточно средств: нужно ")
                 + bold(str(price))
-                + " ₽, не хватает "
+                + plain(" ₽, не хватает ")
                 + bold(str(need))
-                + " ₽."
+                + plain(" ₽.")
             ),
             "insufficient",
         )
@@ -206,7 +206,7 @@ async def purchase_plan_with_balance(
             )
     except RemnaWaveError as e:
         logger.exception("Remnawave purchase/extend failed")
-        return False, join_lines("Не удалось обновить доступ VPN:", esc(str(e))), "error"
+        return False, join_lines(plain("Не удалось обновить доступ VPN:"), esc(str(e))), "error"
 
     user.balance -= price
     session.add(
@@ -262,9 +262,12 @@ async def purchase_plan_with_balance(
         pass
 
     msg = join_lines(
-        f"✅ Списано {bold(str(price))} ₽ с баланса.",
-        f"Тариф: {bold(plan.name)}",
-        f"Действует до: {bold(new_expires.strftime('%d.%m.%Y %H:%M') + ' UTC')}",
+        plain("✅ Списано ")
+        + bold(str(price))
+        + plain(" ₽ с баланса."),
+        plain("Тариф: ") + bold(plan.name),
+        plain("Действует до: ")
+        + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
     )
     if sub_url:
         msg += "\n\n" + link("Ссылка подписки", sub_url)
@@ -277,9 +280,9 @@ async def purchase_plan_with_balance(
         settings,
         title="🔑 " + bold("Покупка тарифа с баланса"),
         lines=[
-            f"Тариф: {bold(plan.name)}",
-            f"Списано: {bold(str(price))} ₽",
-            f"До: {bold(new_expires.strftime('%d.%m.%Y %H:%M') + ' UTC')}",
+            plain("Тариф: ") + bold(plan.name),
+            plain("Списано: ") + bold(str(price)) + plain(" ₽"),
+            plain("До: ") + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
         ],
         event_type="purchase_plan",
         subject_user=user,
@@ -295,9 +298,11 @@ async def set_subscription_auto_renew(
 ) -> tuple[bool, str]:
     sub = await get_active_subscription(session, user_id)
     if not sub:
-        return False, "Нет активной подписки."
+        return False, plain("Нет активной подписки.")
     sub.auto_renew = enabled
-    return True, "Авто-продление включено." if enabled else "Авто-продление выключено."
+    return True, (
+        plain("Авто-продление включено.") if enabled else plain("Авто-продление выключено.")
+    )
 
 
 async def add_paid_device_slot(
@@ -308,23 +313,28 @@ async def add_paid_device_slot(
 ) -> tuple[bool, str]:
     sub = await get_active_subscription(session, user.id)
     if not sub:
-        return False, "Сначала оформите подписку."
+        return False, plain("Сначала оформите подписку.")
     if sub.devices_count >= MAX_DEVICES:
-        return False, f"Уже максимум слотов: {MAX_DEVICES}."
+        return False, plain("Уже максимум слотов: ") + bold(str(MAX_DEVICES)) + plain(".")
 
     price = settings.extra_device_price_rub
     if user.balance < price:
-        return False, f"Нужно {price} ₽ на балансе для дополнительного устройства."
+        return (
+            False,
+            plain("Нужно ")
+            + bold(str(price))
+            + plain(" ₽ на балансе для дополнительного устройства."),
+        )
 
     if user.remnawave_uuid is None:
-        return False, "Нет учётной записи VPN. Активируйте триал или купите подписку."
+        return False, plain("Нет учётной записи VPN. Активируйте триал или купите подписку.")
 
     rw = RemnaWaveClient(settings)
     new_limit = sub.devices_count + 1
     try:
         await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
     except RemnaWaveError as e:
-        return False, join_lines("Панель VPN:", esc(str(e)))
+        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
     new_idx = await count_devices(session, sub.id) + 1
     sub.devices_count = new_limit
@@ -351,8 +361,10 @@ async def add_paid_device_slot(
     )
     await session.flush()
     return True, join_lines(
-        f"Добавлен слот устройства (−{bold(str(price))} ₽).",
-        f"Всего слотов: {bold(str(sub.devices_count))}.",
+        plain("Добавлен слот устройства (−")
+        + bold(str(price))
+        + plain(" ₽)."),
+        plain("Всего слотов: ") + bold(str(sub.devices_count)) + plain("."),
     )
 
 
@@ -365,28 +377,31 @@ async def remove_device_slot(
 ) -> tuple[bool, str]:
     sub = await get_active_subscription(session, user.id)
     if not sub:
-        return False, "Нет активной подписки."
+        return False, plain("Нет активной подписки.")
     if sub.devices_count <= MIN_DEVICES:
-        return False, f"Минимум {MIN_DEVICES} устройства — удаление недоступно."
+        return False, plain(f"Минимум {MIN_DEVICES} устройства — удаление недоступно.")
 
     dev = await session.get(Device, device_id)
     if dev is None or dev.user_id != user.id or dev.subscription_id != sub.id:
-        return False, "Устройство не найдено."
+        return False, plain("Устройство не найдено.")
 
     if user.remnawave_uuid is None:
-        return False, "Ошибка профиля VPN."
+        return False, plain("Ошибка профиля VPN.")
 
     rw = RemnaWaveClient(settings)
     new_limit = sub.devices_count - 1
     try:
         await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
     except RemnaWaveError as e:
-        return False, join_lines("Панель VPN:", esc(str(e)))
+        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
     sub.devices_count = new_limit
     await session.delete(dev)
     await session.flush()
-    return True, join_lines("Устройство удалено.", f"Слотов: {bold(str(sub.devices_count))}.")
+    return True, join_lines(
+        plain("Устройство удалено."),
+        plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),
+    )
 
 
 async def list_user_devices(session: AsyncSession, subscription_id: int) -> list[Device]:

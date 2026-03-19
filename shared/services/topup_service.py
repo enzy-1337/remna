@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.md2 import bold, join_lines
+from shared.md2 import bold, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.payments.base import ParsedWebhookTopup
@@ -41,7 +41,7 @@ async def try_apply_smart_cart_after_topup(
         plan_id = int(cart["plan_id"])
     except (TypeError, ValueError, KeyError):
         await clear_cart(telegram_id, settings)
-        return "Корзина устарела — выберите тариф снова в «Моя подписка»."
+        return plain("Корзина устарела — выберите тариф снова в «Моя подписка».")
 
     ok, msg, kind = await purchase_plan_with_balance(
         session,
@@ -53,10 +53,13 @@ async def try_apply_smart_cart_after_topup(
     )
     if kind == "success":
         await clear_cart(telegram_id, settings)
-        return join_lines("🛒 " + bold("Автопокупка из корзины"), msg)
+        return join_lines(plain("🛒 ") + bold("Автопокупка из корзины"), msg)
     if kind == "insufficient":
-        return f"🛒 В корзине тариф, но средств всё ещё не хватает:\n{msg}"
-    return f"🛒 Не удалось оформить корзину:\n{msg}"
+        return join_lines(
+            plain("🛒 В корзине тариф, но средств всё ещё не хватает:"),
+            msg,
+        )
+    return join_lines(plain("🛒 Не удалось оформить корзину:"), msg)
 
 
 async def create_topup_payment(
@@ -180,7 +183,7 @@ async def notify_topup_success(
     async with factory() as session:
         extra = await try_apply_smart_cart_after_topup(session, telegram_id, settings)
         await session.commit()
-    text = f"✅ Баланс пополнен на {bold(str(amount_rub))} ₽."
+    text = plain("✅ Баланс пополнен на ") + bold(str(amount_rub)) + plain(" ₽.")
     if extra:
         text += f"\n\n{extra}"
     await send_telegram_message(telegram_id, text, settings=settings)

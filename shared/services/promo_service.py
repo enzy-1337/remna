@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.md2 import bold
+from shared.md2 import bold, plain
 
 SUPPORTED_PROMO_TYPES = {"balance_rub", "bonus_rub"}
 
@@ -25,9 +25,9 @@ async def apply_promo_code_for_user(
 ) -> tuple[bool, str, dict | None]:
     code = (raw_code or "").strip().upper()
     if not code:
-        return False, "Введите промокод.", None
+        return False, plain("Введите промокод."), None
     if len(code) > 64:
-        return False, "Слишком длинный промокод.", None
+        return False, plain("Слишком длинный промокод."), None
 
     now = datetime.now(timezone.utc)
     r = await session.execute(
@@ -35,15 +35,15 @@ async def apply_promo_code_for_user(
     )
     promo = r.scalar_one_or_none()
     if promo is None:
-        return False, "Промокод не найден.", None
+        return False, plain("Промокод не найден."), None
     if not promo.is_active:
-        return False, "Промокод неактивен.", None
+        return False, plain("Промокод неактивен."), None
     if promo.expires_at is not None and promo.expires_at <= now:
-        return False, "Срок действия промокода истёк.", None
+        return False, plain("Срок действия промокода истёк."), None
     if promo.max_uses is not None and promo.used_count >= promo.max_uses:
-        return False, "Лимит активаций промокода исчерпан.", None
+        return False, plain("Лимит активаций промокода исчерпан."), None
     if promo.type not in SUPPORTED_PROMO_TYPES:
-        return False, "Этот тип промокода пока не поддерживается.", None
+        return False, plain("Этот тип промокода пока не поддерживается."), None
 
     used = await session.execute(
         select(PromoUsage.id).where(
@@ -52,11 +52,11 @@ async def apply_promo_code_for_user(
         )
     )
     if used.scalar_one_or_none() is not None:
-        return False, "Вы уже использовали этот промокод.", None
+        return False, plain("Вы уже использовали этот промокод."), None
 
     value = Decimal(str(promo.value))
     if value <= 0:
-        return False, "Некорректное значение промокода.", None
+        return False, plain("Некорректное значение промокода."), None
 
     if promo.type == "balance_rub":
         user.balance += value
@@ -85,9 +85,11 @@ async def apply_promo_code_for_user(
     try:
         await session.flush()
     except IntegrityError:
-        return False, "Вы уже использовали этот промокод.", None
+        return False, plain("Вы уже использовали этот промокод."), None
     return (
         True,
-        f"✅ Промокод применён: +{bold(str(value))} ₽ {label}.",
+        plain("✅ Промокод применён: +")
+        + bold(str(value))
+        + plain(f" ₽ {label}."),
         {"code": promo.code, "type": promo.type, "value": str(value)},
     )

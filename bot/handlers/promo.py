@@ -118,7 +118,7 @@ async def msg_promo_code(
         await send_profile_screen(
             message.bot,
             chat_id=message.chat.id,
-            caption=join_lines("❌ " + text),
+            caption=join_lines(plain("❌ ") + text),
             reply_markup=submenu_back_keyboard(),
             settings=settings,
             delete_message=None,

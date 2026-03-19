@@ -46,7 +46,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
     )
     rows = r.scalars().all()
     if not rows:
-        return ["История пуста."]
+        return [plain("История пуста.")]
     lines: list[str] = []
     for t in rows:
         lines.append(
