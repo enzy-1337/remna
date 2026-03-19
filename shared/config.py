@@ -148,6 +148,13 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @field_validator("admin_log_topic_id", mode="before")
+    @classmethod
+    def _empty_admin_topic(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
     @model_validator(mode="after")
     def _validate_remnawave(self) -> "Settings":
         if not self.remnawave_stub:
