@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiogram.types import CallbackQuery, Message
 
+from shared.md2 import esc
 from shared.models.user import User
 
 
@@ -11,7 +12,7 @@ async def reject_if_blocked(message_or_cq: Message | CallbackQuery, db_user: Use
     """True — прервать обработку (пользователь заблокирован)."""
     if db_user is None or not db_user.is_blocked:
         return False
-    text = "⛔ Ваш аккаунт заблокирован. Обратитесь в поддержку."
+    text = esc("⛔ Ваш аккаунт заблокирован. Обратитесь в поддержку.")
     if isinstance(message_or_cq, Message):
         await message_or_cq.answer(text)
     else:
@@ -23,7 +24,7 @@ async def reject_if_no_user(message_or_cq: Message | CallbackQuery, db_user: Use
     """True — нет записи в БД, нужен /start."""
     if db_user is not None:
         return False
-    text = "Сначала нажмите /start."
+    text = esc("Сначала нажмите /start.")
     if isinstance(message_or_cq, Message):
         await message_or_cq.answer(text)
     else:

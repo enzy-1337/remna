@@ -1,8 +1,7 @@
-"""Устройства: список по нажатию, отвязка, платный слот."""
+"""Устройства: список по нажатию, отвязка, платный слот (MarkdownV2)."""
 
 from __future__ import annotations
 
-import html
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -14,6 +13,7 @@ from shared.models.device import Device
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
+from shared.md2 import bold, esc, join_lines
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
@@ -80,17 +80,18 @@ async def _render_devices(
             .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
             .as_markup()
         )
-        return "🖥 <b>Устройства</b>\n\nСначала оформите подписку или триал.", kb
+        return join_lines("🖥 " + bold("Устройства"), "", "Сначала оформите подписку или триал."), kb
 
     devices = await list_user_devices(session, sub.id)
-    lines = [
-        "🖥 <b>Устройства</b>\n",
-        f"Слотов в подписке: <b>{sub.devices_count}</b> (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})\n",
-        "\nНажмите устройство, чтобы <b>отвязать</b> его.",
-    ]
+    lines = join_lines(
+        "🖥 " + bold("Устройства"),
+        "",
+        f"Слотов в подписке: {bold(str(sub.devices_count))} (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})",
+        "",
+        "Нажмите устройство, чтобы " + bold("отвязать") + " его.",
+    )
     price = str(settings.extra_device_price_rub)
-    body = "\n".join(lines)
-    return body, _devices_kb(devices, sub.devices_count, price, ctx)
+    return lines, _devices_kb(devices, sub.devices_count, price, ctx)
 
 
 async def _open_devices_screen(
@@ -150,17 +151,17 @@ async def cb_dev_add(
     if ok:
         await notify_admin(
             settings,
-            title="🖥 <b>Куплен слот устройства</b>",
-            lines=[f"Списано: <b>{settings.extra_device_price_rub}</b> ₽"],
+            title="🖥 " + bold("Куплен слот устройства"),
+            lines=[f"Списано: {bold(str(settings.extra_device_price_rub))} ₽"],
             event_type="extra_device_purchase",
             subject_user=db_user,
             session=session,
         )
     if not ok:
-        await cq.answer(msg.replace("<b>", "").replace("</b>", ""), show_alert=True)
+        await cq.answer(msg, show_alert=True)
         return
     text, kb = await _render_devices(session, db_user, ctx=ctx)
-    cap = text + "\n\n" + msg
+    cap = join_lines(text, "", msg)
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
@@ -190,17 +191,19 @@ async def cb_dev_pick(
     if dev is None:
         await cq.answer("Устройство не найдено.", show_alert=True)
         return
-    nm = html.escape(dev.name)
+    nm = esc(dev.name or "—")
     settings = get_settings()
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="✅ Отвязать", callback_data=f"dev:do:{did}:{ctx}"),
         InlineKeyboardButton(text="❌ Отмена", callback_data=_devices_back_cb(ctx)),
     )
-    cap = (
-        "🖥 <b>Устройство</b>\n\n"
-        f"{nm}\n\n"
-        "Отвязать это устройство? Слот в панели уменьшится (минимум 2 на аккаунт)."
+    cap = join_lines(
+        "🖥 " + bold("Устройство"),
+        "",
+        nm,
+        "",
+        "Отвязать это устройство? Слот в панели уменьшится (минимум 2 на аккаунт).",
     )
     await answer_callback_with_photo_screen(
         cq,
@@ -229,10 +232,10 @@ async def cb_dev_do(
     settings = get_settings()
     ok, msg = await remove_device_slot(session, user=db_user, device_id=did, settings=settings)
     if not ok:
-        await cq.answer(msg.replace("<b>", "").replace("</b>", ""), show_alert=True)
+        await cq.answer(msg, show_alert=True)
         return
     text, kb = await _render_devices(session, db_user, ctx=ctx)
-    cap = text + "\n\n" + msg
+    cap = join_lines(text, "", msg)
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,

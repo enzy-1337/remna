@@ -16,7 +16,7 @@ async def send_telegram_message(
     chat_id: int | str,
     text: str,
     *,
-    parse_mode: str = "HTML",
+    parse_mode: str = "MarkdownV2",
     message_thread_id: int | None = None,
     settings: Settings | None = None,
 ) -> bool:

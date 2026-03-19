@@ -1,8 +1,7 @@
-"""Баланс: история, пополнение CryptoBot / Platega."""
+"""Баланс: история, пополнение CryptoBot / Platega (MarkdownV2)."""
 
 from __future__ import annotations
 
-import html
 import logging
 from decimal import Decimal, InvalidOperation
 
@@ -18,6 +17,7 @@ from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_done_keyb
 from bot.states.payment import TopupStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
+from shared.md2 import bold, code, esc, join_lines, link
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.topup_service import create_topup_payment
@@ -49,24 +49,24 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
         return ["История пуста."]
     lines: list[str] = []
     for t in rows:
-        st = html.escape(t.status)
-        amt = html.escape(str(t.amount))
-        cur = html.escape(t.currency or "RUB")
-        ptype = html.escape(t.type)
-        prov = html.escape(t.payment_provider or "—")
-        lines.append(f"• {ptype} | {amt} {cur} | {st} | {prov}")
+        lines.append(
+            "• "
+            + esc(f"{t.type} | {t.amount} {t.currency or 'RUB'} | {t.status} | {t.payment_provider or '—'}")
+        )
     return lines
 
 
 def _balance_caption(user: User, history: list[str]) -> str:
-    bal = html.escape(str(user.balance))
-    bonus = html.escape(str(user.bonus_balance))
+    bal = f"{user.balance:.2f}"
+    bonus = f"{user.bonus_balance:.2f}"
     hist_block = "\n".join(history)
-    return (
-        f"💰 <b>Баланс</b>\n\n"
-        f"Основной: <b>{bal}</b> ₽\n"
-        f"Бонусный: <b>{bonus}</b> ₽\n\n"
-        f"<b>Последние операции:</b>\n{hist_block}"
+    return join_lines(
+        "💰 " + bold("Баланс"),
+        "",
+        f"Основной: {bold(bal)} ₽",
+        f"Бонусный: {bold(bonus)} ₽",
+        "",
+        bold("Последние операции:") + "\n" + hist_block,
     )
 
 
@@ -147,7 +147,7 @@ async def cb_topup_amount(
         await cq.answer("Некорректная сумма", show_alert=True)
         return
     await cq.answer()
-    text = f"Пополнение на <b>{amt}</b> ₽\n\nВыберите способ оплаты:"
+    text = join_lines(f"Пополнение на {bold(str(amt))} ₽", "", "Выберите способ оплаты:")
     await _edit_or_send_balance(cq, caption=text, reply_markup=topup_providers_keyboard(amt))
 
 
@@ -165,7 +165,13 @@ async def cb_topup_custom(
     cancel_kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="topup:cancel_fsm"))
     await _edit_or_send_balance(
         cq,
-        caption="Введите сумму в рублях (целое число), от <b>50</b> до <b>100000</b>:",
+        caption=join_lines(
+            "Введите сумму в рублях (целое число), от "
+            + bold("50")
+            + " до "
+            + bold("100000")
+            + ":",
+        ),
         reply_markup=cancel_kb.as_markup(),
     )
 
@@ -213,18 +219,18 @@ async def msg_topup_custom_amount(
     try:
         d = Decimal(raw)
     except InvalidOperation:
-        await message.answer("Введите число, например <code>250</code>")
+        await message.answer(join_lines("Введите число, например", code("250")))
         return
     if d != d.to_integral_value():
-        await message.answer("Укажите целое число рублей.")
+        await message.answer(esc("Укажите целое число рублей."))
         return
     amt = int(d)
     if amt < 50 or amt > 100_000:
-        await message.answer("Допустимо от 50 до 100000 ₽.")
+        await message.answer(esc("Допустимо от 50 до 100000 ₽."))
         return
     await state.clear()
     await message.answer(
-        f"Пополнение на <b>{amt}</b> ₽\n\nВыберите способ оплаты:",
+        join_lines(f"Пополнение на {bold(str(amt))} ₽", "", "Выберите способ оплаты:"),
         reply_markup=topup_providers_keyboard(amt),
     )
 
@@ -278,12 +284,13 @@ async def cb_topup_provider(
         return
 
     await cq.answer()
-    href = html.escape(pay_url, quote=True)
     label = "CryptoBot" if prov_name == "cryptobot" else "Platega"
-    text = (
-        f"💳 Счёт через <b>{label}</b> на <b>{amount_s}</b> ₽ создан.\n\n"
-        f'<a href="{href}">Открыть страницу оплаты</a>\n\n'
-        "После оплаты баланс обновится автоматически (обычно в течение минуты)."
+    text = join_lines(
+        f"💳 Счёт через {bold(label)} на {bold(amount_s)} ₽ создан.",
+        "",
+        link("Открыть страницу оплаты", pay_url),
+        "",
+        "После оплаты баланс обновится автоматически (обычно в течение минуты).",
     )
     if cq.message:
         if cq.message.photo:

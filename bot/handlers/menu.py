@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 
 from aiogram import F, Router
@@ -13,13 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
 from bot.keyboards.profile_kb import profile_main_keyboard
-from bot.ui.profile_text import profile_caption_html
+from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveError
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import get_active_subscription
+from shared.md2 import bold, code, join_lines
 from shared.services.trial_service import activate_trial, trial_eligible
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ async def cb_main_menu(
     db_user: User | None,
     state: FSMContext,
     tg_user: TgUser | None,
+    is_bot_admin: bool = False,
 ) -> None:
     await state.clear()
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -46,11 +47,12 @@ async def cb_main_menu(
     settings = get_settings()
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = trial_eligible(db_user, has_act)
-    cap = profile_caption_html(db_user, tg)
+    cap = profile_caption(db_user, tg)
     kb = profile_main_keyboard(
         has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
+        is_admin=is_bot_admin,
     )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
@@ -61,6 +63,7 @@ async def cb_trial_activate(
     session: AsyncSession,
     db_user: User | None,
     tg_user: TgUser | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -94,9 +97,13 @@ async def cb_trial_activate(
 
     await notify_admin(
         settings,
-        title="🎁 <b>Активирован триал</b>",
+        title="🎁 " + bold("Активирован триал"),
         lines=[
-            f"Срок: <b>{settings.trial_duration_days}</b> дн., трафик: <b>{settings.trial_traffic_gb}</b> ГБ",
+            "Срок: "
+            + bold(str(settings.trial_duration_days))
+            + " дн., трафик: "
+            + bold(str(settings.trial_traffic_gb))
+            + " ГБ",
         ],
         event_type="trial_activate",
         subject_user=db_user,
@@ -105,15 +112,21 @@ async def cb_trial_activate(
 
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = trial_eligible(db_user, has_act)
-    cap = (
-        "🎉 <b>Триал активирован!</b>\n\n"
-        f"Срок: {settings.trial_duration_days} дн., трафик: {settings.trial_traffic_gb} ГБ.\n\n"
-        f"Ссылка подписки:\n<code>{html.escape(sub_url)}</code>\n\n"
-    ) + profile_caption_html(db_user, tg)
+    cap = join_lines(
+        "🎉 " + bold("Триал активирован!"),
+        "",
+        f"Срок: {settings.trial_duration_days} дн., трафик: {settings.trial_traffic_gb} ГБ.",
+        "",
+        "Ссылка подписки:",
+        code(sub_url),
+        "",
+        profile_caption(db_user, tg),
+    )
     kb = profile_main_keyboard(
         has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
+        is_admin=is_bot_admin,
     )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
@@ -149,9 +162,10 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
         if settings.instruction_macos_url:
             b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
-    text = (
-        "📖 <b>Инструкции</b>\n\n"
-        "Откройте статью на Telegra.ph для вашего устройства.\n"
+    text = join_lines(
+        "📖 " + bold("Инструкции"),
+        "",
+        "Откройте статью на Telegra.ph для вашего устройства.",
     )
     if (
         not settings.instruction_telegraph_phone_url
@@ -163,10 +177,7 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
             or settings.instruction_macos_url
         )
     ):
-        text += (
-            "\n⚠️ Задайте <code>INSTRUCTION_TELEGRAPH_PHONE_URL</code> и "
-            "<code>INSTRUCTION_TELEGRAPH_PC_URL</code> в .env."
-        )
+        text += "\n\n⚠️ Задайте " + code("INSTRUCTION_TELEGRAPH_PHONE_URL") + " и " + code("INSTRUCTION_TELEGRAPH_PC_URL") + " в .env."
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
@@ -195,7 +206,7 @@ async def cb_about(cq: CallbackQuery, db_user: User | None) -> None:
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     await answer_callback_with_photo_screen(
         cq,
-        caption="ℹ️ <b>О сервисе</b>\n\nVPN через панель Remnawave.",
+        caption=join_lines("ℹ️ " + bold("О сервисе"), "", "VPN через панель Remnawave."),
         reply_markup=b.as_markup(),
         settings=settings,
     )

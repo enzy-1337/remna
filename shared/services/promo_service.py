@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.md2 import bold
 
 SUPPORTED_PROMO_TYPES = {"balance_rub", "bonus_rub"}
 
@@ -87,6 +88,6 @@ async def apply_promo_code_for_user(
         return False, "Вы уже использовали этот промокод.", None
     return (
         True,
-        f"✅ Промокод применён: +<b>{value}</b> ₽ {label}.",
+        f"✅ Промокод применён: +{bold(str(value))} ₽ {label}.",
         {"code": promo.code, "type": promo.type, "value": str(value)},
     )

@@ -1,8 +1,7 @@
-"""Текст экрана «Подписка» (детально)."""
+"""Текст экрана «Подписка» (детально), MarkdownV2."""
 
 from __future__ import annotations
 
-import html
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
+from shared.md2 import bold, code, esc, italic, join_lines
 from shared.models.user import User
 from shared.services.subscription_service import (
     MAX_DEVICES,
@@ -51,11 +51,11 @@ def _humanize_left(exp: datetime, now: datetime) -> str:
 
 def _monthly_price_line(plan) -> str:
     if not plan or plan.price_rub <= 0:
-        return "Триал / без оплаты за период"
+        return esc("Триал / без оплаты за период")
     d = max(1, int(plan.duration_days))
     monthly = (plan.price_rub * Decimal(30)) / Decimal(d)
     m = monthly.quantize(Decimal("0.01"))
-    return f"≈ {m} ₽/мес (разово {plan.price_rub} ₽ за {d} дн.)"
+    return esc(f"≈ {m} ₽/мес (разово {plan.price_rub} ₽ за {d} дн.)")
 
 
 async def build_subscription_detail_caption(
@@ -65,21 +65,23 @@ async def build_subscription_detail_caption(
     settings: Settings,
 ) -> tuple[str, str | None]:
     """
-    Возвращает (HTML-подпись, url подписки или None).
+    Возвращает (подпись MarkdownV2, url подписки или None).
     """
     sub = await get_active_subscription(session, user.id)
     now = datetime.now(timezone.utc)
     if not sub:
         return (
-            "🔑 <b>Подписка</b>\n\n"
-            "Нет активной подписки.\n"
-            "Оформите тариф или активируйте триал.",
+            join_lines(
+                "🔑 " + bold("Подписка"),
+                "",
+                "Нет активной подписки.",
+                "Оформите тариф или активируйте триал.",
+            ),
             None,
         )
 
     plan = sub.plan
-    plan_name = html.escape(plan.name) if plan else "—"
-    status_human = "🟢 Активна" if sub.status in ("active", "trial") else f"⚪ {html.escape(sub.status)}"
+    status_human = "🟢 Активна" if sub.status in ("active", "trial") else f"⚪ {esc(sub.status)}"
 
     used_gb: float | None = None
     limit_gb: float | None = None
@@ -101,28 +103,30 @@ async def build_subscription_detail_caption(
         used_gb = 0.0
     if limit_gb is not None:
         traffic_line = (
-            f"📊 Трафик: <b>{used_gb:.1f}</b>/<b>{limit_gb:.1f}</b> ГБ"
+            f"📊 Трафик: {bold(f'{used_gb:.1f}')}/{bold(f'{limit_gb:.1f}')} ГБ"
         )
     else:
-        traffic_line = f"📊 Трафик: <b>{used_gb:.1f}</b> ГБ <i>(без лимита)</i>"
+        traffic_line = (
+            f"📊 Трафик: {bold(f'{used_gb:.1f}')} ГБ {italic('(без лимита)')}"
+        )
 
     n_dev = await count_devices(session, sub.id)
     exp = sub.expires_at
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
-    exp_str = exp.strftime("%d.%m.%Y %H:%M")
     left_phrase = _humanize_left(exp, now)
 
-    caption = (
-        "🔑 <b>Подписка:</b>\n\n"
-        f"{status_human}\n"
-        f"💎 Тариф: <b>{plan_name}</b>\n"
-        f"{traffic_line}\n"
-        f"📟 Лимит устройств: <b>{sub.devices_count}</b>/<b>{MAX_DEVICES}</b>\n"
-        f"🔄 Привязанных устройств: <b>{n_dev}</b>\n"
-        f"🗓️ До: <b>{exp_str}</b> ({left_phrase})\n"
-        f"💸 Стоимость: {_monthly_price_line(plan)}\n"
+    caption = join_lines(
+        "🔑 " + bold("Подписка:"),
+        "",
+        status_human,
+        f"💎 Тариф: {bold(plan.name if plan else '—')}",
+        traffic_line,
+        f"📟 Лимит устройств: {bold(str(sub.devices_count))}/{bold(str(MAX_DEVICES))}",
+        f"🔄 Привязанных устройств: {bold(str(n_dev))}",
+        f"🗓️ До: {bold(exp.strftime('%d.%m.%Y %H:%M'))} ({esc(left_phrase)})",
+        f"💸 Стоимость: {_monthly_price_line(plan)}",
     )
     if sub_url:
-        caption += f"\nСсылка:\n<code>{html.escape(sub_url)}</code>"
+        caption += "\n\nСсылка:\n" + code(sub_url)
     return caption, sub_url

@@ -11,6 +11,7 @@ from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.ui.subscription_detail import build_subscription_detail_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
+from shared.md2 import bold, code, join_lines
 from shared.models.user import User
 from shared.services.subscription_service import (
     get_active_subscription,
@@ -80,11 +81,14 @@ async def cb_plans_or_extend(
     has_act = await get_active_subscription(session, db_user.id) is not None
     is_extend = cq.data == "sub:extend"
     title = (
-        "🔄 <b>Продлить подписку</b>\n\n"
+        "🔄 " + bold("Продлить подписку") + "\n\n"
         if (is_extend and has_act)
-        else "🛒 <b>Купить подписку</b>\n\n"
+        else "🛒 " + bold("Купить подписку") + "\n\n"
     )
-    body = title + "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
+    body = (
+        title
+        + "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
+    )
     b = InlineKeyboardBuilder()
     for p in plans:
         b.row(
@@ -195,9 +199,10 @@ async def cb_sub_instructions(
         if settings.instruction_macos_url:
             b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
     b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
-    text = (
-        "📖 <b>Инструкции</b>\n\n"
-        "Выберите платформу — откроется статья в Telegra.ph.\n"
+    text = join_lines(
+        "📖 " + bold("Инструкции"),
+        "",
+        "Выберите платформу — откроется статья в Telegra.ph.",
     )
     if (
         not settings.instruction_telegraph_phone_url
@@ -209,7 +214,7 @@ async def cb_sub_instructions(
             or settings.instruction_macos_url
         )
     ):
-        text += "\n⚠️ Задайте <code>INSTRUCTION_TELEGRAPH_PHONE_URL</code> и <code>INSTRUCTION_TELEGRAPH_PC_URL</code> в .env."
+        text += "\n\n⚠️ Задайте " + code("INSTRUCTION_TELEGRAPH_PHONE_URL") + " и " + code("INSTRUCTION_TELEGRAPH_PC_URL") + " в .env."
     await answer_callback_with_photo_screen(
         cq,
         caption=text,

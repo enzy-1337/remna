@@ -24,7 +24,20 @@ class RemnaWaveClient:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._s = settings or get_settings()
-        self._base = self._s.remnawave_api_url.rstrip("/")
+        self._origin = self._s.remnawave_api_url.rstrip("/")
+        raw = (self._s.remnawave_api_path_prefix or "").strip()
+        if raw in ("", "/"):
+            self._api_prefix = ""
+        else:
+            self._api_prefix = raw if raw.startswith("/") else f"/{raw}"
+            self._api_prefix = self._api_prefix.rstrip("/")
+
+    def _url(self, resource: str) -> str:
+        """resource: 'users' или 'users/{uuid}'."""
+        res = resource.lstrip("/")
+        if self._api_prefix:
+            return f"{self._origin}{self._api_prefix}/{res}"
+        return f"{self._origin}/{res}"
 
     def _headers(self) -> dict[str, str]:
         h = {
@@ -44,14 +57,14 @@ class RemnaWaveClient:
     async def _request(
         self,
         method: str,
-        path: str,
+        resource: str,
         *,
         json_body: dict | None = None,
     ) -> dict[str, Any]:
         if self._s.remnawave_stub:
             raise RuntimeError("Используйте create_user_stub / get_user_stub при REMNAWAVE_STUB")
 
-        url = f"{self._base}{path}"
+        url = self._url(resource)
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
@@ -69,7 +82,7 @@ class RemnaWaveClient:
                     logger.warning(
                         "Remnawave %s %s -> %s %s",
                         method,
-                        path,
+                        resource,
                         r.status_code,
                         r.text[:500],
                     )
@@ -114,7 +127,7 @@ class RemnaWaveClient:
         if active_internal_squads:
             body["activeInternalSquads"] = active_internal_squads
 
-        data = await self._request("POST", "/api/users", json_body=body)
+        data = await self._request("POST", "users", json_body=body)
         return self._unwrap(data)
 
     async def get_user(self, user_uuid: str) -> dict[str, Any]:
@@ -131,7 +144,7 @@ class RemnaWaveClient:
                 "usedTrafficBytes": 0,
                 "status": "ACTIVE",
             }
-        data = await self._request("GET", f"/api/users/{user_uuid}")
+        data = await self._request("GET", f"users/{user_uuid}")
         return self._unwrap(data)
 
     async def update_user(
@@ -174,7 +187,7 @@ class RemnaWaveClient:
 
         if not body:
             return await self.get_user(user_uuid)
-        data = await self._request("PATCH", f"/api/users/{user_uuid}", json_body=body)
+        data = await self._request("PATCH", f"users/{user_uuid}", json_body=body)
         return self._unwrap(data)
 
     @staticmethod

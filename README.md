@@ -36,6 +36,26 @@ alembic upgrade head
 python -m bot.main
 ```
 
+### Docker (бот + API + PostgreSQL + Redis)
+
+```bash
+cp .env.example .env
+# заполните BOT_TOKEN, REQUIRED_CHANNEL_*, REMNAWAVE_*, и т.д.
+
+docker compose build
+docker compose run --rm bot alembic upgrade head
+docker compose up -d
+```
+
+Или одной командой из корня репозитория:
+
+- **Windows:** `.\start.bat` или `.\start.ps1` (первый раз с миграциями: `.\start.ps1 -Migrate`)
+- **Linux/macOS:** `chmod +x start.sh && ./start.sh` (с миграциями: `./start.sh --migrate`)
+
+- Сервис **`bot`** — `python -m bot.main`
+- Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей)
+- **Postgres** и **Redis** поднимаются автоматически; `DATABASE_URL` / `REDIS_URL` в compose переопределены под сеть Docker.
+
 ### Интерфейс (фото + профиль)
 
 - Главный экран — **«Профиль»** с фото (файл `bot/assets/section_header.png` или `BOT_SECTION_PHOTO_PATH` / `BOT_SECTION_PHOTO_URL` в `.env`).
@@ -70,8 +90,19 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 ## Переменные Remnawave
 
-- `REMNAWAVE_API_URL` — базовый URL панели (без `/api` в конце).
+- `REMNAWAVE_API_URL` — **только origin** панели, например `https://panel.example.com` (без пути к эндпоинтам).
+- `REMNAWAVE_API_PATH_PREFIX` — префикс на стороне nginx (по умолчанию **`/api`** → запросы вида `{origin}/api/users`). Если nginx отдаёт **404 HTML** на `POST .../api/users`, проверьте проксирование в панель или задайте другой префикс (например пустой строкой и уточните URL у хостинга).
 - `REMNAWAVE_API_TOKEN` — JWT для `Authorization: Bearer`.
 - `REMNAWAVE_DEFAULT_SQUAD_UUID` — UUID internal squad (массив `activeInternalSquads`).
 - `REMNAWAVE_COOKIE` — при необходимости cookie `__remnawave-reverse-proxy__`.
 - `REMNAWAVE_STUB=true` — не вызывать API (пустой токен допустим).
+
+## Админ-панель в боте
+
+- `ADMIN_TELEGRAM_ID` — один numeric Telegram user id.
+- `ADMIN_TELEGRAM_IDS` — несколько id через запятую (дополнительно к `ADMIN_TELEGRAM_ID`).
+- У таких пользователей в профиле внизу две кнопки: **Поддержка** и **Админ-панель** (список пользователей, блокировка, поиск по Telegram ID). Команда **`/admin`** открывает то же меню.
+
+## Форматирование сообщений
+
+Бот использует **MarkdownV2** (`ParseMode.MARKDOWN_V2`). Пользовательский текст экранируется в `shared/md2.py` (`esc`, `bold`, `code`, ссылки и т.д.).

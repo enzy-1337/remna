@@ -78,6 +78,16 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="ADMIN_LOG_TOPIC_ID",
     )
+    admin_telegram_id: int | None = Field(
+        default=None,
+        validation_alias="ADMIN_TELEGRAM_ID",
+        description="Один Telegram user id админа (альтернатива списку ADMIN_TELEGRAM_IDS)",
+    )
+    admin_telegram_ids: list[int] = Field(
+        default_factory=list,
+        validation_alias="ADMIN_TELEGRAM_IDS",
+        description="Telegram user id админов бота через запятую (кнопка «Админ-панель»)",
+    )
 
     # Redis (кэш проверки подписки на канал)
     redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
@@ -90,6 +100,12 @@ class Settings(BaseSettings):
     remnawave_api_url: str = Field(
         default="https://remnawave.example.com",
         validation_alias="REMNAWAVE_API_URL",
+        description="Только origin панели, без пути к API (например https://panel.example.com)",
+    )
+    remnawave_api_path_prefix: str = Field(
+        default="/api",
+        validation_alias="REMNAWAVE_API_PATH_PREFIX",
+        description="Префикс API на nginx (часто /api; при 404 попробуйте пусто или /panel/api)",
     )
     remnawave_api_token: str = Field(default="", validation_alias="REMNAWAVE_API_TOKEN")
     remnawave_default_squad_uuid: str | None = Field(
@@ -175,6 +191,24 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @field_validator("admin_telegram_ids", mode="before")
+    @classmethod
+    def _parse_admin_telegram_ids(cls, v: object) -> object:
+        if v is None or v == "":
+            return []
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, str):
+            out: list[int] = []
+            for part in v.replace(";", ",").split(","):
+                p = part.strip()
+                if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
+                    out.append(int(p))
+            return out
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        return v
+
     @field_validator("bot_section_photo_path", "bot_section_photo_url", mode="before")
     @classmethod
     def _empty_photo_fields(cls, v: object) -> object:
@@ -183,7 +217,10 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _validate_remnawave(self) -> "Settings":
+    def _merge_admin_and_remnawave(self) -> "Settings":
+        if self.admin_telegram_id is not None:
+            merged = list(dict.fromkeys([*self.admin_telegram_ids, self.admin_telegram_id]))
+            object.__setattr__(self, "admin_telegram_ids", merged)
         if not self.remnawave_stub:
             if not (self.remnawave_api_token or "").strip():
                 raise ValueError("Задайте REMNAWAVE_API_TOKEN или REMNAWAVE_STUB=true")

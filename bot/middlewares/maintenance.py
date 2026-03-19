@@ -9,13 +9,15 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 
 from shared.config import Settings
+from shared.md2 import bold, join_lines
 from shared.telegram_utils import user_from_update
 
 logger = logging.getLogger(__name__)
 
-MAINTENANCE_TEXT = (
-    "🚧 <b>Технические работы</b>\n\n"
-    "Сервис временно недоступен. Загляните чуть позже — мы уже чиним."
+MAINTENANCE_TEXT = join_lines(
+    "🚧 " + bold("Технические работы"),
+    "",
+    "Сервис временно недоступен. Загляните чуть позже — мы уже чиним.",
 )
 
 

@@ -1,8 +1,6 @@
-"""Экран и ввод промокода."""
+"""Экран и ввод промокода (MarkdownV2)."""
 
 from __future__ import annotations
-
-import html
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -16,6 +14,7 @@ from bot.keyboards.inline import submenu_back_keyboard
 from bot.states.promo import PromoStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
+from shared.md2 import bold, code, esc, join_lines
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.promo_service import apply_promo_code_for_user
@@ -37,7 +36,7 @@ async def cmd_promo(
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
-        caption="🎁 <b>Промокод</b>\n\nВведите код одним сообщением.",
+        caption=join_lines("🎁 " + bold("Промокод"), "", "Введите код одним сообщением."),
         reply_markup=cancel_kb.as_markup(),
         settings=settings,
         delete_message=None,
@@ -58,7 +57,7 @@ async def cb_promo_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
     settings = get_settings()
     await answer_callback_with_photo_screen(
         cq,
-        caption="🎁 <b>Промокод</b>\n\nВведите код одним сообщением.",
+        caption=join_lines("🎁 " + bold("Промокод"), "", "Введите код одним сообщением."),
         reply_markup=_promo_cancel_keyboard().as_markup(),
         settings=settings,
     )
@@ -70,7 +69,7 @@ async def cb_promo_cancel(cq: CallbackQuery, state: FSMContext) -> None:
     await cq.answer()
     if cq.message:
         await cq.message.edit_text(
-            "Операция отменена.",
+            esc("Операция отменена."),
             reply_markup=submenu_back_keyboard(),
         )
 
@@ -97,11 +96,11 @@ async def msg_promo_code(
         if meta:
             await notify_admin(
                 settings,
-                title="🎁 <b>Промокод применён</b>",
+                title="🎁 " + bold("Промокод применён"),
                 lines=[
-                    f"Код: <code>{html.escape(meta['code'])}</code>",
-                    f"Тип: <code>{html.escape(meta['type'])}</code>",
-                    f"Сумма: <b>{html.escape(meta['value'])}</b> ₽",
+                    f"Код: {code(meta['code'])}",
+                    f"Тип: {code(meta['type'])}",
+                    f"Сумма: {bold(str(meta['value']))} ₽",
                 ],
                 event_type="promo_apply",
                 subject_user=db_user,
@@ -119,7 +118,7 @@ async def msg_promo_code(
         await send_profile_screen(
             message.bot,
             chat_id=message.chat.id,
-            caption=f"❌ {text}",
+            caption=join_lines("❌ " + text),
             reply_markup=submenu_back_keyboard(),
             settings=settings,
             delete_message=None,

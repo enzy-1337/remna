@@ -10,11 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, support_telegram_url
 from bot.keyboards.inline import channel_required_keyboard
 from bot.keyboards.profile_kb import profile_main_keyboard
-from bot.ui.profile_text import profile_caption_html
+from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import send_profile_screen
 from shared.config import get_settings
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
+from shared.md2 import bold, esc, join_lines
 from shared.services.user_registration import register_user
 
 router = Router(name="start")
@@ -36,9 +37,11 @@ async def cmd_start(
     settings = get_settings()
     if not is_channel_member:
         await message.answer(
-            "👋 Добро пожаловать!\n\n"
-            "Чтобы пользоваться ботом, подпишитесь на наш канал "
-            "и нажмите «✅ Я подписался».",
+            esc(
+                "👋 Добро пожаловать!\n\n"
+                "Чтобы пользоваться ботом, подпишитесь на наш канал "
+                "и нажмите «✅ Я подписался»."
+            ),
             reply_markup=channel_required_keyboard(settings.required_channel_username),
         )
         return
@@ -54,7 +57,7 @@ async def cmd_start(
 
     intro_lines: list[str] = []
     if created:
-        intro_lines.append("✅ <b>Регистрация прошла успешно!</b>")
+        intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
         if user.referred_by is not None:
             intro_lines.append("Вы присоединились по приглашению друга.")
     else:
@@ -66,9 +69,10 @@ async def cmd_start(
         has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
+        is_admin=is_bot_admin,
     )
-    profile_block = profile_caption_html(user, tg)
-    body = "\n".join(intro_lines) + "\n\n" + profile_block
+    profile_block = profile_caption(user, tg)
+    body = join_lines(*intro_lines, "", profile_block)
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,

@@ -11,6 +11,7 @@ def profile_main_keyboard(
     has_active_sub: bool,
     show_trial: bool,
     support_url: str | None,
+    is_admin: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if show_trial:
@@ -28,8 +29,20 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
         InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
     )
-    if support_url:
-        b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url))
+    if is_admin:
+        if support_url:
+            b.row(
+                InlineKeyboardButton(text="💬 Поддержка", url=support_url),
+                InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"),
+            )
+        else:
+            b.row(
+                InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"),
+                InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"),
+            )
     else:
-        b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"))
+        if support_url:
+            b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url))
+        else:
+            b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"))
     return b.as_markup()

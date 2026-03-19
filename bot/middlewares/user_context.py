@@ -10,6 +10,7 @@ from aiogram.types import TelegramObject, Update
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.config import get_settings
 from shared.models.user import User
 from shared.telegram_utils import user_from_update
 
@@ -30,12 +31,14 @@ class UserContextMiddleware(BaseMiddleware):
         if session is None:
             data["db_user"] = None
             data["tg_user"] = None
+            data["is_bot_admin"] = False
             return await handler(event, data)
 
         tg_user = user_from_update(event)
         if tg_user is None or tg_user.is_bot:
             data["db_user"] = None
             data["tg_user"] = tg_user
+            data["is_bot_admin"] = False
             return await handler(event, data)
 
         res = await session.execute(select(User).where(User.telegram_id == tg_user.id))
@@ -45,4 +48,6 @@ class UserContextMiddleware(BaseMiddleware):
 
         data["db_user"] = db_user
         data["tg_user"] = tg_user
+        settings = get_settings()
+        data["is_bot_admin"] = tg_user.id in settings.admin_telegram_ids
         return await handler(event, data)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -12,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.md2 import bold, code, join_lines
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.referral_reward import ReferralReward
@@ -127,7 +127,7 @@ async def grant_referrer_reward_first_paid_plan(
                 meta={"referred_id": buyer.id, "plan_id": plan.id},
             )
         )
-        parts.append(f"+<b>{rub}</b> ₽ на баланс")
+        parts.append(f"+{bold(str(rub))} ₽ на баланс")
 
     if days > 0:
         sub = await get_active_subscription(session, referrer.id)
@@ -144,7 +144,7 @@ async def grant_referrer_reward_first_paid_plan(
                     )
                 except RemnaWaveError as e:
                     logger.warning("Referrer RW extend failed user=%s: %s", referrer.id, e)
-            parts.append(f"+<b>{days}</b> дн. к подписке")
+            parts.append(f"+{bold(str(days))} дн. к подписке")
         else:
             logger.info(
                 "Referral bonus days skipped: no active sub for referrer_id=%s", referrer.id
@@ -153,21 +153,27 @@ async def grant_referrer_reward_first_paid_plan(
     await session.flush()
 
     if parts:
-        msg = (
-            "🎁 <b>Реферальный бонус</b>\n"
-            f"Ваш приглашённый оформил первый платный тариф «{plan.name}».\n"
-            + "\n".join(parts)
+        msg = join_lines(
+            "🎁 " + bold("Реферальный бонус"),
+            f"Ваш приглашённый оформил первый платный тариф {bold(plan.name)}.",
+            *parts,
         )
         await send_telegram_message(referrer.telegram_id, msg, settings=settings)
         from shared.services.admin_notify import notify_admin
 
         await notify_admin(
             settings,
-            title="👥 <b>Реферальный бонус начислен</b>",
+            title="👥 " + bold("Реферальный бонус начислен"),
             lines=[
-                f"Реферер: <b>#{referrer.id}</b> tg <code>{referrer.telegram_id}</code>",
-                f"Приглашённый: <b>#{buyer.id}</b> tg <code>{buyer.telegram_id}</code>",
-                f"Тариф: <b>{html.escape(plan.name)}</b>",
+                "Реферер: "
+                + bold(f"#{referrer.id}")
+                + " tg "
+                + code(str(referrer.telegram_id)),
+                "Приглашённый: "
+                + bold(f"#{buyer.id}")
+                + " tg "
+                + code(str(buyer.telegram_id)),
+                f"Тариф: {bold(plan.name)}",
                 "Начисление: " + " · ".join(parts),
             ],
             event_type="referral_reward",

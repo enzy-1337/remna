@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_PHOTO_CAPTION_MAX = 1024
 
 
-def truncate_caption_html(text: str, max_len: int = TELEGRAM_PHOTO_CAPTION_MAX) -> str:
+def truncate_caption(text: str, max_len: int = TELEGRAM_PHOTO_CAPTION_MAX) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3].rstrip() + "..."
@@ -58,7 +58,7 @@ async def send_profile_screen(
     delete_message: Message | None = None,
 ) -> Message:
     await delete_message_safe(delete_message)
-    cap = truncate_caption_html(caption)
+    cap = truncate_caption(caption)
     photo = resolve_section_photo(settings)
     if photo is not None:
         return await bot.send_photo(

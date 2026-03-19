@@ -27,6 +27,7 @@ def main_menu_keyboard(
     *,
     show_trial: bool,
     support_url: str | None = None,
+    is_admin: bool = False,
 ) -> InlineKeyboardMarkup:
     """Главное меню по ТЗ (inline)."""
     builder = InlineKeyboardBuilder()
@@ -70,14 +71,18 @@ def submenu_back_keyboard() -> InlineKeyboardMarkup:
 
 
 def topup_amounts_keyboard() -> InlineKeyboardMarkup:
-    """Быстрые суммы пополнения."""
+    """Быстрые суммы пополнения: сетка 100|200, 300|500, затем свои строки."""
     builder = InlineKeyboardBuilder()
-    for a in (100, 200, 300, 500):
-        builder.row(InlineKeyboardButton(text=f"{a} ₽", callback_data=f"topup:amt:{a}"))
-    builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
     builder.row(
-        InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"),
+        InlineKeyboardButton(text="100 ₽", callback_data="topup:amt:100"),
+        InlineKeyboardButton(text="200 ₽", callback_data="topup:amt:200"),
     )
+    builder.row(
+        InlineKeyboardButton(text="300 ₽", callback_data="topup:amt:300"),
+        InlineKeyboardButton(text="500 ₽", callback_data="topup:amt:500"),
+    )
+    builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
+    builder.row(InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"))
     return builder.as_markup()
 
 

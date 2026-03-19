@@ -1,13 +1,13 @@
-"""Уведомления в админ-чат (шаг 12) + запись в notifications_log."""
+"""Уведомления в админ-чат (шаг 12) + запись в notifications_log (MarkdownV2)."""
 
 from __future__ import annotations
 
-import html
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.database import get_session_factory
+from shared.md2 import bold, code, esc, join_lines
 from shared.models.notification_log import NotificationLog
 from shared.models.user import User
 from shared.services.telegram_notify import send_telegram_message
@@ -16,8 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def format_user_line(user: User) -> str:
-    un = html.escape(f"@{user.username}") if user.username else "—"
-    return f"👤 <b>#{user.id}</b> · tg <code>{user.telegram_id}</code> · {un}"
+    un = esc(f"@{user.username}") if user.username else "—"
+    return join_lines(
+        "👤 "
+        + bold(f"#{user.id}")
+        + " · tg "
+        + code(str(user.telegram_id))
+        + " · "
+        + un
+    )
 
 
 def _admin_chat_configured(settings: Settings) -> bool:
@@ -63,8 +70,7 @@ async def notify_admin(
     session: AsyncSession | None = None,
 ) -> None:
     """
-    Отправка HTML в ADMIN_LOG_CHAT_ID (опционально ADMIN_LOG_TOPIC_ID для форумов).
-    Дублирует событие в notifications_log для subject-пользователя (если известен id).
+    Отправка MarkdownV2 в ADMIN_LOG_CHAT_ID (опционально ADMIN_LOG_TOPIC_ID для форумов).
     """
     uid = subject_user.id if subject_user is not None else subject_user_id
     chunks: list[str] = []
@@ -93,6 +99,7 @@ async def notify_admin(
         chat_id,
         body,
         message_thread_id=thread,
+        parse_mode="MarkdownV2",
         settings=settings,
     )
     log_status = "sent" if ok else "failed"

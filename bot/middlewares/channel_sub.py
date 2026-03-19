@@ -23,6 +23,7 @@ from aiogram.types import (
 
 from bot.keyboards.inline import channel_required_keyboard
 from shared.config import Settings, get_settings
+from shared.md2 import esc
 from shared.telegram_utils import user_from_update
 
 logger = logging.getLogger(__name__)
@@ -133,11 +134,11 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
             subscribed = await self._fetch_subscription(bot, user.id)
             await self._set_cache(user.id, subscribed)
             data["is_channel_member"] = subscribed
-            text_ok = (
+            text_ok = esc(
                 "✅ Подписка подтверждена!\n\n"
                 "Теперь вам доступны все функции бота."
             )
-            text_fail = (
+            text_fail = esc(
                 "Мы пока не видим вашу подписку на канал.\n"
                 "Убедитесь, что вы подписались, и нажмите кнопку снова."
             )
@@ -177,7 +178,7 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Блокируем остальной функционал
-        text = (
+        text = esc(
             "📢 Чтобы пользоваться ботом, подпишитесь на наш канал.\n\n"
             "После подписки нажмите «✅ Я подписался»."
         )
