@@ -1,4 +1,9 @@
-"""Telegram MarkdownV2: экранирование и обёртки (жирный, курсив, подчёркнутый, …)."""
+"""Telegram MarkdownV2: экранирование и обёртки (жирный, курсив, подчёркнутый, …).
+
+Правило для подписей/сообщений с parse_mode=MarkdownV2:
+- Внутри *bold*, _italic_, `code` и т.д. используйте сырой текст — обёртки сами вызывают esc.
+- Любой текст *вне* сущностей (целая фраза, «Стр.», «…действие.») оборачивайте в plain().
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,11 @@ _MD2_SPECIAL = frozenset(r"_*[]()~`>#+-=|{}.!")
 def esc(text: str) -> str:
     """Экранирование произвольного пользовательского текста для MarkdownV2."""
     return "".join("\\" + c if c in _MD2_SPECIAL else c for c in text)
+
+
+def plain(text: str) -> str:
+    """Обычный фрагмент подписи (предложения с точками, скобками, восклицательными знаками)."""
+    return esc(text)
 
 
 def bold(inner: str) -> str:

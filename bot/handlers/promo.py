@@ -14,7 +14,7 @@ from bot.keyboards.inline import submenu_back_keyboard
 from bot.states.promo import PromoStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, join_lines
+from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.promo_service import apply_promo_code_for_user
@@ -36,7 +36,7 @@ async def cmd_promo(
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
-        caption=join_lines("🎁 " + bold("Промокод"), "", "Введите код одним сообщением."),
+        caption=join_lines("🎁 " + bold("Промокод"), "", plain("Введите код одним сообщением.")),
         reply_markup=cancel_kb.as_markup(),
         settings=settings,
         delete_message=None,
@@ -57,7 +57,7 @@ async def cb_promo_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
     settings = get_settings()
     await answer_callback_with_photo_screen(
         cq,
-        caption=join_lines("🎁 " + bold("Промокод"), "", "Введите код одним сообщением."),
+        caption=join_lines("🎁 " + bold("Промокод"), "", plain("Введите код одним сообщением.")),
         reply_markup=_promo_cancel_keyboard().as_markup(),
         settings=settings,
     )

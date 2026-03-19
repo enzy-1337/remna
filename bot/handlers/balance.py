@@ -17,7 +17,7 @@ from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_done_keyb
 from bot.states.payment import TopupStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, join_lines, link
+from shared.md2 import bold, code, esc, join_lines, link, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.topup_service import create_topup_payment
@@ -63,8 +63,8 @@ def _balance_caption(user: User, history: list[str]) -> str:
     return join_lines(
         "💰 " + bold("Баланс"),
         "",
-        f"Основной: {bold(bal)} ₽",
-        f"Бонусный: {bold(bonus)} ₽",
+        plain("Основной: ") + bold(bal) + plain(" ₽"),
+        plain("Бонусный: ") + bold(bonus) + plain(" ₽"),
         "",
         bold("Последние операции:") + "\n" + hist_block,
     )
@@ -147,7 +147,7 @@ async def cb_topup_amount(
         await cq.answer("Некорректная сумма", show_alert=True)
         return
     await cq.answer()
-    text = join_lines(f"Пополнение на {bold(str(amt))} ₽", "", "Выберите способ оплаты:")
+    text = join_lines(f"Пополнение на {bold(str(amt))} ₽", "", plain("Выберите способ оплаты:"))
     await _edit_or_send_balance(cq, caption=text, reply_markup=topup_providers_keyboard(amt))
 
 
@@ -166,11 +166,11 @@ async def cb_topup_custom(
     await _edit_or_send_balance(
         cq,
         caption=join_lines(
-            "Введите сумму в рублях (целое число), от "
+            plain("Введите сумму в рублях (целое число), от ")
             + bold("50")
-            + " до "
+            + plain(" до ")
             + bold("100000")
-            + ":",
+            + plain(":"),
         ),
         reply_markup=cancel_kb.as_markup(),
     )
@@ -230,7 +230,7 @@ async def msg_topup_custom_amount(
         return
     await state.clear()
     await message.answer(
-        join_lines(f"Пополнение на {bold(str(amt))} ₽", "", "Выберите способ оплаты:"),
+        join_lines(f"Пополнение на {bold(str(amt))} ₽", "", plain("Выберите способ оплаты:")),
         reply_markup=topup_providers_keyboard(amt),
     )
 
@@ -286,11 +286,15 @@ async def cb_topup_provider(
     await cq.answer()
     label = "CryptoBot" if prov_name == "cryptobot" else "Platega"
     text = join_lines(
-        f"💳 Счёт через {bold(label)} на {bold(amount_s)} ₽ создан.",
+        plain("💳 Счёт через ")
+        + bold(label)
+        + plain(" на ")
+        + bold(amount_s)
+        + plain(" ₽ создан."),
         "",
         link("Открыть страницу оплаты", pay_url),
         "",
-        "После оплаты баланс обновится автоматически (обычно в течение минуты).",
+        plain("После оплаты баланс обновится автоматически (обычно в течение минуты)."),
     )
     if cq.message:
         if cq.message.photo:

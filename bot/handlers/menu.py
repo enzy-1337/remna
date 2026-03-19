@@ -19,7 +19,7 @@ from shared.integrations.remnawave import RemnaWaveError
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import get_active_subscription
-from shared.md2 import bold, code, join_lines
+from shared.md2 import bold, code, join_lines, plain
 from shared.services.trial_service import activate_trial, trial_eligible
 
 logger = logging.getLogger(__name__)
@@ -99,11 +99,11 @@ async def cb_trial_activate(
         settings,
         title="🎁 " + bold("Активирован триал"),
         lines=[
-            "Срок: "
+            plain("Срок: ")
             + bold(str(settings.trial_duration_days))
-            + " дн., трафик: "
+            + plain(" дн., трафик: ")
             + bold(str(settings.trial_traffic_gb))
-            + " ГБ",
+            + plain(" ГБ"),
         ],
         event_type="trial_activate",
         subject_user=db_user,
@@ -115,9 +115,11 @@ async def cb_trial_activate(
     cap = join_lines(
         "🎉 " + bold("Триал активирован!"),
         "",
-        f"Срок: {settings.trial_duration_days} дн., трафик: {settings.trial_traffic_gb} ГБ.",
+        plain(
+            f"Срок: {settings.trial_duration_days} дн., трафик: {settings.trial_traffic_gb} ГБ."
+        ),
         "",
-        "Ссылка подписки:",
+        plain("Ссылка подписки:"),
         code(sub_url),
         "",
         profile_caption(db_user, tg),
@@ -165,7 +167,7 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
     text = join_lines(
         "📖 " + bold("Инструкции"),
         "",
-        "Откройте статью на Telegra.ph для вашего устройства.",
+        plain("Откройте статью на Telegra.ph для вашего устройства."),
     )
     if (
         not settings.instruction_telegraph_phone_url
@@ -177,7 +179,13 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
             or settings.instruction_macos_url
         )
     ):
-        text += "\n\n⚠️ Задайте " + code("INSTRUCTION_TELEGRAPH_PHONE_URL") + " и " + code("INSTRUCTION_TELEGRAPH_PC_URL") + " в .env."
+        text += (
+            "\n\n⚠️ Задайте "
+            + code("INSTRUCTION_TELEGRAPH_PHONE_URL")
+            + " и "
+            + code("INSTRUCTION_TELEGRAPH_PC_URL")
+            + plain(" в .env.")
+        )
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
@@ -206,7 +214,7 @@ async def cb_about(cq: CallbackQuery, db_user: User | None) -> None:
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     await answer_callback_with_photo_screen(
         cq,
-        caption=join_lines("ℹ️ " + bold("О сервисе"), "", "VPN через панель Remnawave."),
+        caption=join_lines("ℹ️ " + bold("О сервисе"), "", plain("VPN через панель Remnawave.")),
         reply_markup=b.as_markup(),
         settings=settings,
     )

@@ -13,7 +13,7 @@ from shared.models.device import Device
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, esc, join_lines
+from shared.md2 import bold, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
@@ -80,15 +80,17 @@ async def _render_devices(
             .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
             .as_markup()
         )
-        return join_lines("🖥 " + bold("Устройства"), "", "Сначала оформите подписку или триал."), kb
+        return join_lines("🖥 " + bold("Устройства"), "", plain("Сначала оформите подписку или триал.")), kb
 
     devices = await list_user_devices(session, sub.id)
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
-        f"Слотов в подписке: {bold(str(sub.devices_count))} (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})",
+        plain(f"Слотов в подписке: ")
+        + bold(str(sub.devices_count))
+        + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})"),
         "",
-        "Нажмите устройство, чтобы " + bold("отвязать") + " его.",
+        plain("Нажмите устройство, чтобы ") + bold("отвязать") + plain(" его."),
     )
     price = str(settings.extra_device_price_rub)
     return lines, _devices_kb(devices, sub.devices_count, price, ctx)
@@ -203,7 +205,7 @@ async def cb_dev_pick(
         "",
         nm,
         "",
-        "Отвязать это устройство? Слот в панели уменьшится (минимум 2 на аккаунт).",
+        plain("Отвязать это устройство? Слот в панели уменьшится (минимум 2 на аккаунт)."),
     )
     await answer_callback_with_photo_screen(
         cq,

@@ -11,7 +11,7 @@ from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.ui.subscription_detail import build_subscription_detail_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, join_lines
+from shared.md2 import bold, code, join_lines, plain
 from shared.models.user import User
 from shared.services.subscription_service import (
     get_active_subscription,
@@ -85,9 +85,8 @@ async def cb_plans_or_extend(
         if (is_extend and has_act)
         else "🛒 " + bold("Купить подписку") + "\n\n"
     )
-    body = (
-        title
-        + "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
+    body = title + plain(
+        "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
     )
     b = InlineKeyboardBuilder()
     for p in plans:
@@ -202,7 +201,7 @@ async def cb_sub_instructions(
     text = join_lines(
         "📖 " + bold("Инструкции"),
         "",
-        "Выберите платформу — откроется статья в Telegra.ph.",
+        plain("Выберите платформу — откроется статья в Telegra.ph."),
     )
     if (
         not settings.instruction_telegraph_phone_url
@@ -214,7 +213,13 @@ async def cb_sub_instructions(
             or settings.instruction_macos_url
         )
     ):
-        text += "\n\n⚠️ Задайте " + code("INSTRUCTION_TELEGRAPH_PHONE_URL") + " и " + code("INSTRUCTION_TELEGRAPH_PC_URL") + " в .env."
+        text += (
+            "\n\n⚠️ Задайте "
+            + code("INSTRUCTION_TELEGRAPH_PHONE_URL")
+            + " и "
+            + code("INSTRUCTION_TELEGRAPH_PC_URL")
+            + plain(" в .env.")
+        )
     await answer_callback_with_photo_screen(
         cq,
         caption=text,

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.states.admin import AdminFindUserStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, italic, join_lines
+from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -58,13 +58,17 @@ async def _render_user_card(
     full_name = f"{u.first_name or ''} {u.last_name or ''}".strip() or "—"
     lines = [
         "👤 " + bold(f"Пользователь #{u.id}"),
-        f"Telegram: {code(str(u.telegram_id))}",
-        f"Username: {esc(u.username or '—')}",
-        f"Имя: {esc(full_name)}",
-        f"Баланс: {bold(bal)} ₽ · бонус: {bold(bonus)} ₽",
-        f"Триал использован: {'да' if u.trial_used else 'нет'}",
-        f"Статус: {'🚫 заблокирован' if u.is_blocked else '✅ активен'}",
-        f"Причина блока: {reason}",
+        plain("Telegram: ") + code(str(u.telegram_id)),
+        plain("Username: ") + esc(u.username or "—"),
+        plain("Имя: ") + esc(full_name),
+        plain("Баланс: ")
+        + bold(bal)
+        + plain(" ₽ · бонус: ")
+        + bold(bonus)
+        + plain(" ₽"),
+        plain(f"Триал использован: {'да' if u.trial_used else 'нет'}"),
+        plain(f"Статус: {'🚫 заблокирован' if u.is_blocked else '✅ активен'}"),
+        plain("Причина блока: ") + reason,
     ]
     b = InlineKeyboardBuilder()
     if u.is_blocked:
@@ -92,7 +96,7 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
     text = join_lines(
         "🛠 " + bold("Админ-панель"),
         "",
-        "Выберите действие.",
+        plain("Выберите действие."),
         "",
         italic("Доступ только для ID из ADMIN_TELEGRAM_IDS / ADMIN_TELEGRAM_ID."),
     )
@@ -132,7 +136,7 @@ async def cb_admin_users_page(
 
     lines = [
         "📋 " + bold("Пользователи"),
-        f"Стр. {page + 1} · всего записей: {bold(str(total))}",
+        plain(f"Стр. {page + 1} · всего записей: ") + bold(str(total)),
         "",
     ]
     b = InlineKeyboardBuilder()
@@ -248,7 +252,7 @@ async def cb_admin_find_start(
         caption=join_lines(
             "🔎 " + bold("Поиск по Telegram ID"),
             "",
-            "Отправьте числом Telegram ID пользователя.",
+            plain("Отправьте числом Telegram ID пользователя."),
         ),
         reply_markup=b.as_markup(),
         settings=settings,
@@ -295,13 +299,18 @@ async def msg_admin_find_telegram_id(
     await state.clear()
     settings = get_settings()
     if u is None:
-        await message.answer(join_lines("Не найден пользователь с " + code(str(tg_id)), "", "/admin"))
+        await message.answer(
+            join_lines(plain("Не найден пользователь с ") + code(str(tg_id)), "", plain("/admin"))
+        )
         return
     un = esc(u.username or "—")
+    line_user = plain(f"#{u.id} · tg ") + code(str(u.telegram_id))
+    if u.username:
+        line_user += plain(" · @") + un
     lines = [
         "🔎 " + bold("Найден"),
-        f"#{u.id} · tg {code(str(u.telegram_id))} · @{un}" if u.username else f"#{u.id} · tg {code(str(u.telegram_id))}",
-        f"Баланс: {bold(f'{u.balance:.2f}')} ₽",
+        line_user,
+        plain("Баланс: ") + bold(f"{u.balance:.2f}") + plain(" ₽"),
     ]
     adm = InlineKeyboardBuilder()
     adm.row(InlineKeyboardButton(text="🛠 Карточка", callback_data=f"admin:u:{u.id}"))
@@ -331,7 +340,7 @@ async def cmd_admin(
     text = join_lines(
         "🛠 " + bold("Админ-панель"),
         "",
-        "Выберите действие или используйте кнопку в профиле.",
+        plain("Выберите действие или используйте кнопку в профиле."),
         "",
         italic("Доступ только для ID из ADMIN_TELEGRAM_IDS / ADMIN_TELEGRAM_ID."),
     )

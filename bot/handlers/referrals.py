@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, italic, join_lines
+from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
@@ -34,19 +34,25 @@ def _referrals_main_body(
     bonus_days = settings.referral_inviter_bonus_days
     cond_lines: list[str] = []
     if bonus_rub > 0:
-        cond_lines.append(f"• {bold(str(bonus_rub))} ₽ за первую платную покупку друга")
+        cond_lines.append(
+            plain("• ") + bold(str(bonus_rub)) + plain(" ₽ за первую платную покупку друга")
+        )
     if bonus_days > 0:
-        cond_lines.append(f"• {bold(str(bonus_days))} дн. к вашей подписке (если активна)")
+        cond_lines.append(
+            plain("• ")
+            + bold(str(bonus_days))
+            + plain(" дн. к вашей подписке (если активна)")
+        )
     if not cond_lines:
         cond_lines.append("• Условия: первая " + bold("платная") + " покупка приглашённого")
 
     if settings.bot_username:
         uname = settings.bot_username.lstrip("@")
         link_u = f"https://t.me/{uname}?start=ref_{db_user.referral_code}"
-        link_line = join_lines("🔗 Пригласить:", code(link_u))
+        link_line = join_lines(plain("🔗 Пригласить:"), code(link_u))
     else:
         link_line = join_lines(
-            f"Код: {code(db_user.referral_code)}",
+            plain("Код: ") + code(db_user.referral_code),
             italic("Задайте BOT_USERNAME для готовой ссылки."),
         )
 
@@ -54,9 +60,9 @@ def _referrals_main_body(
     return join_lines(
         "👥 " + bold("Рефералы"),
         "",
-        f"Приглашено людей: {bold(str(invited))}",
-        f"Получено дней (бонусы): {bold(str(earned_days))}",
-        f"Получено денег (бонусы): {bold(str(earned_rub))} ₽",
+        plain("Приглашено людей: ") + bold(str(invited)),
+        plain("Получено дней (бонусы): ") + bold(str(earned_days)),
+        plain("Получено денег (бонусы): ") + bold(str(earned_rub)) + plain(" ₽"),
         "",
         bold("Как это работает"),
         cond_block,
@@ -112,12 +118,12 @@ async def cb_ref_list(
     settings = get_settings()
     users = await list_invited_users(session, db_user.id, limit=25)
     if not users:
-        lines = ["Пока никого не пригласили."]
+        lines = [plain("Пока никого не пригласили.")]
     else:
         lines = []
         for u in users:
             un = f"@{esc(u.username)}" if u.username else "без username"
-            lines.append(f"• {code(str(u.telegram_id))} {un}")
+            lines.append(plain("• ") + code(str(u.telegram_id)) + plain(" ") + un)
     body = join_lines("📋 " + bold("Приглашённые"), "", "\n".join(lines))
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))

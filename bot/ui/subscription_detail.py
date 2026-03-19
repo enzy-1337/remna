@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
-from shared.md2 import bold, code, esc, italic, join_lines
+from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.subscription_service import (
     MAX_DEVICES,
@@ -74,8 +74,8 @@ async def build_subscription_detail_caption(
             join_lines(
                 "🔑 " + bold("Подписка"),
                 "",
-                "Нет активной подписки.",
-                "Оформите тариф или активируйте триал.",
+                plain("Нет активной подписки."),
+                plain("Оформите тариф или активируйте триал."),
             ),
             None,
         )
@@ -103,11 +103,18 @@ async def build_subscription_detail_caption(
         used_gb = 0.0
     if limit_gb is not None:
         traffic_line = (
-            f"📊 Трафик: {bold(f'{used_gb:.1f}')}/{bold(f'{limit_gb:.1f}')} ГБ"
+            plain("📊 Трафик: ")
+            + bold(f"{used_gb:.1f}")
+            + plain("/")
+            + bold(f"{limit_gb:.1f}")
+            + plain(" ГБ")
         )
     else:
         traffic_line = (
-            f"📊 Трафик: {bold(f'{used_gb:.1f}')} ГБ {italic('(без лимита)')}"
+            plain("📊 Трафик: ")
+            + bold(f"{used_gb:.1f}")
+            + plain(" ГБ ")
+            + italic("(без лимита)")
         )
 
     n_dev = await count_devices(session, sub.id)
@@ -120,13 +127,20 @@ async def build_subscription_detail_caption(
         "🔑 " + bold("Подписка:"),
         "",
         status_human,
-        f"💎 Тариф: {bold(plan.name if plan else '—')}",
+        plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
-        f"📟 Лимит устройств: {bold(str(sub.devices_count))}/{bold(str(MAX_DEVICES))}",
-        f"🔄 Привязанных устройств: {bold(str(n_dev))}",
-        f"🗓️ До: {bold(exp.strftime('%d.%m.%Y %H:%M'))} ({esc(left_phrase)})",
-        f"💸 Стоимость: {_monthly_price_line(plan)}",
+        plain("📟 Лимит устройств: ")
+        + bold(str(sub.devices_count))
+        + plain("/")
+        + bold(str(MAX_DEVICES)),
+        plain("🔄 Привязанных устройств: ") + bold(str(n_dev)),
+        plain("🗓️ До: ")
+        + bold(exp.strftime("%d.%m.%Y %H:%M"))
+        + plain(" (")
+        + esc(left_phrase)
+        + plain(")"),
+        plain("💸 Стоимость: ") + _monthly_price_line(plan),
     )
     if sub_url:
-        caption += "\n\nСсылка:\n" + code(sub_url)
+        caption += "\n\n" + plain("Ссылка:") + "\n" + code(sub_url)
     return caption, sub_url
