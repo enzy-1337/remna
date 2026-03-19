@@ -149,7 +149,7 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _validate_remnawave(self) -> Settings:
+    def _validate_remnawave(self) -> "Settings":
         if not self.remnawave_stub:
             if not (self.remnawave_api_token or "").strip():
                 raise ValueError("Задайте REMNAWAVE_API_TOKEN или REMNAWAVE_STUB=true")
