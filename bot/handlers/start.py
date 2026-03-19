@@ -11,7 +11,7 @@ from bot.handlers.common import reject_if_blocked, support_telegram_url
 from bot.keyboards.inline import channel_required_keyboard
 from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.ui.profile_text import profile_caption
-from bot.utils.screen_photo import send_profile_screen
+from bot.utils.screen_photo import delete_message_safe, send_profile_screen
 from shared.config import get_settings
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
@@ -82,3 +82,4 @@ async def cmd_start(
         settings=settings,
         delete_message=None,
     )
+    await delete_message_safe(message)

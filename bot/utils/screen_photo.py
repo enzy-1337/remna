@@ -76,11 +76,11 @@ async def answer_callback_with_photo_screen(
     caption: str,
     reply_markup,
     settings: Settings,
-) -> None:
+) -> Message | None:
     if cq.message is None or cq.bot is None:
-        return
+        return None
     await cq.answer()
-    await send_profile_screen(
+    return await send_profile_screen(
         cq.bot,
         chat_id=cq.message.chat.id,
         caption=caption,

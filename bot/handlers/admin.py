@@ -1,8 +1,9 @@
-"""Админ-панель: список пользователей, блокировка, поиск по Telegram ID."""
+"""Админ-панель: пользователи, поиск, рефералы, подписка (вкл/выкл, +дни)."""
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -11,12 +12,16 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from bot.states.admin import AdminFindUserStates
+from bot.states.admin import AdminFindUserStates, AdminSubscriptionStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.md2 import bold, code, esc, italic, join_lines, plain
+from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.referral_service import count_invited_users
 
 logger = logging.getLogger(__name__)
 
@@ -39,24 +44,99 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-async def _render_user_card(
-    cq: CallbackQuery,
+def _list_button_label(u: User) -> str:
+    status = "🚫" if u.is_blocked else "✅"
+    name = (u.first_name or u.username or "?").strip()
+    if len(name) > 18:
+        name = name[:17] + "…"
+    label = f"{status} #{u.id} {name}"
+    return label[:64]
+
+
+async def _try_delete_message(bot, chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        logger.debug("admin delete_message failed chat=%s id=%s", chat_id, message_id, exc_info=True)
+
+
+async def _admin_pick_subscription(
+    session: AsyncSession, user_id: int
+) -> tuple[Subscription | None, object | None]:
+    """Активная подписка или последняя отключённая (cancelled) для действий в админке."""
+    now = datetime.now(timezone.utc)
+    r = await session.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(
+            Subscription.user_id == user_id,
+            Subscription.status.in_(("active", "trial")),
+            Subscription.expires_at > now,
+        )
+        .order_by(Subscription.expires_at.desc())
+        .limit(1)
+    )
+    sub = r.scalar_one_or_none()
+    if sub:
+        return sub, sub.plan
+    r2 = await session.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id, Subscription.status == "cancelled")
+        .order_by(Subscription.id.desc())
+        .limit(1)
+    )
+    sub2 = r2.scalar_one_or_none()
+    if sub2:
+        return sub2, sub2.plan
+    return None, None
+
+
+def _subscription_caption_lines(sub: Subscription, plan) -> list[str]:
+    now = datetime.now(timezone.utc)
+    pname = plan.name if plan is not None else "—"
+    is_trial = sub.status == "trial" or (plan is not None and getattr(plan, "name", "") == "Триал")
+    kind = plain("триал") if is_trial else plain("платная")
+    if sub.status == "cancelled":
+        st = plain("отключена админом")
+        left = plain("—")
+    else:
+        st = plain("активна")
+        delta = sub.expires_at - now
+        if delta.total_seconds() <= 0:
+            left = plain("истекла")
+        else:
+            days, rem = divmod(int(delta.total_seconds()), 86400)
+            hours = rem // 3600
+            left = plain(f"~{days}д {hours}ч")
+    exp_s = sub.expires_at.strftime("%d.%m.%Y %H:%M UTC")
+    return [
+        plain("Подписка: ") + bold(pname) + plain(" · ") + kind + plain(" · ") + st,
+        plain("До: ") + bold(exp_s),
+        plain("Остаток: ") + left,
+    ]
+
+
+async def _build_user_card(
     session: AsyncSession,
     *,
     user_id: int,
-) -> None:
-    settings = get_settings()
+) -> tuple[str, InlineKeyboardMarkup] | None:
     res = await session.execute(select(User).where(User.id == user_id))
     u = res.scalar_one_or_none()
     if u is None:
-        await cq.answer("Пользователь не найден", show_alert=True)
-        return
+        return None
 
     bal = f"{u.balance:.2f}"
     bonus = f"{u.bonus_balance:.2f}"
     reason = esc(u.block_reason or "—")
     full_name = f"{u.first_name or ''} {u.last_name or ''}".strip() or "—"
-    lines = [
+    invited = await count_invited_users(session, u.id)
+    sub, plan = await _admin_pick_subscription(session, u.id)
+
+    lines: list[str] = [
         "👤 " + bold(f"Пользователь #{u.id}"),
         plain("Telegram: ") + code(str(u.telegram_id)),
         plain("Username: ") + esc(u.username or "—"),
@@ -66,20 +146,66 @@ async def _render_user_card(
         + plain(" ₽ · бонус: ")
         + bold(bonus)
         + plain(" ₽"),
+        plain("Пригласил людей: ") + bold(str(invited)),
         plain(f"Триал использован: {'да' if u.trial_used else 'нет'}"),
         plain(f"Статус: {'🚫 заблокирован' if u.is_blocked else '✅ активен'}"),
         plain("Причина блока: ") + reason,
+        "",
     ]
+    if sub is None:
+        lines.append(plain("Подписка: ") + bold("нет"))
+    else:
+        lines.extend(_subscription_caption_lines(sub, plan))
+
     b = InlineKeyboardBuilder()
     if u.is_blocked:
         b.row(InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"admin:unblock:{u.id}"))
     else:
         b.row(InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"admin:block:{u.id}"))
+
+    now = datetime.now(timezone.utc)
+    if sub is not None:
+        if sub.status in ("active", "trial") and sub.expires_at > now:
+            b.row(
+                InlineKeyboardButton(
+                    text="⏹ Отключить подписку",
+                    callback_data=f"admin:sd:{u.id}:{sub.id}",
+                )
+            )
+        elif sub.status == "cancelled":
+            b.row(
+                InlineKeyboardButton(
+                    text="▶️ Включить подписку",
+                    callback_data=f"admin:se:{u.id}:{sub.id}",
+                )
+            )
+        b.row(
+            InlineKeyboardButton(
+                text="➕ Добавить дни",
+                callback_data=f"admin:ad:{u.id}:{sub.id}",
+            )
+        )
+
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0"))
+    return join_lines(*lines), b.as_markup()
+
+
+async def _render_user_card(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    *,
+    user_id: int,
+) -> None:
+    settings = get_settings()
+    built = await _build_user_card(session, user_id=user_id)
+    if built is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    cap, kb = built
     await answer_callback_with_photo_screen(
         cq,
-        caption=join_lines(*lines),
-        reply_markup=b.as_markup(),
+        caption=cap,
+        reply_markup=kb,
         settings=settings,
     )
 
@@ -141,12 +267,7 @@ async def cb_admin_users_page(
     ]
     b = InlineKeyboardBuilder()
     for u in rows:
-        un = f"@{esc(u.username)}" if u.username else "—"
-        status = "🚫" if u.is_blocked else "✅"
-        label = f"{status} #{u.id} tg{u.telegram_id}"
-        if len(label) > 64:
-            label = label[:61] + "..."
-        b.row(InlineKeyboardButton(text=label, callback_data=f"admin:u:{u.id}"))
+        b.row(InlineKeyboardButton(text=_list_button_label(u), callback_data=f"admin:u:{u.id}"))
     nav_buttons: list[InlineKeyboardButton] = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:users:{page - 1}"))
@@ -231,6 +352,191 @@ async def cb_admin_unblock(
     await _render_user_card(cq, session, user_id=uid)
 
 
+def _parse_user_sub(callback_data: str) -> tuple[int, int] | None:
+    parts = callback_data.split(":")
+    if len(parts) < 4:
+        return None
+    try:
+        return int(parts[2]), int(parts[3])
+    except ValueError:
+        return None
+
+
+@router.callback_query(F.data.startswith("admin:sd:"))
+async def cb_admin_sub_disable(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    parsed = _parse_user_sub(cq.data)
+    if parsed is None:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    user_id, sub_id = parsed
+    sub = await session.get(Subscription, sub_id)
+    if sub is None or sub.user_id != user_id:
+        await cq.answer("Подписка не найдена", show_alert=True)
+        return
+    now = datetime.now(timezone.utc)
+    if sub.status not in ("active", "trial") or sub.expires_at <= now:
+        await cq.answer("Нет активной подписки", show_alert=True)
+        return
+    sub.status = "cancelled"
+    u = await session.get(User, user_id)
+    settings = get_settings()
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await rw.update_user(str(u.remnawave_uuid), status="DISABLED")
+        except RemnaWaveError as e:
+            logger.warning("admin sub disable RW failed: %s", e)
+    await session.commit()
+    await cq.answer("Подписка отключена")
+    await _render_user_card(cq, session, user_id=user_id)
+
+
+@router.callback_query(F.data.startswith("admin:se:"))
+async def cb_admin_sub_enable(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    parsed = _parse_user_sub(cq.data)
+    if parsed is None:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    user_id, sub_id = parsed
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == sub_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None or sub.user_id != user_id:
+        await cq.answer("Подписка не найдена", show_alert=True)
+        return
+    if sub.status != "cancelled":
+        await cq.answer("Эта подписка не в статусе отключения", show_alert=True)
+        return
+    plan = sub.plan
+    is_trial = plan is not None and plan.name == "Триал"
+    sub.status = "trial" if is_trial else "active"
+    u = await session.get(User, user_id)
+    settings = get_settings()
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await rw.update_user(
+                str(u.remnawave_uuid),
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
+        except RemnaWaveError as e:
+            logger.warning("admin sub enable RW failed: %s", e)
+    await session.commit()
+    await cq.answer("Подписка включена")
+    await _render_user_card(cq, session, user_id=user_id)
+
+
+@router.callback_query(F.data.startswith("admin:ad:"))
+async def cb_admin_add_days_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    parsed = _parse_user_sub(cq.data)
+    if parsed is None:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    user_id, sub_id = parsed
+    sub = await session.get(Subscription, sub_id)
+    if sub is None or sub.user_id != user_id:
+        await cq.answer("Подписка не найдена", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_add_days)
+    await state.update_data(admin_add_days_sub_id=sub_id, admin_add_days_user_id=user_id)
+    await cq.answer()
+    if cq.message and cq.bot:
+        await cq.bot.send_message(
+            cq.message.chat.id,
+            "Введите целое число дней для продления подписки (1–3650).",
+        )
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_add_days), F.text)
+async def msg_admin_add_days(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+    data = await state.get_data()
+    sub_id = data.get("admin_add_days_sub_id")
+    user_id = data.get("admin_add_days_user_id")
+    await state.clear()
+    if not isinstance(sub_id, int) or not isinstance(user_id, int):
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("Нужно целое число дней.")
+        return
+    days = int(raw)
+    if days < 1 or days > 3650:
+        await message.answer("Допустимо от 1 до 3650 дней.")
+        return
+
+    sub = await session.get(Subscription, sub_id)
+    if sub is None or sub.user_id != user_id:
+        await message.answer("Подписка не найдена.")
+        return
+
+    sub.expires_at = sub.expires_at + timedelta(days=days)
+    if sub.status == "cancelled":
+        pass
+    u = await session.get(User, user_id)
+    settings = get_settings()
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await rw.update_user(str(u.remnawave_uuid), expire_at=sub.expires_at, status="ACTIVE")
+        except RemnaWaveError as e:
+            logger.warning("admin add days RW failed: %s", e)
+
+    await session.commit()
+    built = await _build_user_card(session, user_id=user_id)
+    if built is None or message.bot is None:
+        await message.answer(f"Добавлено дней: {days}")
+        return
+    cap, kb = built
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(plain(f"✅ +{days} дн. к подписке"), "", cap),
+        reply_markup=kb,
+        settings=settings,
+        delete_message=None,
+    )
+
+
 @router.callback_query(F.data == "admin:find")
 async def cb_admin_find_start(
     cq: CallbackQuery,
@@ -243,11 +549,16 @@ async def cb_admin_find_start(
     if db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
+    prev = await state.get_data()
+    old_prompt = prev.get("find_prompt_mid")
+    if cq.bot and cq.message and old_prompt:
+        await _try_delete_message(cq.bot, cq.message.chat.id, int(old_prompt))
+
     await state.set_state(AdminFindUserStates.waiting_telegram_id)
     settings = get_settings()
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:find_cancel"))
-    await answer_callback_with_photo_screen(
+    sent = await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
             "🔎 " + bold("Поиск по Telegram ID"),
@@ -256,6 +567,11 @@ async def cb_admin_find_start(
         ),
         reply_markup=b.as_markup(),
         settings=settings,
+    )
+    new_mid = sent.message_id if sent else None
+    await state.update_data(
+        find_prompt_mid=new_mid,
+        find_last_result_mid=prev.get("find_last_result_mid"),
     )
 
 
@@ -266,7 +582,11 @@ async def cb_admin_find_cancel(
     session: AsyncSession,
     db_user: User | None,
 ) -> None:
+    data = await state.get_data()
     await state.clear()
+    if cq.bot and cq.message:
+        pm = data.get("find_prompt_mid")
+        await _try_delete_message(cq.bot, cq.message.chat.id, int(pm) if pm is not None else None)
     if cq.from_user is None or not _is_admin(cq.from_user.id):
         await cq.answer("Нет доступа.", show_alert=True)
         return
@@ -289,33 +609,62 @@ async def msg_admin_find_telegram_id(
     if db_user is None:
         await state.clear()
         return
+    data = await state.get_data()
+    prompt_mid = data.get("find_prompt_mid")
+    last_res = data.get("find_last_result_mid")
+
     raw = (message.text or "").strip()
     if not raw.isdigit():
         await message.answer(esc("Нужно целое число (Telegram ID)."))
         return
+
+    if message.bot:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        await _try_delete_message(
+            message.bot, message.chat.id, int(prompt_mid) if prompt_mid is not None else None
+        )
+        await _try_delete_message(
+            message.bot, message.chat.id, int(last_res) if last_res is not None else None
+        )
+
     tg_id = int(raw)
     res = await session.execute(select(User).where(User.telegram_id == tg_id))
     u = res.scalar_one_or_none()
-    await state.clear()
     settings = get_settings()
+
     if u is None:
-        await message.answer(
+        sent = await message.answer(
             join_lines(plain("Не найден пользователь с ") + code(str(tg_id)), "", plain("/admin"))
         )
+        await state.update_data(find_last_result_mid=sent.message_id, find_prompt_mid=None)
+        await state.set_state(None)
         return
+
     un = esc(u.username or "—")
     line_user = plain(f"#{u.id} · tg ") + code(str(u.telegram_id))
     if u.username:
         line_user += plain(" · @") + un
+    invited = await count_invited_users(session, u.id)
+    sub, plan = await _admin_pick_subscription(session, u.id)
+    extra: list[str] = [plain("Пригласил: ") + bold(str(invited)), ""]
+    if sub is None:
+        extra.append(plain("Подписка: ") + bold("нет"))
+    else:
+        extra.extend(_subscription_caption_lines(sub, plan))
+
     lines = [
         "🔎 " + bold("Найден"),
         line_user,
         plain("Баланс: ") + bold(f"{u.balance:.2f}") + plain(" ₽"),
+        "",
+        *extra,
     ]
     adm = InlineKeyboardBuilder()
     adm.row(InlineKeyboardButton(text="🛠 Карточка", callback_data=f"admin:u:{u.id}"))
     adm.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
-    await send_profile_screen(
+    if message.bot is None:
+        return
+    sent2 = await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines(*lines),
@@ -323,6 +672,8 @@ async def msg_admin_find_telegram_id(
         settings=settings,
         delete_message=None,
     )
+    await state.update_data(find_last_result_mid=sent2.message_id, find_prompt_mid=None)
+    await state.set_state(None)
 
 
 @router.message(F.text == "/admin")

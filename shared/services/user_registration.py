@@ -10,6 +10,8 @@ from aiogram.types import User as TgUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.config import get_settings
+from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.referral_parse import parse_referral_code_from_start_args
 
@@ -65,6 +67,28 @@ async def register_user(
     )
     session.add(user)
     await session.flush()
+
+    settings = get_settings()
+    bonus = settings.referral_signup_bonus_rub
+    if referrer_id is not None and bonus > 0:
+        referrer = await session.get(User, referrer_id)
+        if referrer is not None and not referrer.is_blocked and referrer.id != user.id:
+            referrer.balance += bonus
+            session.add(
+                Transaction(
+                    user_id=referrer.id,
+                    type="referral_signup",
+                    amount=bonus,
+                    currency="RUB",
+                    payment_provider="referral",
+                    payment_id=f"signup:{user.id}",
+                    status="completed",
+                    description=f"Реферал: регистрация друга (user #{user.id})",
+                    meta={"referred_id": user.id},
+                )
+            )
+            await session.flush()
+
     return user, True
 
 

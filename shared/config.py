@@ -145,6 +145,11 @@ class Settings(BaseSettings):
         validation_alias="REFERRAL_INVITER_BONUS_DAYS",
         description="Дней к активной подписке пригласившего (0 = не начислять)",
     )
+    referral_signup_bonus_rub: Decimal = Field(
+        default=Decimal("0"),
+        validation_alias="REFERRAL_SIGNUP_BONUS_RUB",
+        description="Однократно пригласившему при регистрации друга по ссылке (0 = выкл.)",
+    )
 
     maintenance_mode: bool = Field(default=False, validation_alias="MAINTENANCE_MODE")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")

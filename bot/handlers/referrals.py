@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, italic, join_lines, plain
+from shared.md2 import bold, esc, italic, join_lines, link, plain
 from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
@@ -32,7 +32,14 @@ def _referrals_main_body(
 ) -> str:
     bonus_rub = settings.referral_inviter_bonus_rub
     bonus_days = settings.referral_inviter_bonus_days
+    signup_rub = settings.referral_signup_bonus_rub
     cond_lines: list[str] = []
+    if signup_rub > 0:
+        cond_lines.append(
+            plain("• ")
+            + bold(str(signup_rub))
+            + plain(" ₽ пригласившему, когда друг зарегистрировался по ссылке")
+        )
     if bonus_rub > 0:
         cond_lines.append(
             plain("• ") + bold(str(bonus_rub)) + plain(" ₽ за первую платную покупку друга")
@@ -44,7 +51,9 @@ def _referrals_main_body(
             + plain(" дн. к вашей подписке (если активна)")
         )
     if not cond_lines:
-        cond_lines.append("• Условия: первая " + bold("платная") + " покупка приглашённого")
+        cond_lines.append(
+            plain("• Условия: первая ") + bold("платная") + plain(" покупка приглашённого")
+        )
 
     if settings.bot_username:
         uname = settings.bot_username.lstrip("@")
@@ -121,9 +130,21 @@ async def cb_ref_list(
         lines = [plain("Пока никого не пригласили.")]
     else:
         lines = []
-        for u in users:
-            un = f"@{esc(u.username)}" if u.username else "без username"
-            lines.append(plain("• ") + code(str(u.telegram_id)) + plain(" ") + un)
+        for i, u in enumerate(users, start=1):
+            display_name = u.first_name or u.last_name or u.username or f"user_{u.id}"
+            if u.username:
+                tag_part = link(plain("@") + esc(u.username), f"https://t.me/{u.username}")
+            else:
+                tag_part = link(plain("@без_username"), f"tg://user?id={u.telegram_id}")
+            lines.append(
+                plain(f"{i}. ")
+                + tag_part
+                + plain(" - ")
+                + link(display_name, f"tg://user?id={u.telegram_id}")
+                + plain(" (")
+                + esc(str(u.telegram_id))
+                + plain(")")
+            )
     body = join_lines("📋 " + bold("Приглашённые"), "", "\n".join(lines))
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))
