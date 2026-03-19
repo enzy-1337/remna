@@ -3,7 +3,7 @@
 from decimal import Decimal
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Пустые ADMIN_TELEGRAM_IDS= / ADMIN_TELEGRAM_ID= не ломают разбор
+        env_ignore_empty=True,
     )
 
     # Telegram
@@ -83,10 +85,11 @@ class Settings(BaseSettings):
         validation_alias="ADMIN_TELEGRAM_ID",
         description="Один Telegram user id админа (альтернатива списку ADMIN_TELEGRAM_IDS)",
     )
-    admin_telegram_ids: list[int] = Field(
-        default_factory=list,
+    # В .env строка «1,2,3» или пусто — не list[int] (иначе pydantic-settings ждёт JSON и падает на "")
+    admin_telegram_ids_csv: str = Field(
+        default="",
         validation_alias="ADMIN_TELEGRAM_IDS",
-        description="Telegram user id админов бота через запятую (кнопка «Админ-панель»)",
+        description="Несколько Telegram user id через запятую",
     )
 
     # Redis (кэш проверки подписки на канал)
@@ -191,22 +194,11 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("admin_telegram_ids", mode="before")
+    @field_validator("admin_telegram_id", mode="before")
     @classmethod
-    def _parse_admin_telegram_ids(cls, v: object) -> object:
+    def _empty_admin_telegram_id(cls, v: object) -> object:
         if v is None or v == "":
-            return []
-        if isinstance(v, int):
-            return [v]
-        if isinstance(v, str):
-            out: list[int] = []
-            for part in v.replace(";", ",").split(","):
-                p = part.strip()
-                if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
-                    out.append(int(p))
-            return out
-        if isinstance(v, list):
-            return [int(x) for x in v]
+            return None
         return v
 
     @field_validator("bot_section_photo_path", "bot_section_photo_url", mode="before")
@@ -216,11 +208,23 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @model_validator(mode="after")
-    def _merge_admin_and_remnawave(self) -> "Settings":
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def admin_telegram_ids(self) -> list[int]:
+        """Итоговый список id админов: ADMIN_TELEGRAM_IDS + ADMIN_TELEGRAM_ID."""
+        out: list[int] = []
+        raw = (self.admin_telegram_ids_csv or "").strip()
+        if raw:
+            for part in raw.replace(";", ",").split(","):
+                p = part.strip()
+                if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
+                    out.append(int(p))
         if self.admin_telegram_id is not None:
-            merged = list(dict.fromkeys([*self.admin_telegram_ids, self.admin_telegram_id]))
-            object.__setattr__(self, "admin_telegram_ids", merged)
+            out = list(dict.fromkeys([*out, self.admin_telegram_id]))
+        return out
+
+    @model_validator(mode="after")
+    def _validate_remnawave(self) -> "Settings":
         if not self.remnawave_stub:
             if not (self.remnawave_api_token or "").strip():
                 raise ValueError("Задайте REMNAWAVE_API_TOKEN или REMNAWAVE_STUB=true")
