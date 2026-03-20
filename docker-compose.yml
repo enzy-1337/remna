@@ -1,8 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    ports:
-      - "25432:5432"
     environment:
       POSTGRES_USER: vpnbot
       POSTGRES_PASSWORD: vpnbot
@@ -18,8 +16,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "26379:6379"
     # Пробрасываем на хост нестандартный порт под `network_mode: host`.
 
   bot:
@@ -27,10 +23,12 @@ services:
     command: ["python", "-m", "bot.main"]
     env_file:
       - .env
-    network_mode: host
     environment:
-      DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@127.0.0.1:25432/vpnbot
-      REDIS_URL: redis://127.0.0.1:26379/0
+      DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
+      REDIS_URL: redis://redis:6379/0
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,6 +44,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
       REDIS_URL: redis://redis:6379/0
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     ports:
       - "8000:8000"
     depends_on:

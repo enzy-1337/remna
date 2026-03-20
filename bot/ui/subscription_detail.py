@@ -123,9 +123,9 @@ async def build_subscription_detail_caption(
         exp = exp.replace(tzinfo=timezone.utc)
     left_phrase = _humanize_left(exp, now)
 
-    # Текст подписки делаем блоком-цитатой: префикс `>` добавляем без esc(),
-    # т.к. строки уже собраны через plain/bold/code и безопасны для MarkdownV2.
+    # Текст подписки делаем блоком-цитатой (`>` для каждой строки).
     lines = [
+        "🔑 " + bold("Подписка:"),
         status_human,
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
@@ -143,5 +143,5 @@ async def build_subscription_detail_caption(
     ]
     caption = "\n".join(["> " + l for l in lines])
     if sub_url:
-        caption += "\n\n" + plain("Ссылка:") + "\n" + code(sub_url)
+        caption += "\n\n" + plain("📎 ") + bold("Ссылка:") + "\n" + code(sub_url)
     return caption, sub_url
