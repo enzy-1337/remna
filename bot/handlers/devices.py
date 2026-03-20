@@ -13,7 +13,7 @@ from shared.models.device import Device
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, esc, join_lines, plain
+from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
@@ -83,12 +83,30 @@ async def _render_devices(
         return join_lines("🖥 " + bold("Устройства"), "", plain("Сначала оформите подписку или триал.")), kb
 
     devices = await list_user_devices(session, sub.id)
+    used = len(devices)
+    connected_lines: list[str] = []
+    for d in devices:
+        line = (
+            plain("• ")
+            + esc(d.name or "Устройство")
+            + plain(" · id ")
+            + code(str(d.id))
+        )
+        if d.remnawave_client_id:
+            line += plain(" · rw ") + code(d.remnawave_client_id)
+        connected_lines.append(line)
+    connected_block = "\n".join(connected_lines) if connected_lines else plain("• (нет) ")
+
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
         plain(f"Слотов в подписке: ")
         + bold(str(sub.devices_count))
         + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})"),
+        plain("Занято слотов: ") + bold(str(used)) + plain("/") + bold(str(sub.devices_count)),
+        "",
+        plain("Подключенные устройства:"),
+        connected_block,
         "",
         plain("Нажмите устройство, чтобы ") + bold("отвязать") + plain(" его."),
     )

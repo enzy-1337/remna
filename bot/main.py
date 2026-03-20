@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import socket
 from pathlib import Path
 
 # Корень проекта в PYTHONPATH (без установки пакета)
@@ -37,6 +38,16 @@ from shared.config import get_settings
 
 
 async def main() -> None:
+    # Force IPv4-only DNS resolution to avoid Telegram IPv6 routing/TLS issues.
+    _real_getaddrinfo = socket.getaddrinfo
+
+    def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        if family in (0, socket.AF_UNSPEC, socket.AF_INET6, None):
+            family = socket.AF_INET
+        return _real_getaddrinfo(host, port, family, type, proto, flags)
+
+    socket.getaddrinfo = _getaddrinfo_ipv4  # type: ignore[assignment]
+
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(
