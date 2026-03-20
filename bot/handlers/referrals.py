@@ -58,14 +58,15 @@ def _referrals_main_body(
     if settings.bot_username:
         uname = settings.bot_username.lstrip("@")
         link_u = f"https://t.me/{uname}?start=ref_{db_user.referral_code}"
-        link_line = join_lines(plain("🔗 Пригласить:"), code(link_u))
+        link_line = join_lines(bold("🔗 Пригласить:"), code(link_u))
     else:
         link_line = join_lines(
             plain("Код: ") + code(db_user.referral_code),
             italic("Задайте BOT_USERNAME для готовой ссылки."),
         )
 
-    cond_block = "\n".join(cond_lines)
+    # Делаем список условий цитатой: каждая строка начинается с `> `.
+    cond_block = "\n".join("> " + l for l in cond_lines)
     return join_lines(
         "👥 " + bold("Рефералы"),
         "",

@@ -45,8 +45,16 @@ class RemnaWaveClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if self._s.remnawave_cookie:
-            h["Cookie"] = f"__remnawave-reverse-proxy__={self._s.remnawave_cookie}"
+        cookie = (self._s.remnawave_cookie or "").strip()
+        if cookie:
+            # Документация может давать cookie как "NAME=VALUE" (как в nginx map).
+            # Поэтому поддерживаем оба формата:
+            # 1) "aEmFnBcC=WbYWpixX" (оставляем как есть)
+            # 2) "WbYWpixX" (тогда используем имя "__remnawave-reverse-proxy__")
+            if "=" in cookie:
+                h["Cookie"] = cookie
+            else:
+                h["Cookie"] = f"__remnawave-reverse-proxy__={cookie}"
         return h
 
     def _unwrap(self, data: dict[str, Any]) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, User as TgUser
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
@@ -16,6 +17,7 @@ from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveError
+from shared.models.plan import Plan
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import get_active_subscription
@@ -47,9 +49,20 @@ async def cb_main_menu(
     settings = get_settings()
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = trial_eligible(db_user, has_act)
+    can_buy_sub = True
+    if not has_act:
+        min_price_rub = (
+            await session.execute(
+                select(func.min(Plan.price_rub)).where(
+                    Plan.is_active.is_(True), Plan.price_rub > 0
+                )
+            )
+        ).scalar_one_or_none()
+        can_buy_sub = min_price_rub is not None and db_user.balance >= min_price_rub
     cap = profile_caption(db_user, tg)
     kb = profile_main_keyboard(
         has_active_sub=has_act,
+        can_buy_sub=can_buy_sub,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
@@ -112,6 +125,16 @@ async def cb_trial_activate(
 
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = trial_eligible(db_user, has_act)
+    can_buy_sub = True
+    if not has_act:
+        min_price_rub = (
+            await session.execute(
+                select(func.min(Plan.price_rub)).where(
+                    Plan.is_active.is_(True), Plan.price_rub > 0
+                )
+            )
+        ).scalar_one_or_none()
+        can_buy_sub = min_price_rub is not None and db_user.balance >= min_price_rub
     cap = join_lines(
         "🎉 " + bold("Триал активирован!"),
         "",
@@ -126,6 +149,7 @@ async def cb_trial_activate(
     )
     kb = profile_main_keyboard(
         has_active_sub=has_act,
+        can_buy_sub=can_buy_sub,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,

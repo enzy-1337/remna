@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     remnawave_cookie: str | None = Field(
         default=None,
         validation_alias="REMNAWAVE_COOKIE",
-        description="Значение cookie __remnawave-reverse-proxy__",
+        description="Cookie для nginx reverse-proxy: либо значение (WbYWpixX), либо целиком NAME=VALUE (как в docs).",
     )
     remnawave_request_timeout: float = Field(default=10.0, validation_alias="REMNAWAVE_REQUEST_TIMEOUT")
     remnawave_stub: bool = Field(

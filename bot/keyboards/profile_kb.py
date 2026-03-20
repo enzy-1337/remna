@@ -9,6 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def profile_main_keyboard(
     *,
     has_active_sub: bool,
+    can_buy_sub: bool,
     show_trial: bool,
     support_url: str | None,
     is_admin: bool = False,
@@ -24,7 +25,8 @@ def profile_main_keyboard(
     if has_active_sub:
         b.row(InlineKeyboardButton(text="🔑 Моя подписка", callback_data="menu:sub_main"))
     else:
-        b.row(InlineKeyboardButton(text="🛒 Купить подписку", callback_data="sub:plans"))
+        if can_buy_sub:
+            b.row(InlineKeyboardButton(text="🛒 Купить подписку", callback_data="sub:plans"))
     b.row(
         InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
         InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),

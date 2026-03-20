@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, support_telegram_url
@@ -13,6 +14,7 @@ from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import delete_message_safe, send_profile_screen
 from shared.config import get_settings
+from shared.models.plan import Plan
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
 from shared.md2 import bold, esc, join_lines
@@ -66,8 +68,19 @@ async def cmd_start(
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = trial_eligible(user, has_act)
+    can_buy_sub = True
+    if not has_act:
+        min_price_rub = (
+            await session.execute(
+                select(Plan.price_rub).where(
+                    Plan.is_active.is_(True), Plan.price_rub > 0
+                ).order_by(Plan.price_rub.asc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        can_buy_sub = min_price_rub is not None and user.balance >= min_price_rub
     kb = profile_main_keyboard(
         has_active_sub=has_act,
+        can_buy_sub=can_buy_sub,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,

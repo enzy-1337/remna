@@ -224,7 +224,6 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
         "",
         plain("Выберите действие."),
         "",
-        italic("Доступ только для ID из ADMIN_TELEGRAM_IDS / ADMIN_TELEGRAM_ID."),
     )
     await answer_callback_with_photo_screen(
         cq,
@@ -693,7 +692,6 @@ async def cmd_admin(
         "",
         plain("Выберите действие или используйте кнопку в профиле."),
         "",
-        italic("Доступ только для ID из ADMIN_TELEGRAM_IDS / ADMIN_TELEGRAM_ID."),
     )
     await send_profile_screen(
         message.bot,
