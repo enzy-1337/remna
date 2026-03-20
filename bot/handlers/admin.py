@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -20,6 +21,7 @@ from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.subscription import Subscription
+from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.referral_service import count_invited_users
 
@@ -185,6 +187,13 @@ async def _build_user_card(
                 callback_data=f"admin:ad:{u.id}:{sub.id}",
             )
         )
+
+    b.row(
+        InlineKeyboardButton(
+            text="💳 Добавить баланс",
+            callback_data=f"admin:ab:{u.id}",
+        )
+    )
 
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0"))
     return join_lines(*lines), b.as_markup()
@@ -530,6 +539,101 @@ async def msg_admin_add_days(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines(plain(f"✅ +{days} дн. к подписке"), "", cap),
+        reply_markup=kb,
+        settings=settings,
+        delete_message=None,
+    )
+
+
+@router.callback_query(F.data.startswith("admin:ab:"))
+async def cb_admin_add_balance_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+
+    await state.set_state(AdminSubscriptionStates.waiting_add_balance)
+    await state.update_data(admin_add_balance_user_id=uid)
+    await cq.answer()
+    if cq.message:
+        await cq.message.answer("Введите сумму для добавления баланса (например 10 или 10.5).")
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_add_balance), F.text)
+async def msg_admin_add_balance(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    user_id = data.get("admin_add_balance_user_id")
+    await state.clear()
+
+    if not isinstance(user_id, int):
+        return
+
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        await message.answer("Нужно число, например 10 или 10.5.")
+        return
+    if amount <= 0:
+        await message.answer("Сумма должна быть > 0.")
+        return
+
+    u = await session.get(User, user_id)
+    if u is None:
+        await message.answer("Пользователь не найден.")
+        return
+
+    u.balance += amount
+    session.add(
+        Transaction(
+            user_id=u.id,
+            type="admin_balance_add",
+            amount=amount,
+            currency="RUB",
+            payment_provider="admin",
+            payment_id=None,
+            status="completed",
+            description=f"Админ добавил баланс: +{amount} ₽ (admin #{db_user.id})",
+            meta={"admin_id": db_user.id},
+        )
+    )
+
+    await session.commit()
+
+    built = await _build_user_card(session, user_id=user_id)
+    if built is None or message.bot is None:
+        await message.answer(f"Баланс добавлен: +{amount} ₽")
+        return
+
+    cap, kb = built
+    settings = get_settings()
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(plain(f"✅ Баланс пополнен на +{amount} ₽"), "", cap),
         reply_markup=kb,
         settings=settings,
         delete_message=None,

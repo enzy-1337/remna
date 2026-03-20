@@ -9,3 +9,4 @@ class AdminFindUserStates(StatesGroup):
 
 class AdminSubscriptionStates(StatesGroup):
     waiting_add_days = State()
+    waiting_add_balance = State()

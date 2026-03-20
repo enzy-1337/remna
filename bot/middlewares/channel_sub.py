@@ -129,38 +129,13 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
 
         cq = event.callback_query
 
-        # «Я подписался» — всегда свежая проверка, ответ без прохода в хендлеры
+        # «Я подписался» — всегда свежая проверка.
+        # После проверки позволяем пройти в хендлер, чтобы он открыл главное меню.
         if cq and cq.data == "channel:check":
             subscribed = await self._fetch_subscription(bot, user.id)
             await self._set_cache(user.id, subscribed)
             data["is_channel_member"] = subscribed
-            text_ok = esc(
-                "✅ Подписка подтверждена!\n\n"
-                "Теперь вам доступны все функции бота."
-            )
-            text_fail = esc(
-                "Мы пока не видим вашу подписку на канал.\n"
-                "Убедитесь, что вы подписались, и нажмите кнопку снова."
-            )
-            kb = channel_required_keyboard(self._settings.required_channel_username)
-            if subscribed:
-                await cq.answer()
-                if cq.message:
-                    try:
-                        await cq.message.edit_text(text_ok, reply_markup=None)
-                    except Exception:
-                        await cq.message.answer(text_ok)
-            else:
-                await cq.answer(
-                    "Подписка не найдена. Подпишитесь на канал.",
-                    show_alert=True,
-                )
-                if cq.message:
-                    try:
-                        await cq.message.edit_text(text_fail, reply_markup=kb)
-                    except Exception:
-                        await cq.message.answer(text_fail, reply_markup=kb)
-            return None
+            return await handler(event, data)
 
         cached = await self._is_subscribed_cached(user.id, force_refresh=False)
         if cached is None:

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import CommandStart
-from aiogram.types import Message
-from sqlalchemy import select
+from aiogram.types import CallbackQuery, Message, User as TgUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, support_telegram_url
@@ -13,8 +12,8 @@ from bot.keyboards.inline import channel_required_keyboard
 from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import delete_message_safe, send_profile_screen
+from shared.models.user import User
 from shared.config import get_settings
-from shared.models.plan import Plan
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
 from shared.md2 import bold, esc, join_lines
@@ -68,19 +67,8 @@ async def cmd_start(
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = trial_eligible(user, has_act)
-    can_buy_sub = True
-    if not has_act:
-        min_price_rub = (
-            await session.execute(
-                select(Plan.price_rub).where(
-                    Plan.is_active.is_(True), Plan.price_rub > 0
-                ).order_by(Plan.price_rub.asc()).limit(1)
-            )
-        ).scalar_one_or_none()
-        can_buy_sub = min_price_rub is not None and user.balance >= min_price_rub
     kb = profile_main_keyboard(
         has_active_sub=has_act,
-        can_buy_sub=can_buy_sub,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
@@ -96,3 +84,55 @@ async def cmd_start(
         delete_message=None,
     )
     await delete_message_safe(message)
+
+
+@router.callback_query(F.data == "channel:check")
+async def cb_channel_check(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    tg_user: TgUser | None,
+    is_channel_member: bool,
+    is_bot_admin: bool = False,
+) -> None:
+    settings = get_settings()
+    if db_user is None or tg_user is None:
+        await cq.answer()
+        return
+
+    if not is_channel_member:
+        await cq.answer("Подпишитесь на канал.", show_alert=True)
+        if cq.message:
+            kb = channel_required_keyboard(settings.required_channel_username)
+            text = esc(
+                "Мы пока не видим вашу подписку на канал.\n\n"
+                "Убедитесь, что вы подписались, и нажмите кнопку снова."
+            )
+            try:
+                await cq.message.edit_text(text, reply_markup=kb)
+            except Exception:
+                await cq.message.answer(text, reply_markup=kb)
+        return
+
+    # Пользователь подписался: открываем главное меню (без сообщения об успешном подтверждении).
+    await cq.answer()
+    if cq.message is None or cq.bot is None:
+        return
+
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    show_trial = trial_eligible(db_user, has_act)
+    kb = profile_main_keyboard(
+        has_active_sub=has_act,
+        show_trial=show_trial,
+        support_url=support_telegram_url(settings.support_username),
+        is_admin=is_bot_admin,
+    )
+    cap = profile_caption(db_user, tg_user)
+    await send_profile_screen(
+        cq.bot,
+        chat_id=cq.message.chat.id,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
+        delete_message=cq.message,
+    )

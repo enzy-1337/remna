@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, esc, italic, join_lines, link, plain
+from shared.md2 import bold, code, esc, italic, join_lines, link, plain
 from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
