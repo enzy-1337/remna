@@ -166,7 +166,7 @@ class RemnaWaveClient:
         description: str | None = None,
         active_internal_squads: list[str] | None = None,
     ) -> dict[str, Any]:
-        """PATCH /api/users/{uuid} — частичное обновление."""
+        """Обновление пользователя (разные версии API панели)."""
         body: dict[str, Any] = {}
         if expire_at is not None:
             body["expireAt"] = expire_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -195,15 +195,38 @@ class RemnaWaveClient:
 
         if not body:
             return await self.get_user(user_uuid)
-        try:
-            data = await self._request("PATCH", f"users/{user_uuid}", json_body=body)
-            return self._unwrap(data)
-        except RemnaWaveError as e:
-            # Некоторые инсталлы панели не поддерживают PATCH и принимают только PUT.
-            if "HTTP 404" not in str(e):
+        def _is_path_or_method_miss(err: RemnaWaveError) -> bool:
+            msg = str(err)
+            return ("HTTP 404" in msg) or ("HTTP 405" in msg)
+
+        # Встречаются разные варианты API:
+        # - PATCH/PUT /users/{uuid}
+        # - PATCH/PUT /users  (single update body)
+        # - */users/bulk-update с {uuids, fields}
+        single_body: dict[str, Any] = {"uuid": user_uuid, **body}
+        bulk_body: dict[str, Any] = {"uuids": [user_uuid], "fields": body}
+        attempts: list[tuple[str, str, dict[str, Any]]] = [
+            ("PATCH", f"users/{user_uuid}", body),
+            ("PUT", f"users/{user_uuid}", body),
+            ("PATCH", "users", single_body),
+            ("PUT", "users", single_body),
+            ("PATCH", "users/bulk-update", bulk_body),
+            ("PUT", "users/bulk-update", bulk_body),
+            ("POST", "users/bulk-update", bulk_body),
+            ("PATCH", "users", bulk_body),
+            ("POST", "users", bulk_body),
+        ]
+        last_err: RemnaWaveError | None = None
+        for method, resource, payload in attempts:
+            try:
+                data = await self._request(method, resource, json_body=payload)
+                return self._unwrap(data)
+            except RemnaWaveError as e:
+                last_err = e
+                if _is_path_or_method_miss(e):
+                    continue
                 raise
-            data = await self._request("PUT", f"users/{user_uuid}", json_body=body)
-            return self._unwrap(data)
+        raise last_err or RemnaWaveError("Не удалось обновить пользователя Remnawave")
 
     @staticmethod
     def default_expire(days: int) -> datetime:
