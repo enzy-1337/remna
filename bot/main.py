@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 import socket
@@ -35,6 +36,7 @@ from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
 from shared.config import get_settings
+from shared.services.remnawave_sync import sync_loop
 
 
 async def main() -> None:
@@ -76,8 +78,18 @@ async def main() -> None:
     dp.include_router(menu_router)
     dp.include_router(start_router)
     dp.include_router(fallback_router)
-
-    await dp.start_polling(bot)
+    stop_event = asyncio.Event()
+    sync_task: asyncio.Task | None = None
+    if settings.remnawave_sync_enabled and not settings.remnawave_stub:
+        sync_task = asyncio.create_task(sync_loop(settings, stop_event))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        stop_event.set()
+        if sync_task is not None:
+            sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sync_task
 
 
 if __name__ == "__main__":

@@ -76,28 +76,41 @@ async def activate_trial(
         squads = [settings.remnawave_default_squad_uuid.strip()]
 
     created: dict | None = None
-    for attempt in range(4):
-        suffix = "" if attempt == 0 else f"_{attempt}"
-        username = (base_username[: 36 - len(suffix)] + suffix)[:36]
-        if len(username) < 3:
-            username = f"tg_{tg_user.id}"[-36:]
-        try:
-            created = await client.create_user(
-                username=username,
-                expire_at=expire_at,
-                traffic_limit_bytes=traffic_bytes,
-                description=note,
-                telegram_id=tg_user.id,
-                hwid_device_limit=2,
-                active_internal_squads=squads,
-            )
-            break
-        except RemnaWaveError:
-            if attempt == 3:
-                raise
-            continue
-        except Exception as e:
-            raise RemnaWaveError(str(e)) from e
+    existing = await client.find_user_by_telegram_id(tg_user.id)
+    if existing is not None and existing.get("uuid"):
+        created = existing
+        await client.update_user(
+            str(existing["uuid"]),
+            expire_at=expire_at,
+            hwid_device_limit=2,
+            traffic_limit_bytes=traffic_bytes,
+            status="ACTIVE",
+            description=note,
+            active_internal_squads=squads,
+        )
+    else:
+        for attempt in range(4):
+            suffix = "" if attempt == 0 else f"_{attempt}"
+            username = (base_username[: 36 - len(suffix)] + suffix)[:36]
+            if len(username) < 3:
+                username = f"tg_{tg_user.id}"[-36:]
+            try:
+                created = await client.create_user(
+                    username=username,
+                    expire_at=expire_at,
+                    traffic_limit_bytes=traffic_bytes,
+                    description=note,
+                    telegram_id=tg_user.id,
+                    hwid_device_limit=2,
+                    active_internal_squads=squads,
+                )
+                break
+            except RemnaWaveError:
+                if attempt == 3:
+                    raise
+                continue
+            except Exception as e:
+                raise RemnaWaveError(str(e)) from e
 
     assert created is not None
     uid_str = created.get("uuid")

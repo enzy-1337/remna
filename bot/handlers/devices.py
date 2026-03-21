@@ -13,6 +13,8 @@ from shared.models.device import Device
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_notify import notify_admin
@@ -84,6 +86,14 @@ async def _render_devices(
 
     devices = await list_user_devices(session, sub.id)
     used = len(devices)
+    connected_now: int | None = None
+    if user.remnawave_uuid:
+        rw = RemnaWaveClient(settings)
+        try:
+            info = await rw.get_user(str(user.remnawave_uuid))
+            connected_now = extract_connected_devices_from_rw_user(info)
+        except RemnaWaveError:
+            connected_now = None
     connected_lines: list[str] = []
     for d in devices:
         line = (
@@ -104,6 +114,8 @@ async def _render_devices(
         + bold(str(sub.devices_count))
         + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})"),
         plain("Занято слотов: ") + bold(str(used)) + plain("/") + bold(str(sub.devices_count)),
+        plain("Подключено сейчас: ")
+        + bold(str(connected_now if connected_now is not None else used)),
         "",
         plain("Подключенные устройства:"),
         connected_block,

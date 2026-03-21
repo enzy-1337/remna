@@ -121,6 +121,17 @@ class Settings(BaseSettings):
         description="Cookie для nginx reverse-proxy: либо значение (WbYWpixX), либо целиком NAME=VALUE (как в docs).",
     )
     remnawave_request_timeout: float = Field(default=10.0, validation_alias="REMNAWAVE_REQUEST_TIMEOUT")
+    remnawave_sync_enabled: bool = Field(default=True, validation_alias="REMNAWAVE_SYNC_ENABLED")
+    remnawave_sync_interval_sec: int = Field(
+        default=1800,
+        validation_alias="REMNAWAVE_SYNC_INTERVAL_SEC",
+        description="Интервал фоновой синхронизации Remnawave -> БД (сек)",
+    )
+    remnawave_sync_import_limit: int = Field(
+        default=300,
+        validation_alias="REMNAWAVE_SYNC_IMPORT_LIMIT",
+        description="Сколько пользователей максимум подтягивать за проход",
+    )
     remnawave_stub: bool = Field(
         default=False,
         validation_alias="REMNAWAVE_STUB",

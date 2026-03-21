@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
-from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
+from shared.integrations.rw_traffic import (
+    extract_connected_devices_from_rw_user,
+    extract_traffic_gb_from_rw_user,
+)
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.subscription_service import (
@@ -86,6 +89,7 @@ async def build_subscription_detail_caption(
     used_gb: float | None = None
     limit_gb: float | None = None
     sub_url: str | None = None
+    connected_devices: int | None = None
 
     if user.remnawave_uuid:
         rw = RemnaWaveClient(settings)
@@ -93,6 +97,7 @@ async def build_subscription_detail_caption(
             uinf = await rw.get_user(str(user.remnawave_uuid))
             used_gb, limit_gb = extract_traffic_gb_from_rw_user(uinf)
             sub_url = uinf.get("subscriptionUrl") or None
+            connected_devices = extract_connected_devices_from_rw_user(uinf)
         except RemnaWaveError:
             logger.warning("RW get_user failed for subscription screen user=%s", user.id)
 
@@ -117,7 +122,7 @@ async def build_subscription_detail_caption(
             + italic("(без лимита)")
         )
 
-    n_dev = await count_devices(session, sub.id)
+    n_dev = connected_devices if connected_devices is not None else await count_devices(session, sub.id)
     exp = sub.expires_at
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)

@@ -62,12 +62,24 @@ class RemnaWaveClient:
             return data["response"]
         return data
 
+    def _extract_users_list(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        root = self._unwrap(data)
+        if isinstance(root, list):
+            return [x for x in root if isinstance(x, dict)]
+        if isinstance(root, dict):
+            for key in ("items", "users", "data", "rows", "result"):
+                val = root.get(key)
+                if isinstance(val, list):
+                    return [x for x in val if isinstance(x, dict)]
+        return []
+
     async def _request(
         self,
         method: str,
         resource: str,
         *,
         json_body: dict | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self._s.remnawave_stub:
             raise RuntimeError("Используйте create_user_stub / get_user_stub при REMNAWAVE_STUB")
@@ -82,6 +94,7 @@ class RemnaWaveClient:
                         url,
                         headers=self._headers(),
                         json=json_body,
+                        params=params,
                     )
                 if r.status_code == 401:
                     logger.error("Remnawave 401 Unauthorized — проверьте REMNAWAVE_API_TOKEN")
@@ -154,6 +167,62 @@ class RemnaWaveClient:
             }
         data = await self._request("GET", f"users/{user_uuid}")
         return self._unwrap(data)
+
+    async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        if self._s.remnawave_stub:
+            return []
+        queries: list[dict[str, Any] | None] = [
+            {"limit": limit},
+            {"page": 1, "limit": limit},
+            {"take": limit},
+            None,
+        ]
+        for q in queries:
+            try:
+                data = await self._request("GET", "users", params=q)
+                items = self._extract_users_list(data)
+                if items:
+                    return items
+            except RemnaWaveError:
+                continue
+        return []
+
+    @staticmethod
+    def _coerce_int(val: Any) -> int | None:
+        try:
+            return int(str(val).strip())
+        except (TypeError, ValueError):
+            return None
+
+    async def find_user_by_telegram_id(self, telegram_id: int) -> dict[str, Any] | None:
+        if self._s.remnawave_stub:
+            return None
+        filters = [
+            {"telegramId": telegram_id},
+            {"telegram_id": telegram_id},
+            {"search": str(telegram_id)},
+            {"q": str(telegram_id)},
+        ]
+        for params in filters:
+            try:
+                data = await self._request("GET", "users", params=params)
+                for it in self._extract_users_list(data):
+                    tid = self._coerce_int(it.get("telegramId") or it.get("telegram_id") or it.get("tgId"))
+                    if tid == telegram_id:
+                        return it
+            except RemnaWaveError:
+                continue
+        users = await self.list_users(limit=500)
+        marker = f"tg_id:{telegram_id}"
+        for it in users:
+            tid = self._coerce_int(it.get("telegramId") or it.get("telegram_id") or it.get("tgId"))
+            if tid == telegram_id:
+                return it
+            desc = str(it.get("description") or "")
+            tag = str(it.get("tag") or "")
+            if marker in desc or marker in tag:
+                return it
+        return None
 
     async def update_user(
         self,

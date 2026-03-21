@@ -52,3 +52,36 @@ def extract_traffic_gb_from_rw_user(u: dict[str, Any]) -> tuple[float | None, fl
             pass
 
     return used, limit_gb
+
+
+def extract_connected_devices_from_rw_user(u: dict[str, Any]) -> int | None:
+    for key in (
+        "connectedDevices",
+        "connectedClients",
+        "activeConnections",
+        "usedDevices",
+        "activeDevices",
+        "clientsCount",
+    ):
+        val = u.get(key)
+        if val is None:
+            continue
+        try:
+            n = int(val)
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            continue
+    nested = u.get("statistics") or u.get("trafficStatistics") or {}
+    if isinstance(nested, dict):
+        for key in ("connectedDevices", "activeConnections", "usedDevices"):
+            val = nested.get(key)
+            if val is None:
+                continue
+            try:
+                n = int(val)
+                if n >= 0:
+                    return n
+            except (TypeError, ValueError):
+                continue
+    return None

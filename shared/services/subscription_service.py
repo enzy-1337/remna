@@ -179,21 +179,34 @@ async def purchase_plan_with_balance(
 
     try:
         if user.remnawave_uuid is None:
-            uname = build_remnawave_username_from_db_user(user)
-            created = await _create_rw_user_retries(
-                rw,
-                base_username=uname,
-                telegram_id=user.telegram_id,
+            existing = await rw.find_user_by_telegram_id(user.telegram_id)
+            if existing is not None and existing.get("uuid"):
+                user.remnawave_uuid = uuid_lib.UUID(str(existing["uuid"]))
+            else:
+                uname = build_remnawave_username_from_db_user(user)
+                created = await _create_rw_user_retries(
+                    rw,
+                    base_username=uname,
+                    telegram_id=user.telegram_id,
+                    expire_at=new_expires,
+                    traffic_limit_bytes=traffic_bytes,
+                    description=desc,
+                    hwid_device_limit=dev_limit,
+                    active_internal_squads=squads,
+                )
+                uid = created.get("uuid")
+                if not uid:
+                    raise RemnaWaveError("Панель не вернула uuid пользователя")
+                user.remnawave_uuid = uuid_lib.UUID(str(uid))
+            await rw.update_user(
+                str(user.remnawave_uuid),
                 expire_at=new_expires,
-                traffic_limit_bytes=traffic_bytes,
-                description=desc,
                 hwid_device_limit=dev_limit,
+                traffic_limit_bytes=traffic_bytes,
+                status="ACTIVE",
+                description=desc,
                 active_internal_squads=squads,
             )
-            uid = created.get("uuid")
-            if not uid:
-                raise RemnaWaveError("Панель не вернула uuid пользователя")
-            user.remnawave_uuid = uuid_lib.UUID(str(uid))
         else:
             await rw.update_user(
                 str(user.remnawave_uuid),
