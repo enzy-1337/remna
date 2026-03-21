@@ -172,8 +172,9 @@ class Settings(BaseSettings):
         description="Опционально: отдельный секрет; иначе сверяем X-Secret с PLATEGA_SECRET_KEY",
     )
     platega_api_base_url: str = Field(
-        default="https://api.platega.io",
+        default="https://app.platega.io",
         validation_alias="PLATEGA_API_BASE_URL",
+        description="Базовый URL из docs.platega.io; при сбоях можно указать https://api.platega.io",
     )
     platega_payment_method: int = Field(default=2, validation_alias="PLATEGA_PAYMENT_METHOD")
     platega_success_url: str = Field(default="", validation_alias="PLATEGA_SUCCESS_URL")

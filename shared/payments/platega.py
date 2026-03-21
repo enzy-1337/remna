@@ -20,7 +20,7 @@ class PlategaProvider(BasePaymentProvider):
 
     def __init__(self, settings: Settings) -> None:
         self._s = settings
-        self._base = (settings.platega_api_base_url or "https://api.platega.io").rstrip("/")
+        self._base = (settings.platega_api_base_url or "https://app.platega.io").rstrip("/")
         self._merchant_id = (settings.platega_merchant_id or "").strip()
         self._secret = (settings.platega_secret_key or "").strip()
         self._stub = settings.platega_stub
