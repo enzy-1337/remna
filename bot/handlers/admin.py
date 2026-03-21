@@ -456,6 +456,7 @@ async def cb_admin_sub_enable(
 @router.callback_query(F.data.startswith("admin:ad:"))
 async def cb_admin_add_days_start(
     cq: CallbackQuery,
+    session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
 ) -> None:
@@ -480,7 +481,7 @@ async def cb_admin_add_days_start(
     if cq.message and cq.bot:
         await cq.bot.send_message(
             cq.message.chat.id,
-            "Введите целое число дней для продления подписки (1–3650).",
+            esc("Введите целое число дней для продления подписки (1-3650)."),
         )
 
 
@@ -567,7 +568,7 @@ async def cb_admin_add_balance_start(
     await state.update_data(admin_add_balance_user_id=uid)
     await cq.answer()
     if cq.message:
-        await cq.message.answer("Введите сумму для добавления баланса (например 10 или 10.5).")
+        await cq.message.answer(esc("Введите сумму для добавления баланса (например 10 или 10.5)."))
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_add_balance), F.text)

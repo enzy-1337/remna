@@ -195,8 +195,15 @@ class RemnaWaveClient:
 
         if not body:
             return await self.get_user(user_uuid)
-        data = await self._request("PATCH", f"users/{user_uuid}", json_body=body)
-        return self._unwrap(data)
+        try:
+            data = await self._request("PATCH", f"users/{user_uuid}", json_body=body)
+            return self._unwrap(data)
+        except RemnaWaveError as e:
+            # Некоторые инсталлы панели не поддерживают PATCH и принимают только PUT.
+            if "HTTP 404" not in str(e):
+                raise
+            data = await self._request("PUT", f"users/{user_uuid}", json_body=body)
+            return self._unwrap(data)
 
     @staticmethod
     def default_expire(days: int) -> datetime:

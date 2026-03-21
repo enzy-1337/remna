@@ -95,7 +95,7 @@ async def _render_devices(
         if d.remnawave_client_id:
             line += plain(" · rw ") + code(d.remnawave_client_id)
         connected_lines.append(line)
-    connected_block = "\n".join(connected_lines) if connected_lines else plain("• (нет) ")
+    connected_block = "\n".join(connected_lines) if connected_lines else esc("• нет")
 
     lines = join_lines(
         "🖥 " + bold("Устройства"),
