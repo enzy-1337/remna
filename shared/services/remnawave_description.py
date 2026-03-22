@@ -1,4 +1,4 @@
-"""Текст поля «description» пользователя в панели Remnawave (читаемо + маркер tg_id)."""
+"""Текст поля «description» пользователя в панели Remnawave."""
 
 from __future__ import annotations
 
@@ -6,15 +6,9 @@ import re
 
 from shared.models.user import User
 
-# Для поиска в find_user_by_telegram_id — подстрока должна сохраняться
-_TG_MARKER = "tg_id:{}"
-
 
 def build_remnawave_panel_description(user: User, *, max_len: int = 900) -> str:
-    """
-    Многострочное описание: кто это в боте / Telegram.
-    В конце всегда строка tg_id:<число> (нужна для поиска и сопоставления).
-    """
+    """Многострочное описание: кто это в боте / Telegram (ID уже в строке «Telegram ID: …»)."""
     lines: list[str] = [
         "Бот",
         f"ID в боте: #{user.id}",
@@ -32,17 +26,14 @@ def build_remnawave_panel_description(user: User, *, max_len: int = 900) -> str:
     if ph:
         lines.append(f"Телефон: {ph}")
 
-    marker = _TG_MARKER.format(user.telegram_id)
     body = "\n".join(lines)
-    full = f"{body}\n{marker}"
-    if len(full) <= max_len:
-        return full
-    reserve = len(marker) + 1
-    cap = max(24, max_len - reserve)
+    if len(body) <= max_len:
+        return body
+    cap = max(24, max_len)
     trimmed = body[:cap].rstrip()
     if len(trimmed) < len(body):
         trimmed = trimmed[:-1].rstrip() + "…"
-    return f"{trimmed}\n{marker}"
+    return trimmed
 
 
 def normalize_remnawave_description(text: str) -> str:

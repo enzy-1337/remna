@@ -1,9 +1,17 @@
-"""HTTP-клиент Remnawave Panel API (OpenAPI /api/users)."""
+"""HTTP-клиент Remnawave Panel API.
+
+Спецификация: https://docs.rw/api (Scalar) · OpenAPI JSON: https://cdn.docs.rw/docs/openapi.json
+
+Актуальные пути (Users): POST/PATCH ``/api/users``, GET ``/api/users/{uuid}``, GET ``/api/users`` с ``start``/``size``,
+GET ``/api/users/by-telegram-id/{telegramId}``, POST ``/api/users/bulk/update``. Обновление по UUID — через PATCH на
+коллекцию ``users`` с телом ``{ "uuid": "...", ... }``, а не PATCH ``/users/{uuid}``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -62,7 +70,15 @@ class RemnaWaveClient:
             return data["response"]
         return data
 
-    def _extract_users_list(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _extract_users_list(self, data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        if not isinstance(data, dict):
+            return []
+        # Напр. GET .../by-telegram-id/{id} → { "response": [ {user}, ... ] }
+        top = data.get("response")
+        if isinstance(top, list):
+            return [x for x in top if isinstance(x, dict)]
         root = self._unwrap(data)
         if isinstance(root, list):
             return [x for x in root if isinstance(x, dict)]
@@ -171,7 +187,9 @@ class RemnaWaveClient:
     async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if self._s.remnawave_stub:
             return []
+        # OpenAPI: GET /api/users — query start, size (UsersController_getAllUsers)
         queries: list[dict[str, Any] | None] = [
+            {"start": 0, "size": limit},
             {"limit": limit},
             {"page": 1, "limit": limit},
             {"take": limit},
@@ -207,6 +225,7 @@ class RemnaWaveClient:
                 break
             batch: list[dict[str, Any]] = []
             param_sets = [
+                {"start": (page - 1) * page_size, "size": take},
                 {"page": page, "limit": take},
                 {"skip": (page - 1) * page_size, "take": take},
                 {"offset": (page - 1) * page_size, "limit": take},
@@ -247,6 +266,18 @@ class RemnaWaveClient:
     async def find_user_by_telegram_id(self, telegram_id: int) -> dict[str, Any] | None:
         if self._s.remnawave_stub:
             return None
+        # OpenAPI: GET /api/users/by-telegram-id/{telegramId}
+        try:
+            data = await self._request("GET", f"users/by-telegram-id/{telegram_id}")
+            items = self._extract_users_list(data)
+            for it in items:
+                tid = self._coerce_int(it.get("telegramId") or it.get("telegram_id") or it.get("tgId"))
+                if tid == telegram_id:
+                    return it
+            if items:
+                return items[0]
+        except RemnaWaveError:
+            pass
         filters = [
             {"telegramId": telegram_id},
             {"telegram_id": telegram_id},
@@ -263,14 +294,17 @@ class RemnaWaveClient:
             except RemnaWaveError:
                 continue
         users = await self.list_users(limit=500)
-        marker = f"tg_id:{telegram_id}"
+        legacy_marker = f"tg_id:{telegram_id}"
+        id_in_desc = re.compile(rf"Telegram ID:\s*{telegram_id}\b")
         for it in users:
             tid = self._coerce_int(it.get("telegramId") or it.get("telegram_id") or it.get("tgId"))
             if tid == telegram_id:
                 return it
             desc = str(it.get("description") or "")
             tag = str(it.get("tag") or "")
-            if marker in desc or marker in tag:
+            if legacy_marker in desc or legacy_marker in tag:
+                return it
+            if id_in_desc.search(desc) or id_in_desc.search(tag):
                 return it
         return None
 
@@ -318,17 +352,15 @@ class RemnaWaveClient:
             msg = str(err)
             return ("HTTP 404" in msg) or ("HTTP 405" in msg)
 
-        # Встречаются разные варианты API:
-        # - PATCH/PUT /users/{uuid}
-        # - PATCH/PUT /users  (single update body)
-        # - */users/bulk-update с {uuids, fields}
+        # OpenAPI: PATCH /api/users + UpdateUserRequestDto (uuid в теле); bulk — POST /api/users/bulk/update
         single_body: dict[str, Any] = {"uuid": user_uuid, **body}
         bulk_body: dict[str, Any] = {"uuids": [user_uuid], "fields": body}
         attempts: list[tuple[str, str, dict[str, Any]]] = [
+            ("PATCH", "users", single_body),
+            ("POST", "users/bulk/update", bulk_body),
+            ("PUT", "users", single_body),
             ("PATCH", f"users/{user_uuid}", body),
             ("PUT", f"users/{user_uuid}", body),
-            ("PATCH", "users", single_body),
-            ("PUT", "users", single_body),
             ("PATCH", "users/bulk-update", bulk_body),
             ("PUT", "users/bulk-update", bulk_body),
             ("POST", "users/bulk-update", bulk_body),
