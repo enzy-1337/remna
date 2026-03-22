@@ -244,12 +244,12 @@ async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
     help_line += plain(".")
 
     doc_privacy = (
-        plain(f"🔒 Политика конфиденциальности ({privacy})")
+        plain("🔒 ") + link("Политика конфиденциальности", privacy)
         if privacy
         else plain("🔒 Политика конфиденциальности — задайте INFO_PRIVACY_POLICY_URL в .env.")
     )
     doc_terms = (
-        plain(f"📋 Пользовательское соглашение ({terms})")
+        plain("📋 ") + link("Пользовательское соглашение", terms)
         if terms
         else plain("📋 Пользовательское соглашение — задайте INFO_TERMS_OF_SERVICE_URL в .env.")
     )

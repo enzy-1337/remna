@@ -16,7 +16,7 @@ from shared.integrations.rw_hwid_devices import (
     hwid_device_title,
     normalize_hwid_devices_list,
 )
-from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user, rw_hwid_device_max
+from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user
 from shared.md2 import bold, code, esc, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
@@ -133,23 +133,23 @@ async def _render_devices(
         if n_alt is not None:
             used = n_alt
 
-    panel_lim = rw_hwid_device_max(uinf) if uinf is not None else None
-    slot_limit_shown = panel_lim if panel_lim is not None else sub.devices_count
-    max_slots_bot = bold("∞") if is_bot_admin else bold(str(MAX_DEVICES))
+    max_cap = bold("∞") if is_bot_admin else bold(str(MAX_DEVICES))
     slots_line = (
         plain("📟 Слоты: ")
-        + bold(str(slot_limit_shown))
+        + bold(str(sub.devices_count))
         + plain(" / ")
-        + max_slots_bot
-        + plain(" (лимит в панели / макс. в боте)")
+        + max_cap
+        + plain(" (лимит на данный момент / максимум — ")
+        + bold(str(MAX_DEVICES))
+        + plain(")")
     )
-    hwid_line = plain("📱 В списке HWID: ") + bold(str(used))
+    bound_line = plain("📱 Привязанные устройства: ") + bold(str(used))
 
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
         slots_line,
-        hwid_line,
+        bound_line,
         "",
         plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
     )
