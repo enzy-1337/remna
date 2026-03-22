@@ -17,7 +17,10 @@ from shared.models.plan import Plan
 from shared.models.referral_reward import ReferralReward
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.services.subscription_service import get_active_subscription
+from shared.services.subscription_service import (
+    get_active_subscription,
+    update_rw_user_respecting_hwid_limit,
+)
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -155,8 +158,10 @@ async def grant_referrer_reward_first_paid_plan(
             if referrer.remnawave_uuid is not None:
                 rw = RemnaWaveClient(settings)
                 try:
-                    await rw.update_user(
+                    await update_rw_user_respecting_hwid_limit(
+                        rw,
                         str(referrer.remnawave_uuid),
+                        devices_limit_for_panel=sub.devices_count,
                         expire_at=new_exp,
                         status="ACTIVE",
                     )

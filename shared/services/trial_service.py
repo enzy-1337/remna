@@ -16,6 +16,7 @@ from shared.models.subscription import Subscription
 from shared.models.user import User
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username
+from shared.services.subscription_service import update_rw_user_respecting_hwid_limit
 
 
 async def get_trial_plan(session: AsyncSession) -> Plan | None:
@@ -83,10 +84,12 @@ async def activate_trial(
     existing = await client.find_user_by_telegram_id(tg_user.id)
     if existing is not None and existing.get("uuid"):
         created = existing
-        await client.update_user(
-            str(existing["uuid"]),
+        uid_ex = str(existing["uuid"])
+        await update_rw_user_respecting_hwid_limit(
+            client,
+            uid_ex,
+            devices_limit_for_panel=2,
             expire_at=expire_at,
-            hwid_device_limit=2,
             traffic_limit_bytes=traffic_bytes,
             status="ACTIVE",
             description=note,

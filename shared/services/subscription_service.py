@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_lib
+from typing import Any
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -14,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from shared.config import Settings
 from shared.md2 import bold, esc, join_lines, link, plain
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.rw_traffic import should_apply_hwid_device_limit_to_panel
 from shared.models.device import Device
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
@@ -27,6 +29,29 @@ logger = logging.getLogger(__name__)
 
 MIN_DEVICES = 2
 MAX_DEVICES = 10
+
+
+async def update_rw_user_respecting_hwid_limit(
+    rw: RemnaWaveClient,
+    user_uuid: str,
+    *,
+    devices_limit_for_panel: int | None = None,
+    **kwargs: Any,
+) -> None:
+    """
+    PATCH пользователя в панели. ``hwidDeviceLimit`` добавляется только если в панели
+    для этого пользователя не отключён лимит HWID (см. ``should_apply_hwid_device_limit_to_panel``).
+    """
+    uinf: dict[str, Any] | None = None
+    try:
+        uinf = await rw.get_user(user_uuid)
+    except RemnaWaveError:
+        pass
+    if devices_limit_for_panel is not None and should_apply_hwid_device_limit_to_panel(uinf):
+        kwargs["hwid_device_limit"] = devices_limit_for_panel
+    if not kwargs:
+        return
+    await rw.update_user(user_uuid, **kwargs)
 
 
 def plan_tariff_button_label(plan: Plan) -> str:
@@ -221,25 +246,16 @@ async def purchase_plan_with_balance(
                 if not uid:
                     raise RemnaWaveError("Панель не вернула uuid пользователя")
                 user.remnawave_uuid = uuid_lib.UUID(str(uid))
-            await rw.update_user(
-                str(user.remnawave_uuid),
-                expire_at=new_expires,
-                hwid_device_limit=dev_limit,
-                traffic_limit_bytes=traffic_bytes,
-                status="ACTIVE",
-                description=desc,
-                active_internal_squads=squads,
-            )
-        else:
-            await rw.update_user(
-                str(user.remnawave_uuid),
-                expire_at=new_expires,
-                hwid_device_limit=dev_limit,
-                traffic_limit_bytes=traffic_bytes,
-                status="ACTIVE",
-                description=desc,
-                active_internal_squads=squads,
-            )
+        await update_rw_user_respecting_hwid_limit(
+            rw,
+            str(user.remnawave_uuid),
+            devices_limit_for_panel=dev_limit,
+            expire_at=new_expires,
+            traffic_limit_bytes=traffic_bytes,
+            status="ACTIVE",
+            description=desc,
+            active_internal_squads=squads,
+        )
     except RemnaWaveError as e:
         logger.exception("Remnawave purchase/extend failed")
         return False, join_lines(plain("Не удалось обновить доступ VPN:"), esc(str(e))), "error"
@@ -376,7 +392,11 @@ async def add_paid_device_slot(
     rw = RemnaWaveClient(settings)
     new_limit = sub.devices_count + 1
     try:
-        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+        await update_rw_user_respecting_hwid_limit(
+            rw,
+            str(user.remnawave_uuid),
+            devices_limit_for_panel=new_limit,
+        )
     except RemnaWaveError as e:
         return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
@@ -434,16 +454,22 @@ async def remove_hwid_device_from_panel(
         return False, plain("Некорректный HWID.")
 
     rw = RemnaWaveClient(settings)
+    uinf_pol: dict[str, Any] | None = None
+    try:
+        uinf_pol = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError:
+        pass
     try:
         await rw.delete_user_hwid_device(str(user.remnawave_uuid), hwid)
     except RemnaWaveError as e:
         return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
     new_limit = max(0, sub.devices_count - 1)
-    try:
-        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
-    except RemnaWaveError as e:
-        return False, join_lines(plain("Устройство снято, но лимит слотов не обновлён:"), esc(str(e)))
+    if should_apply_hwid_device_limit_to_panel(uinf_pol):
+        try:
+            await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+        except RemnaWaveError as e:
+            return False, join_lines(plain("Устройство снято, но лимит слотов не обновлён:"), esc(str(e)))
 
     sub.devices_count = new_limit
     r = await session.execute(
@@ -483,11 +509,17 @@ async def remove_device_slot(
         return False, plain("Ошибка профиля VPN.")
 
     rw = RemnaWaveClient(settings)
-    new_limit = max(0, sub.devices_count - 1)
+    uinf_pol: dict[str, Any] | None = None
     try:
-        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
-    except RemnaWaveError as e:
-        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
+        uinf_pol = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError:
+        pass
+    new_limit = max(0, sub.devices_count - 1)
+    if should_apply_hwid_device_limit_to_panel(uinf_pol):
+        try:
+            await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+        except RemnaWaveError as e:
+            return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
     sub.devices_count = new_limit
     await session.delete(dev)

@@ -42,7 +42,10 @@ from shared.services.broadcast_service import (
 )
 from shared.database import get_session_factory
 from shared.services.referral_service import count_invited_users
-from shared.services.subscription_service import get_base_subscription_plan
+from shared.services.subscription_service import (
+    get_base_subscription_plan,
+    update_rw_user_respecting_hwid_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -612,8 +615,10 @@ async def cb_admin_sub_enable(
     if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
         rw = RemnaWaveClient(settings)
         try:
-            await rw.update_user(
+            await update_rw_user_respecting_hwid_limit(
+                rw,
                 str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
                 expire_at=sub.expires_at,
                 status="ACTIVE",
             )
@@ -734,7 +739,13 @@ async def msg_admin_add_days(
     if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
         rw = RemnaWaveClient(settings)
         try:
-            await rw.update_user(str(u.remnawave_uuid), expire_at=sub.expires_at, status="ACTIVE")
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
         except RemnaWaveError as e:
             logger.warning("admin add days RW failed: %s", e)
 

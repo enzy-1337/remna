@@ -105,6 +105,19 @@ def is_rw_hwid_devices_unlimited(u: dict[str, Any]) -> bool:
         return True
 
 
+def should_apply_hwid_device_limit_to_panel(uinf: dict[str, Any] | None) -> bool:
+    """
+    False, если в профиле пользователя панели отключён лимит устройств по HWID
+    (``hwidDeviceLimit`` = null или ≤ 0): панель не ограничивает устройства по HWID.
+    Тогда бот не передаёт ``hwidDeviceLimit`` в API, чтобы не включить ограничение снова.
+
+    При ``uinf is None`` (не удалось получить профиль) — True: синхронизируем как обычно.
+    """
+    if uinf is None:
+        return True
+    return not is_rw_hwid_devices_unlimited(uinf)
+
+
 def rw_hwid_device_max(u: dict[str, Any]) -> int | None:
     """Максимум устройств по панели; None = без лимита (∞)."""
     if not u or is_rw_hwid_devices_unlimited(u):
