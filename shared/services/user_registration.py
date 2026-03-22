@@ -5,18 +5,20 @@ from __future__ import annotations
 import secrets
 import string
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from aiogram.types import User as TgUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import get_settings
-from shared.md2 import bold, code, plain
+from shared.md2 import bold, code, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.referral_parse import parse_referral_code_from_start_args
+from shared.services.telegram_notify import send_telegram_message
 
 
 async def _generate_unique_referral_code(session: AsyncSession) -> str:
@@ -38,14 +40,14 @@ async def register_user(
     session: AsyncSession,
     tg_user: TgUser,
     start_args: str | None,
-) -> tuple[User, bool]:
+) -> tuple[User, bool, Decimal | None]:
     """
-    Возвращает (user, created).
-    Если пользователь уже есть — только возврат, без изменения referred_by.
+    Возвращает (user, created, invited_signup_bonus_rub).
+    invited_signup_bonus_rub — начисление приглашённому за вход по реф-ссылке (или None).
     """
     existing = await get_user_by_telegram_id(session, tg_user.id)
     if existing:
-        return existing, False
+        return existing, False, None
 
     ref_code = parse_referral_code_from_start_args(start_args)
     referrer_id: int | None = None
@@ -73,10 +75,26 @@ async def register_user(
 
     settings = get_settings()
     bonus = settings.referral_signup_bonus_rub
+    invited_bonus: Decimal | None = None
     if referrer_id is not None and bonus > 0:
         referrer = await session.get(User, referrer_id)
         if referrer is not None and not referrer.is_blocked and referrer.id != user.id:
+            user.balance += bonus
             referrer.balance += bonus
+            invited_bonus = bonus
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="referral_signup_invited",
+                    amount=bonus,
+                    currency="RUB",
+                    payment_provider="referral",
+                    payment_id=f"signup:invited:{user.id}",
+                    status="completed",
+                    description=f"Бонус за регистрацию по приглашению (реферер #{referrer.id})",
+                    meta={"referrer_id": referrer.id},
+                )
+            )
             session.add(
                 Transaction(
                     user_id=referrer.id,
@@ -84,22 +102,39 @@ async def register_user(
                     amount=bonus,
                     currency="RUB",
                     payment_provider="referral",
-                    payment_id=f"signup:{user.id}",
+                    payment_id=f"signup:referrer:{user.id}",
                     status="completed",
                     description=f"Реферал: регистрация друга (user #{user.id})",
                     meta={"referred_id": user.id},
                 )
             )
             await session.flush()
+            await send_telegram_message(
+                referrer.telegram_id,
+                join_lines(
+                    "🎁 " + bold("Реферальный бонус"),
+                    plain("По вашей ссылке зарегистрировался друг: +")
+                    + bold(str(bonus))
+                    + plain(" ₽ на баланс."),
+                ),
+                settings=settings,
+            )
             await notify_admin(
                 settings,
-                title="🎁 " + bold("Реферальный бонус за регистрацию друга"),
+                title="🎁 " + bold("Реферальные бонусы за регистрацию"),
                 lines=[
                     plain("Новый пользователь: ")
                     + bold(f"#{user.id}")
                     + plain(" tg ")
-                    + code(str(user.telegram_id)),
-                    plain("Реферер: ") + bold(f"#{referrer.id}") + plain(": +") + bold(str(bonus)) + plain(" ₽"),
+                    + code(str(user.telegram_id))
+                    + plain(": +")
+                    + bold(str(bonus))
+                    + plain(" ₽"),
+                    plain("Пригласивший: ")
+                    + bold(f"#{referrer.id}")
+                    + plain(": +")
+                    + bold(str(bonus))
+                    + plain(" ₽"),
                 ],
                 event_type="referral_signup_bonus",
                 topic=AdminLogTopic.BONUSES,
@@ -107,7 +142,7 @@ async def register_user(
                 session=session,
             )
 
-    return user, True
+    return user, True, invited_bonus
 
 
 async def touch_activity(session: AsyncSession, user: User) -> None:

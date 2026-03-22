@@ -68,6 +68,53 @@ def extract_traffic_gb_from_rw_user(u: dict[str, Any]) -> tuple[float | None, fl
     return used, limit_gb
 
 
+def is_rw_traffic_unlimited(u: dict[str, Any]) -> bool:
+    """``trafficLimitBytes == 0`` в OpenAPI Remnawave — без лимита трафика."""
+    raw = u.get("trafficLimitBytes")
+    if raw is None:
+        return False
+    try:
+        return int(float(raw)) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def traffic_limit_gb_for_display(u: dict[str, Any]) -> float | None:
+    """
+    Лимит трафика в ГБ для отображения «исп/макс».
+    Возвращает None, если без лимита (0 байт) или поле отсутствует/некорректно.
+    """
+    if not u or is_rw_traffic_unlimited(u):
+        return None
+    return _bytes_to_gb(u.get("trafficLimitBytes"))
+
+
+def is_rw_hwid_devices_unlimited(u: dict[str, Any]) -> bool:
+    """
+    ``hwidDeviceLimit`` nullable: null — без лимита устройств (HWID не ограничивает).
+    0 также считаем «без лимита» на случай нестандартных ответов.
+    """
+    if not u:
+        return False
+    lim = u.get("hwidDeviceLimit")
+    if lim is None:
+        return True
+    try:
+        return int(lim) <= 0
+    except (TypeError, ValueError):
+        return True
+
+
+def rw_hwid_device_max(u: dict[str, Any]) -> int | None:
+    """Максимум устройств по панели; None = без лимита (∞)."""
+    if not u or is_rw_hwid_devices_unlimited(u):
+        return None
+    try:
+        return int(u["hwidDeviceLimit"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def extract_connected_devices_from_rw_user(u: dict[str, Any]) -> int | None:
     for key in (
         "connectedDevices",

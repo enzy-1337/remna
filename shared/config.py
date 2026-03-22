@@ -178,22 +178,46 @@ class Settings(BaseSettings):
 
     # Подписка / устройства (шаг 8)
     extra_device_price_rub: Decimal = Field(default=Decimal("65"), validation_alias="EXTRA_DEVICE_PRICE_RUB")
+    subscription_autorenew_enabled: bool = Field(
+        default=True,
+        validation_alias="SUBSCRIPTION_AUTORENEW_ENABLED",
+        description="Фоновое списание с баланса и +1 мес. за ~1 ч до конца подписки",
+    )
+    subscription_autorenew_interval_sec: int = Field(
+        default=300,
+        ge=60,
+        validation_alias="SUBSCRIPTION_AUTORENEW_INTERVAL_SEC",
+        description="Как часто проверять подписки на автопродление (сек)",
+    )
+    subscription_autorenew_window_sec: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        validation_alias="SUBSCRIPTION_AUTORENEW_WINDOW_SEC",
+        description="За сколько секунд до expires_at пытаться продлить (по умолчанию 1 ч)",
+    )
 
-    # Рефералы (шаг 9): награда пригласившему за первую платную покупку приглашённого
-    referral_inviter_bonus_rub: Decimal = Field(
-        default=Decimal("0"),
-        validation_alias="REFERRAL_INVITER_BONUS_RUB",
-        description="0 = выключено",
-    )
-    referral_inviter_bonus_days: int = Field(
-        default=0,
-        validation_alias="REFERRAL_INVITER_BONUS_DAYS",
-        description="Дней к активной подписке пригласившего (0 = не начислять)",
-    )
+    # Рефералы: бонус при /start по ссылке + награда пригласившему за первую покупку друга (пропорционально сроку)
     referral_signup_bonus_rub: Decimal = Field(
-        default=Decimal("0"),
+        default=Decimal("15"),
         validation_alias="REFERRAL_SIGNUP_BONUS_RUB",
-        description="Однократно пригласившему при регистрации друга по ссылке (0 = выкл.)",
+        description="Регистрация по реф-ссылке: столько ₽ на основной баланс и пригласившему, и приглашённому (0 = выкл.)",
+    )
+    referral_inviter_reward_rub_per_30_days: Decimal = Field(
+        default=Decimal("15"),
+        validation_alias=AliasChoices(
+            "REFERRAL_INVITER_REWARD_RUB_PER_30_DAYS",
+            "REFERRAL_INVITER_BONUS_RUB",
+        ),
+        description="Первая платная покупка приглашённого: ₽ пригласившему на каждые 30 дн. купленного тарифа (0 = выкл.)",
+    )
+    referral_inviter_reward_days_per_30_days: int = Field(
+        default=5,
+        validation_alias=AliasChoices(
+            "REFERRAL_INVITER_REWARD_DAYS_PER_30_DAYS",
+            "REFERRAL_INVITER_BONUS_DAYS",
+        ),
+        description="Там же: дней к активной подписке пригласившего на каждые 30 дн. периода (0 = выкл.)",
     )
 
     maintenance_mode: bool = Field(default=False, validation_alias="MAINTENANCE_MODE")

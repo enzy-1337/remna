@@ -14,6 +14,7 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.md2 import bold, plain
 
+# bonus_rub — устаревший тип: начисление на основной баланс (как balance_rub)
 SUPPORTED_PROMO_TYPES = {"balance_rub", "bonus_rub"}
 
 
@@ -58,14 +59,12 @@ async def apply_promo_code_for_user(
     if value <= 0:
         return False, plain("Некорректное значение промокода."), None
 
+    user.balance += value
     if promo.type == "balance_rub":
-        user.balance += value
         txn_type = "promo_balance"
-        label = "на основной баланс"
     else:
-        user.bonus_balance += value
         txn_type = "promo_bonus"
-        label = "на бонусный баланс"
+    label = "на баланс"
 
     promo.used_count += 1
     session.add(PromoUsage(promo_id=promo.id, user_id=user.id))
@@ -90,6 +89,8 @@ async def apply_promo_code_for_user(
         True,
         plain("✅ Промокод применён: +")
         + bold(str(value))
-        + plain(f" ₽ {label}."),
+        + plain(" ₽ ")
+        + plain(label)
+        + plain("."),
         {"code": promo.code, "type": promo.type, "value": str(value)},
     )

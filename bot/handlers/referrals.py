@@ -30,25 +30,35 @@ def _referrals_main_body(
     earned_rub,
     earned_days: int,
 ) -> str:
-    bonus_rub = settings.referral_inviter_bonus_rub
-    bonus_days = settings.referral_inviter_bonus_days
     signup_rub = settings.referral_signup_bonus_rub
+    rub_m = settings.referral_inviter_reward_rub_per_30_days
+    days_m = settings.referral_inviter_reward_days_per_30_days
     cond_lines: list[str] = []
     if signup_rub > 0:
         cond_lines.append(
             plain("• ")
             + bold(str(signup_rub))
-            + plain(" ₽ пригласившему, когда друг зарегистрировался по ссылке")
+            + plain(" ₽ на баланс ")
+            + bold("вам и другу")
+            + plain(", когда он нажал /start по вашей ссылке")
         )
-    if bonus_rub > 0:
-        cond_lines.append(
-            plain("• ") + bold(str(bonus_rub)) + plain(" ₽ за первую платную покупку друга")
-        )
-    if bonus_days > 0:
+    if rub_m > 0:
         cond_lines.append(
             plain("• ")
-            + bold(str(bonus_days))
-            + plain(" дн. к вашей подписке (если активна)")
+            + bold(str(rub_m))
+            + plain(" ₽ на баланс за каждые ")
+            + bold("30 дн.")
+            + plain(" купленного тарифа при ")
+            + bold("первой")
+            + plain(" платной покупке друга (напр. 2 мес. → ×2)")
+        )
+    if days_m > 0:
+        cond_lines.append(
+            plain("• ")
+            + bold(str(days_m))
+            + plain(" дн. к вашей подписке за каждые ")
+            + bold("30 дн.")
+            + plain(" его первого тарифа (если у вас активна подписка)")
         )
     if not cond_lines:
         cond_lines.append(

@@ -98,8 +98,8 @@ async def _generate_unique_referral_code(session: AsyncSession) -> str:
 
 
 async def _pick_plan_for_import(session: AsyncSession) -> Plan | None:
-    trial = await session.execute(select(Plan).where(Plan.name == "Триал", Plan.is_active.is_(True)).limit(1))
-    p = trial.scalar_one_or_none()
+    base = await session.execute(select(Plan).where(Plan.name == "Базовый", Plan.is_active.is_(True)).limit(1))
+    p = base.scalar_one_or_none()
     if p is not None:
         return p
     paid = await session.execute(

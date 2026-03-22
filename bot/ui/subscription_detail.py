@@ -1,9 +1,9 @@
-"""Текст экрана «Подписка» (детально), MarkdownV2."""
+"""Текст экрана «Подписка» (детально), MarkdownV2 — лимиты из Remnawave."""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,9 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
+    is_rw_traffic_unlimited,
+    rw_hwid_device_max,
+    traffic_limit_gb_for_display,
 )
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
@@ -20,6 +23,7 @@ from shared.services.subscription_service import (
     MAX_DEVICES,
     count_devices,
     get_active_subscription,
+    get_base_subscription_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +73,7 @@ async def build_subscription_detail_caption(
 ) -> tuple[str, str | None]:
     """
     Возвращает (подпись MarkdownV2, url подписки или None).
+    Трафик и устройства: из панели Remnawave при наличии uuid; ∞ если лимит отключён в панели.
     """
     sub = await get_active_subscription(session, user.id)
     now = datetime.now(timezone.utc)
@@ -86,52 +91,86 @@ async def build_subscription_detail_caption(
     plan = sub.plan
     status_human = "🟢 Активна" if sub.status in ("active", "trial") else f"⚪ {esc(sub.status)}"
 
-    used_gb: float | None = None
-    limit_gb: float | None = None
+    uinf: dict | None = None
     sub_url: str | None = None
-    connected_devices: int | None = None
+    hwid_list_ok = False
+    hwid_devices_count = 0
 
     if user.remnawave_uuid:
         rw = RemnaWaveClient(settings)
         try:
             uinf = await rw.get_user(str(user.remnawave_uuid))
-            used_gb, limit_gb = extract_traffic_gb_from_rw_user(uinf)
             sub_url = uinf.get("subscriptionUrl") or None
-            connected_devices = extract_connected_devices_from_rw_user(uinf)
         except RemnaWaveError:
             logger.warning("RW get_user failed for subscription screen user=%s", user.id)
+            uinf = None
+        try:
+            devs = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
+            hwid_list_ok = True
+            hwid_devices_count = len(devs)
+        except RemnaWaveError:
+            logger.debug("RW get_user_hwid_devices failed user=%s", user.id)
 
-    # Лимит: из тарифа в БД (если задан), иначе из панели (trafficLimitBytes)
-    if plan and plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0:
-        limit_gb = float(plan.traffic_limit_gb)
-
-    if used_gb is not None:
-        if limit_gb is not None:
-            traffic_line = (
-                plain("📊 Трафик: ")
-                + bold(f"{used_gb:.2f}")
-                + plain("/")
-                + bold(f"{limit_gb:.1f}")
-                + plain(" ГБ")
-            )
+    # --- Трафик: исп / макс (ГБ), макс из trafficLimitBytes; 0 = ∞
+    if uinf:
+        used_gb, _lim_unused = extract_traffic_gb_from_rw_user(uinf)
+        used_part = bold(f"{used_gb:.2f}") if used_gb is not None else plain("—")
+        if is_rw_traffic_unlimited(uinf):
+            max_part = bold("∞")
         else:
-            traffic_line = (
-                plain("📊 Трафик: ")
-                + bold(f"{used_gb:.2f}")
-                + plain(" ГБ ")
-                + italic("(без лимита)")
-            )
+            lim_gb = traffic_limit_gb_for_display(uinf)
+            max_part = bold(f"{lim_gb:.1f}") if lim_gb is not None else plain("—")
+        traffic_line = plain("📊 Трафик: ") + used_part + plain(" / ") + max_part + plain(" ГБ")
     else:
         if user.remnawave_uuid is None:
             traffic_line = plain("📊 Трафик: ") + italic("(нет учётной записи VPN)")
         else:
+            limit_hint = (
+                bold(f"{float(plan.traffic_limit_gb):.0f}") + plain(" ГБ")
+                if plan and plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0
+                else italic("без лимита в тарифе")
+            )
             traffic_line = (
                 plain("📊 Трафик: ")
-                + italic("(не удалось получить из панели)")
-                + plain(" — откройте позже или проверьте API")
+                + italic("(данные панели недоступны)")
+                + plain(" · лимит по тарифу в боте: ")
+                + limit_hint
             )
 
-    n_dev = connected_devices if connected_devices is not None else await count_devices(session, sub.id)
+    # --- Устройства: подключено / макс; hwidDeviceLimit null или ≤0 = ∞; счёт из HWID API
+    if uinf:
+        if hwid_list_ok:
+            n_dev = hwid_devices_count
+        else:
+            n_dev = extract_connected_devices_from_rw_user(uinf)
+            if n_dev is None:
+                n_dev = await count_devices(session, sub.id)
+        max_panel = rw_hwid_device_max(uinf)
+        if max_panel is None:
+            max_part = bold("∞")
+        else:
+            max_part = bold(str(max_panel))
+        devices_line = (
+            plain("📟 Устройства ")
+            + plain("(панель)")
+            + plain(": ")
+            + bold(str(n_dev))
+            + plain(" / ")
+            + max_part
+        )
+    else:
+        n_dev = await count_devices(session, sub.id)
+        devices_line = (
+            plain("📟 Устройства ")
+            + plain("(бот)")
+            + plain(": ")
+            + bold(str(n_dev))
+            + plain(" / ")
+            + bold(str(sub.devices_count))
+            + plain(" ")
+            + italic(f"(макс. слотов в боте до {MAX_DEVICES})")
+        )
+
     exp = sub.expires_at
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
@@ -142,11 +181,7 @@ async def build_subscription_detail_caption(
         status_human,
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
-        plain("📟 Лимит устройств: ")
-        + bold(str(sub.devices_count))
-        + plain("/")
-        + bold(str(MAX_DEVICES)),
-        plain("🔄 Привязанных устройств: ") + bold(str(n_dev)),
+        devices_line,
         plain("🗓️ До: ")
         + bold(exp.strftime("%d.%m.%Y %H:%M"))
         + plain(" (")
@@ -154,6 +189,16 @@ async def build_subscription_detail_caption(
         + plain(")"),
         plain("💸 Стоимость: ") + _monthly_price_line(plan),
     ]
+    if sub.auto_renew and sub.status == "active":
+        bp = await get_base_subscription_plan(session)
+        if bp is not None and bp.price_rub > 0:
+            quote_lines.append(
+                plain("🔄 Авто-продление: ")
+                + bold(str(int(bp.price_rub)) + " ₽")
+                + plain(" за +")
+                + bold(str(int(bp.duration_days)) + " дн.")
+                + plain(" (~за 1 ч до окончания)")
+            )
     quoted_block = "\n".join("> " + line for line in quote_lines)
     caption = join_lines(header, "", quoted_block)
     if sub_url:

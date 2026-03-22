@@ -42,6 +42,7 @@ from shared.services.broadcast_service import (
 )
 from shared.database import get_session_factory
 from shared.services.referral_service import count_invited_users
+from shared.services.subscription_service import get_base_subscription_plan
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,6 @@ async def _build_user_card(
         return None
 
     bal = f"{u.balance:.2f}"
-    bonus = f"{u.bonus_balance:.2f}"
     reason = esc(u.block_reason or "—")
     full_name = f"{u.first_name or ''} {u.last_name or ''}".strip() or "—"
     invited = await count_invited_users(session, u.id)
@@ -238,11 +238,7 @@ async def _build_user_card(
         plain("Телефон: ") + phone_s,
         plain("Язык Telegram: ") + esc(u.language_code or "—"),
         rw_line,
-        plain("Баланс: ")
-        + bold(bal)
-        + plain(" ₽ · бонус: ")
-        + bold(bonus)
-        + plain(" ₽"),
+        plain("Баланс: ") + bold(bal) + plain(" ₽"),
         plain("Пригласил людей: ") + bold(str(invited)),
         plain(f"Триал использован: {'да' if u.trial_used else 'нет'}"),
         plain(f"Статус: {'🚫 заблокирован' if u.is_blocked else '✅ активен'}"),
@@ -594,6 +590,10 @@ async def cb_admin_sub_enable(
     plan = sub.plan
     is_trial = plan is not None and plan.name == "Триал"
     sub.status = "trial" if is_trial else "active"
+    if not is_trial:
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
     u = await session.get(User, user_id)
     settings = get_settings()
     if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
@@ -671,12 +671,23 @@ async def msg_admin_add_days(
         await message.answer("Допустимо от 1 до 3650 дней.")
         return
 
-    sub = await session.get(Subscription, sub_id)
-    if sub is None or sub.user_id != user_id:
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == sub_id, Subscription.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None:
         await message.answer("Подписка не найдена.")
         return
 
     sub.expires_at = sub.expires_at + timedelta(days=days)
+    pl = sub.plan
+    if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
     if sub.status == "cancelled":
         pass
     u = await session.get(User, user_id)

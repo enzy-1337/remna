@@ -1,0 +1,4 @@
+-- Однократно после обновления кода: перенос бонусного счёта в основной баланс и удаление колонки.
+-- PostgreSQL:
+-- UPDATE users SET balance = balance + COALESCE(bonus_balance, 0) WHERE COALESCE(bonus_balance, 0) <> 0;
+-- ALTER TABLE users DROP COLUMN IF EXISTS bonus_balance;

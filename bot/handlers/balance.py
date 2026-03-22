@@ -86,13 +86,11 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
 
 def _balance_caption(user: User, history: list[str]) -> str:
     bal = f"{user.balance:.2f}"
-    bonus = f"{user.bonus_balance:.2f}"
     hist_block = "\n".join(history)
     return join_lines(
         "💰 " + bold("Баланс"),
         "",
-        plain("Основной: ") + bold(bal) + plain(" ₽"),
-        plain("Бонусный: ") + bold(bonus) + plain(" ₽"),
+        plain("На счёте: ") + bold(bal) + plain(" ₽"),
         "",
         bold("Успешные оплаты:") + "\n" + hist_block,
     )

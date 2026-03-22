@@ -68,6 +68,21 @@ async def list_invited_users(
     return list(r.scalars().all())
 
 
+def first_paid_plan_referrer_rewards(
+    plan: Plan,
+    settings: Settings,
+) -> tuple[Decimal, int]:
+    """
+    За первую покупку приглашённого: ₽ и дни пригласившему, пропорционально duration_days (за каждые 30 дн. периода).
+    """
+    d = max(1, int(plan.duration_days))
+    rub_per_30 = settings.referral_inviter_reward_rub_per_30_days
+    days_per_30 = settings.referral_inviter_reward_days_per_30_days
+    rub = ((rub_per_30 * Decimal(d)) / Decimal(30)).quantize(Decimal("0.01"))
+    bonus_days = (days_per_30 * d) // 30
+    return rub, bonus_days
+
+
 async def grant_referrer_reward_first_paid_plan(
     session: AsyncSession,
     *,
@@ -77,10 +92,9 @@ async def grant_referrer_reward_first_paid_plan(
 ) -> None:
     """
     Однократно при первой успешной покупке платного тарифа (не триал):
-    начисление referrer'у RUB на баланс и/или продление его активной подписки на N дней.
+    начисление referrer'у RUB на баланс и продление активной подписки (пропорционально сроку купленного тарифа).
     """
-    rub = settings.referral_inviter_bonus_rub
-    days = settings.referral_inviter_bonus_days
+    rub, days = first_paid_plan_referrer_rewards(plan, settings)
     if rub <= 0 and days <= 0:
         return
     if buyer.referred_by is None:
@@ -124,7 +138,11 @@ async def grant_referrer_reward_first_paid_plan(
                 payment_id=None,
                 status="completed",
                 description=f"Реферал: первый платный тариф (user #{buyer.id})",
-                meta={"referred_id": buyer.id, "plan_id": plan.id},
+                meta={
+                    "referred_id": buyer.id,
+                    "plan_id": plan.id,
+                    "plan_duration_days": int(plan.duration_days),
+                },
             )
         )
         parts.append(f"+{bold(str(rub))} ₽ на баланс")

@@ -41,10 +41,25 @@ def plan_tariff_button_label(plan: Plan) -> str:
     return f"{name} — {price_s} ₽"
 
 
+BASE_SUBSCRIPTION_PLAN_NAME = "Базовый"
+
+
+async def get_base_subscription_plan(session: AsyncSession) -> Plan | None:
+    """План учётной подписки и суммы автопродления (+1 мес.)."""
+    r = await session.execute(
+        select(Plan).where(Plan.name == BASE_SUBSCRIPTION_PLAN_NAME, Plan.is_active.is_(True)).limit(1)
+    )
+    return r.scalar_one_or_none()
+
+
 async def list_paid_plans(session: AsyncSession) -> list[Plan]:
     r = await session.execute(
         select(Plan)
-        .where(Plan.is_active.is_(True), Plan.price_rub > 0)
+        .where(
+            Plan.is_active.is_(True),
+            Plan.price_rub > 0,
+            Plan.name != BASE_SUBSCRIPTION_PLAN_NAME,
+        )
         .order_by(Plan.sort_order, Plan.id)
     )
     return list(r.scalars().all())
@@ -140,8 +155,15 @@ async def purchase_plan_with_balance(
     plan = await session.get(Plan, plan_id)
     if not plan or plan.price_rub <= 0 or not plan.is_active:
         return False, plain("Тариф не найден или недоступен."), "error"
+    if plan.name == BASE_SUBSCRIPTION_PLAN_NAME:
+        return False, plain("Этот тариф недоступен для покупки в магазине."), "error"
 
-    price = plan.price_rub
+    purchased_plan = plan
+    base_plan = await get_base_subscription_plan(session)
+    if base_plan is None:
+        return False, plain("В БД не настроен тариф «Базовый» (seed планов)."), "error"
+
+    price = purchased_plan.price_rub
     if user.balance < price:
         if save_to_cart_if_insufficient:
             await set_cart_plan(telegram_id, plan_id=plan.id, amount_rub=price, settings=settings)
@@ -170,11 +192,11 @@ async def purchase_plan_with_balance(
     base = now
     if active and active.expires_at > now:
         base = active.expires_at
-    new_expires = base + timedelta(days=plan.duration_days)
+    new_expires = base + timedelta(days=purchased_plan.duration_days)
 
     traffic_bytes = 0
-    if plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0:
-        traffic_bytes = int(plan.traffic_limit_gb) * (1024**3)
+    if purchased_plan.traffic_limit_gb is not None and purchased_plan.traffic_limit_gb > 0:
+        traffic_bytes = int(purchased_plan.traffic_limit_gb) * (1024**3)
 
     desc = build_remnawave_panel_description(user)
 
@@ -232,8 +254,12 @@ async def purchase_plan_with_balance(
             payment_provider="balance",
             payment_id=None,
             status="completed",
-            description=f"Тариф «{plan.name}»",
-            meta={"plan_id": plan.id},
+            description=f"Тариф «{purchased_plan.name}»",
+            meta={
+                "plan_id": purchased_plan.id,
+                "purchased_plan_id": purchased_plan.id,
+                "storage_plan_id": base_plan.id,
+            },
         )
     )
 
@@ -241,7 +267,7 @@ async def purchase_plan_with_balance(
     assert rw_uuid is not None
 
     if active:
-        active.plan_id = plan.id
+        active.plan_id = base_plan.id
         active.expires_at = new_expires
         active.status = "active"
         active.remnawave_sub_uuid = rw_uuid
@@ -250,7 +276,7 @@ async def purchase_plan_with_balance(
     else:
         sub = Subscription(
             user_id=user.id,
-            plan_id=plan.id,
+            plan_id=base_plan.id,
             remnawave_sub_uuid=rw_uuid,
             status="active",
             devices_count=MIN_DEVICES,
@@ -279,7 +305,8 @@ async def purchase_plan_with_balance(
         plain("✅ Списано ")
         + bold(str(price))
         + plain(" ₽ с баланса."),
-        plain("Тариф: ") + bold(plan.name),
+        plain("Оплачен пакет: ") + bold(purchased_plan.name),
+        plain("Учётный тариф: ") + bold(base_plan.name),
         plain("Действует до: ")
         + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
     )
@@ -289,14 +316,14 @@ async def purchase_plan_with_balance(
     from shared.services.admin_notify import notify_admin
     from shared.services.referral_service import grant_referrer_reward_first_paid_plan
 
-    await grant_referrer_reward_first_paid_plan(session, buyer=user, plan=plan, settings=settings)
+    await grant_referrer_reward_first_paid_plan(session, buyer=user, plan=purchased_plan, settings=settings)
     from shared.services.admin_log_topics import AdminLogTopic
 
     await notify_admin(
         settings,
         title="🔑 " + bold("Покупка тарифа с баланса"),
         lines=[
-            plain("Тариф: ") + bold(plan.name),
+            plain("Пакет: ") + bold(purchased_plan.name),
             plain("Списано: ") + bold(str(price)) + plain(" ₽"),
             plain("До: ") + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
         ],

@@ -11,6 +11,8 @@ from shared.models.plan import Plan
 
 _DEFAULTS: tuple[tuple[str, int, Decimal, Decimal, int | None, bool, int], ...] = (
     ("Триал", 3, Decimal("0"), Decimal("0"), 1, True, 0),
+    # Учётный тариф после оплаты / выдачи (не показывается в магазине); цена = автопродление за месяц
+    ("Базовый", 30, Decimal("130"), Decimal("0"), None, True, 5),
     ("1 месяц", 30, Decimal("130"), Decimal("0"), None, True, 10),
     ("2 месяца", 60, Decimal("255"), Decimal("2"), None, True, 20),
     ("3 месяца", 90, Decimal("370"), Decimal("5"), None, True, 30),

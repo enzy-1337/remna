@@ -51,7 +51,7 @@ async def cmd_start(
         return
 
     payload = extract_start_payload(message)
-    user, created = await register_user(session, message.from_user, payload)
+    user, created, invited_signup_bonus = await register_user(session, message.from_user, payload)
 
     if await reject_if_blocked(message, user):
         return
@@ -64,6 +64,12 @@ async def cmd_start(
         intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
         if user.referred_by is not None:
             intro_lines.append(esc("Вы присоединились по приглашению друга."))
+        if invited_signup_bonus is not None and invited_signup_bonus > 0:
+            intro_lines.append(
+                plain("🎁 На баланс начислено ")
+                + bold(str(invited_signup_bonus))
+                + plain(" ₽ за регистрацию по приглашению.")
+            )
         await notify_admin(
             settings,
             title="🆕 " + bold("Новый пользователь"),

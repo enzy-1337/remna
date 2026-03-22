@@ -31,9 +31,6 @@ class User(Base):
 
     language_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), server_default="0")
-    bonus_balance: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), default=Decimal("0"), server_default="0"
-    )
 
     referred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
