@@ -146,7 +146,7 @@ class RemnaWaveClient:
                             r.status_code,
                             r.text[:500],
                         )
-                    raise RemnawaveError(f"Remnawave HTTP {r.status_code}: {r.text[:200]}")
+                    raise RemnaWaveError(f"Remnawave HTTP {r.status_code}: {r.text[:200]}")
                 return r.json()
             except httpx.RequestError as e:
                 last_exc = e

@@ -253,7 +253,7 @@ async def _build_user_card(
         "⚡ " + bold("Статус в боте"),
         plain("Аккаунт: ") + bold("заблокирован 🚫" if u.is_blocked else "активен ✅"),
         plain("Причина блока: ") + reason,
-        "",
+        sep,
     ]
     if sub is None:
         lines.append("📋 " + bold("Подписка"))
