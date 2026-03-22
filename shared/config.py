@@ -196,6 +196,17 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_AUTORENEW_WINDOW_SEC",
         description="За сколько секунд до expires_at пытаться продлить (по умолчанию 1 ч)",
     )
+    subscription_expiry_notify_enabled: bool = Field(
+        default=True,
+        validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_ENABLED",
+        description="Уведомления в Telegram за ~24 ч и ~3 ч до конца подписки/триала",
+    )
+    subscription_expiry_notify_interval_sec: int = Field(
+        default=300,
+        ge=120,
+        validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC",
+        description="Как часто проверять подписки на напоминания (сек)",
+    )
 
     # Рефералы: бонус при /start по ссылке + награда пригласившему за первую покупку друга (пропорционально сроку)
     referral_signup_bonus_rub: Decimal = Field(
