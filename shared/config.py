@@ -130,7 +130,12 @@ class Settings(BaseSettings):
     remnawave_sync_import_limit: int = Field(
         default=300,
         validation_alias="REMNAWAVE_SYNC_IMPORT_LIMIT",
-        description="Сколько пользователей максимум подтягивать за проход",
+        description="Максимум записей пользователей Remnawave за один проход синхронизации",
+    )
+    remnawave_sync_push_description: bool = Field(
+        default=True,
+        validation_alias="REMNAWAVE_SYNC_PUSH_DESCRIPTION",
+        description="Обновлять description в Remnawave при синхронизации (имя, tg, телефон и т.д.)",
     )
     remnawave_stub: bool = Field(
         default=False,

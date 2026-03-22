@@ -19,6 +19,7 @@ from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username_from_db_user
 from shared.services.smart_cart import set_cart_plan
 
@@ -175,7 +176,7 @@ async def purchase_plan_with_balance(
     if plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0:
         traffic_bytes = int(plan.traffic_limit_gb) * (1024**3)
 
-    desc = f"tg_id:{user.telegram_id}"
+    desc = build_remnawave_panel_description(user)
 
     try:
         if user.remnawave_uuid is None:

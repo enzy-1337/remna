@@ -157,11 +157,20 @@ async def _build_user_card(
     invited = await count_invited_users(session, u.id)
     sub, plan = await _admin_pick_subscription(session, u.id)
 
+    phone_s = esc((u.phone or "").strip()) if (u.phone or "").strip() else plain("—")
+    rw_line = (
+        plain("RemnaWave: ") + code(str(u.remnawave_uuid))
+        if u.remnawave_uuid is not None
+        else plain("RemnaWave: не привязан")
+    )
     lines: list[str] = [
         "👤 " + bold(f"Пользователь #{u.id}"),
         plain("Telegram: ") + code(str(u.telegram_id)),
         plain("Username: ") + esc(u.username or "—"),
         plain("Имя: ") + esc(full_name),
+        plain("Телефон: ") + phone_s,
+        plain("Язык Telegram: ") + esc(u.language_code or "—"),
+        rw_line,
         plain("Баланс: ")
         + bold(bal)
         + plain(" ₽ · бонус: ")
@@ -775,9 +784,23 @@ async def msg_admin_find_telegram_id(
     else:
         extra.extend(_subscription_caption_lines(sub, plan))
 
+    full_nm = f"{u.first_name or ''} {u.last_name or ''}".strip() or "—"
+    ph_ln = (
+        plain("Телефон: ") + esc((u.phone or "").strip())
+        if (u.phone or "").strip()
+        else plain("Телефон: —")
+    )
+    rw_ln = (
+        plain("RemnaWave: ") + code(str(u.remnawave_uuid))
+        if u.remnawave_uuid is not None
+        else plain("RemnaWave: —")
+    )
     lines = [
         "🔎 " + bold("Найден"),
         line_user,
+        plain("Имя: ") + esc(full_nm),
+        ph_ln,
+        rw_ln,
         plain("Баланс: ") + bold(f"{u.balance:.2f}") + plain(" ₽"),
         "",
         *extra,

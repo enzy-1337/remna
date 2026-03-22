@@ -18,6 +18,10 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.remnawave_description import (
+    build_remnawave_panel_description,
+    normalize_remnawave_description,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,46 @@ def _int_or_none(v) -> int | None:
         return None
 
 
+def _pick_str(d: dict, keys: tuple[str, ...]) -> str | None:
+    for k in keys:
+        v = d.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            return s[:255]
+    return None
+
+
+def _apply_rw_list_row_to_user(user: User, ru: dict) -> None:
+    """Подмешиваем в User поля из ответа списка панели (если есть)."""
+    fn = _pick_str(
+        ru,
+        ("telegramFirstName", "telegram_first_name", "firstName", "first_name", "name"),
+    )
+    if fn:
+        user.first_name = fn[:255]
+
+    ln = _pick_str(ru, ("telegramLastName", "telegram_last_name", "lastName", "last_name"))
+    if ln:
+        user.last_name = ln[:255]
+
+    ph = _pick_str(ru, ("phone", "phoneNumber", "phone_number", "telegramPhone"))
+    if ph:
+        user.phone = ph[:32]
+
+    tg_un = _pick_str(
+        ru,
+        ("telegramUsername", "telegram_username", "tgUsername", "tg_username"),
+    )
+    if tg_un:
+        user.username = tg_un.lstrip("@")[:255]
+    elif not (user.username or "").strip():
+        generic = _pick_str(ru, ("username",))
+        if generic:
+            user.username = generic.lstrip("@")[:255]
+
+
 async def _generate_unique_referral_code(session: AsyncSession) -> str:
     alphabet = string.ascii_uppercase + string.digits
     for _ in range(50):
@@ -63,81 +107,128 @@ async def _pick_plan_for_import(session: AsyncSession) -> Plan | None:
     return paid.scalar_one_or_none()
 
 
+async def _upsert_subscription_from_rw_payload(
+    session: AsyncSession,
+    *,
+    user: User,
+    info: dict,
+    now: datetime,
+) -> None:
+    exp = _parse_rw_dt(info.get("expireAt"))
+    dlim = _int_or_none(info.get("hwidDeviceLimit"))
+    if exp is None:
+        return
+    sub_q = await session.execute(
+        select(Subscription)
+        .where(Subscription.user_id == user.id)
+        .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+        .limit(1)
+    )
+    sub = sub_q.scalar_one_or_none()
+    if sub is None:
+        plan = await _pick_plan_for_import(session)
+        if plan is None:
+            logger.warning("RW sync: no plan for creating sub user=%s", user.id)
+            return
+        sub = Subscription(
+            user_id=user.id,
+            plan_id=plan.id,
+            remnawave_sub_uuid=user.remnawave_uuid,
+            status="active" if exp > now else "expired",
+            devices_count=max(2, dlim or 2),
+            started_at=now,
+            expires_at=exp,
+            auto_renew=True,
+        )
+        session.add(sub)
+        logger.info("RW sync: created missing local subscription user=%s", user.id)
+    else:
+        if abs((sub.expires_at - exp).total_seconds()) > 60:
+            logger.info(
+                "RW sync: expires adjust user=%s local=%s rw=%s",
+                user.id,
+                sub.expires_at.isoformat(),
+                exp.isoformat(),
+            )
+            sub.expires_at = exp
+        if dlim is not None and dlim >= 2 and sub.devices_count != dlim:
+            sub.devices_count = dlim
+        sub.status = "active" if exp > now else "expired"
+
+
+async def _maybe_push_rw_description(
+    rw: RemnaWaveClient,
+    settings: Settings,
+    user: User,
+    info: dict,
+) -> None:
+    if not settings.remnawave_sync_push_description or user.remnawave_uuid is None:
+        return
+    new_desc = build_remnawave_panel_description(user)
+    cur = str(info.get("description") or "")
+    if normalize_remnawave_description(cur) == normalize_remnawave_description(new_desc):
+        return
+    try:
+        await rw.update_user(str(user.remnawave_uuid), description=new_desc)
+    except RemnaWaveError as e:
+        logger.warning("RW sync: push description failed user=%s: %s", user.id, e)
+
+
+async def _sync_one_linked_user(
+    session: AsyncSession,
+    rw: RemnaWaveClient,
+    settings: Settings,
+    user: User,
+    now: datetime,
+) -> None:
+    try:
+        info = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError as e:
+        logger.warning("RW sync get_user failed user=%s: %s", user.id, e)
+        return
+    await _upsert_subscription_from_rw_payload(session, user=user, info=info, now=now)
+    await _maybe_push_rw_description(rw, settings, user, info)
+
+
 async def sync_once(settings: Settings) -> None:
     if settings.remnawave_stub:
         return
     rw = RemnaWaveClient(settings)
     factory = get_session_factory()
+    max_items = max(50, int(settings.remnawave_sync_import_limit))
     async with factory() as session:
         now = datetime.now(timezone.utc)
-        # 1) Синхронизируем уже привязанных пользователей.
-        r = await session.execute(select(User).where(User.remnawave_uuid.is_not(None)))
-        for user in list(r.scalars().all()):
-            try:
-                info = await rw.get_user(str(user.remnawave_uuid))
-            except RemnaWaveError as e:
-                logger.warning("RW sync get_user failed user=%s: %s", user.id, e)
-                continue
-            exp = _parse_rw_dt(info.get("expireAt"))
-            dlim = _int_or_none(info.get("hwidDeviceLimit"))
-            if exp is None:
-                continue
-            sub_q = await session.execute(
-                select(Subscription)
-                .where(Subscription.user_id == user.id)
-                .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
-                .limit(1)
-            )
-            sub = sub_q.scalar_one_or_none()
-            if sub is None:
-                plan = await _pick_plan_for_import(session)
-                if plan is None:
-                    logger.warning("RW sync: no plan for creating sub user=%s", user.id)
-                    continue
-                sub = Subscription(
-                    user_id=user.id,
-                    plan_id=plan.id,
-                    remnawave_sub_uuid=user.remnawave_uuid,
-                    status="active" if exp > now else "expired",
-                    devices_count=max(2, dlim or 2),
-                    started_at=now,
-                    expires_at=exp,
-                    auto_renew=True,
-                )
-                session.add(sub)
-                logger.warning("RW sync: created missing local subscription user=%s", user.id)
-            else:
-                if abs((sub.expires_at - exp).total_seconds()) > 60:
-                    logger.warning(
-                        "RW sync: expires mismatch user=%s local=%s rw=%s",
-                        user.id,
-                        sub.expires_at.isoformat(),
-                        exp.isoformat(),
-                    )
-                    sub.expires_at = exp
-                if dlim is not None and dlim >= 2 and sub.devices_count != dlim:
-                    sub.devices_count = dlim
-                sub.status = "active" if exp > now else "expired"
-
-        # 2) Импортируем пользователей, которые есть в панели, но нет в БД.
-        limit = max(50, int(settings.remnawave_sync_import_limit))
         try:
-            rw_users = await rw.list_users(limit=limit)
+            rw_users = await rw.list_all_users(page_size=min(200, max_items), max_items=max_items)
         except RemnaWaveError as e:
-            logger.warning("RW sync list_users failed: %s", e)
+            logger.warning("RW sync list_all_users failed: %s", e)
             rw_users = []
 
-        for ru in rw_users[:limit]:
-            tg = _int_or_none(ru.get("telegramId") or ru.get("telegram_id") or ru.get("tgId"))
-            uid = ru.get("uuid")
-            if tg is None or not uid:
+        for ru in rw_users:
+            uid_raw = ru.get("uuid")
+            if not uid_raw:
                 continue
-            q = await session.execute(select(User).where(User.telegram_id == tg))
-            user = q.scalar_one_or_none()
+            try:
+                uid = uuid_lib.UUID(str(uid_raw))
+            except ValueError:
+                continue
+
+            tg = _int_or_none(ru.get("telegramId") or ru.get("telegram_id") or ru.get("tgId"))
+
+            user: User | None = None
+            if tg is not None:
+                q = await session.execute(select(User).where(User.telegram_id == tg))
+                user = q.scalar_one_or_none()
             if user is None:
+                q2 = await session.execute(select(User).where(User.remnawave_uuid == uid))
+                user = q2.scalar_one_or_none()
+
+            if user is None:
+                if tg is None:
+                    continue
                 user = User(
                     telegram_id=tg,
-                    username=ru.get("username"),
+                    username=None,
                     first_name=None,
                     last_name=None,
                     language_code=None,
@@ -146,8 +237,14 @@ async def sync_once(settings: Settings) -> None:
                 )
                 session.add(user)
                 await session.flush()
-                logger.warning("RW sync: imported new user tg=%s db_user=%s", tg, user.id)
-            user.remnawave_uuid = uuid_lib.UUID(str(uid))
+                logger.info("RW sync: imported new user tg=%s db_user=%s", tg, user.id)
+
+            _apply_rw_list_row_to_user(user, ru)
+            user.remnawave_uuid = uid
+
+        r = await session.execute(select(User).where(User.remnawave_uuid.is_not(None)))
+        for user in list(r.scalars().all()):
+            await _sync_one_linked_user(session, rw, settings, user, now)
 
         await session.commit()
 

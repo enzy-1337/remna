@@ -187,6 +187,56 @@ class RemnaWaveClient:
                 continue
         return []
 
+    async def list_all_users(
+        self,
+        *,
+        page_size: int = 200,
+        max_items: int = 5000,
+        max_pages: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Все пользователи панели с пагинацией (page/limit и skip/take)."""
+        if self._s.remnawave_stub:
+            return []
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            if len(out) >= max_items:
+                break
+            take = min(page_size, max_items - len(out))
+            if take <= 0:
+                break
+            batch: list[dict[str, Any]] = []
+            param_sets = [
+                {"page": page, "limit": take},
+                {"skip": (page - 1) * page_size, "take": take},
+                {"offset": (page - 1) * page_size, "limit": take},
+            ]
+            for q in param_sets:
+                try:
+                    data = await self._request("GET", "users", params=q)
+                    items = self._extract_users_list(data)
+                    if items:
+                        batch = items
+                        break
+                except RemnaWaveError:
+                    continue
+            if not batch:
+                break
+            new_in_batch = 0
+            for it in batch:
+                uid = str(it.get("uuid") or "").strip()
+                if uid and uid not in seen:
+                    seen.add(uid)
+                    out.append(it)
+                    new_in_batch += 1
+                    if len(out) >= max_items:
+                        break
+            if new_in_batch == 0:
+                break
+            if len(batch) < take:
+                break
+        return out
+
     @staticmethod
     def _coerce_int(val: Any) -> int | None:
         try:

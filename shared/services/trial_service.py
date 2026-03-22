@@ -14,6 +14,7 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username
 
 
@@ -67,7 +68,10 @@ async def activate_trial(
 
     client = rw or RemnaWaveClient(settings)
     base_username = build_remnawave_username(tg_user)
-    note = f"tg_id:{tg_user.id}"
+    user.username = tg_user.username or user.username
+    user.first_name = tg_user.first_name or user.first_name
+    user.last_name = tg_user.last_name or user.last_name
+    note = build_remnawave_panel_description(user)
     expire_at = datetime.now(timezone.utc) + timedelta(days=settings.trial_duration_days)
     traffic_bytes = settings.trial_traffic_gb * (1024**3)
 
