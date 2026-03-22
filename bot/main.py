@@ -42,6 +42,7 @@ from shared.services.autorenew_service import subscription_autorenew_loop
 from shared.services.expiry_notify_service import subscription_expiry_notify_loop
 from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_sync import sync_loop
+from shared.services.schema_patches import ensure_subscription_expiry_notify_columns
 
 
 async def main() -> None:
@@ -65,6 +66,7 @@ async def main() -> None:
     factory = get_session_factory()
     async with factory() as s:
         await ensure_default_plans_if_needed(s)
+        await ensure_subscription_expiry_notify_columns(s)
         await s.commit()
 
     bot = Bot(

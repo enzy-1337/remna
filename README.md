@@ -39,7 +39,7 @@ alembic upgrade head
 
 Бот шлёт личные сообщения (без разметки), когда до `expires_at` остаётся примерно **24 часа** и **3 часа** (`SUBSCRIPTION_EXPIRY_NOTIFY_*` в `.env`). После продления флаги сбрасываются автоматически.
 
-Нужны колонки в `subscriptions` — см. `scripts/add_subscription_expiry_notify_columns.sql`.
+Для **PostgreSQL** колонки `expiry_notified_*` добавляются автоматически при старте бота и в начале цикла RW sync (`schema_patches`). Ручной SQL: `scripts/add_subscription_expiry_notify_columns.sql`.
 
 ## Запуск бота
 
