@@ -29,6 +29,6 @@ def profile_caption(db_user: User, tg_user: TgUser) -> str:
         "👤 " + bold("Профиль:"),
         "",
         profile_quote,
-        "",
-        quote_block("Совет: сохраните ссылку подписки в надёжном месте."),
+        # "",
+        # quote_block("Совет: сохраните ссылку подписки в надёжном месте."),
     )

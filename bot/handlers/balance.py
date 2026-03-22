@@ -13,11 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
-from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_done_keyboard, topup_providers_keyboard
+from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_keyboard, topup_providers_keyboard
 from bot.states.payment import TopupStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, join_lines, link, plain
+from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.topup_service import create_topup_payment
@@ -292,12 +292,14 @@ async def cb_topup_provider(
         + bold(amount_s)
         + plain(" ₽ создан."),
         "",
-        link("Открыть страницу оплаты", pay_url),
+        plain("Нажмите кнопку ниже, чтобы перейти к оплате."),
         "",
         plain("После оплаты баланс обновится автоматически (обычно в течение минуты)."),
     )
     if cq.message:
         if cq.message.photo:
-            await cq.message.edit_caption(caption=text, reply_markup=topup_invoice_done_keyboard())
+            await cq.message.edit_caption(
+                caption=text, reply_markup=topup_invoice_keyboard(pay_url)
+            )
         else:
-            await cq.message.edit_text(text, reply_markup=topup_invoice_done_keyboard())
+            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url))

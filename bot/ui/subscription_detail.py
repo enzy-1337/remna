@@ -14,7 +14,7 @@ from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
 )
-from shared.md2 import bold, code, esc, italic, join_lines, plain
+from shared.md2 import bold, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.subscription_service import (
     MAX_DEVICES,
@@ -128,7 +128,6 @@ async def build_subscription_detail_caption(
         exp = exp.replace(tzinfo=timezone.utc)
     left_phrase = _humanize_left(exp, now)
 
-    # Текст подписки делаем блоком-цитатой (`>` для каждой строки).
     lines = [
         "🔑 " + bold("Подписка:"),
         status_human,
@@ -146,7 +145,5 @@ async def build_subscription_detail_caption(
         + plain(")"),
         plain("💸 Стоимость: ") + _monthly_price_line(plan),
     ]
-    caption = "\n".join(["> " + l for l in lines])
-    if sub_url:
-        caption += "\n\n" + plain("📎 ") + bold("Ссылка:") + "\n" + code(sub_url)
+    caption = join_lines(*lines)
     return caption, sub_url

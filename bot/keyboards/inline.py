@@ -86,11 +86,11 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def topup_invoice_done_keyboard() -> InlineKeyboardMarkup:
-    """После создания счёта."""
+def topup_invoice_keyboard(pay_url: str) -> InlineKeyboardMarkup:
+    """После создания счёта: оплата по URL и возврат к балансу."""
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="💳 Открыть страницу оплаты", url=pay_url))
     builder.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
-    builder.row(InlineKeyboardButton(text="🏠 Профиль", callback_data="menu:main"))
     return builder.as_markup()
 
 

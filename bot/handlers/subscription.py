@@ -23,7 +23,12 @@ from shared.services.subscription_service import (
 router = Router(name="subscription")
 
 
-def _sub_main_keyboard(*, has_active: bool, auto_renew: bool) -> InlineKeyboardBuilder:
+def _sub_main_keyboard(
+    *,
+    has_active: bool,
+    auto_renew: bool,
+    subscription_url: str | None = None,
+) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
         b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
@@ -33,7 +38,9 @@ def _sub_main_keyboard(*, has_active: bool, auto_renew: bool) -> InlineKeyboardB
         )
         ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    if subscription_url:
+        b.row(InlineKeyboardButton(text="📎 Ссылка на подписку", url=subscription_url))
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
 
@@ -43,11 +50,12 @@ async def _show_subscription_main(
     db_user: User,
 ) -> None:
     settings = get_settings()
-    cap, _url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
+    cap, sub_url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
     sub = await get_active_subscription(session, db_user.id)
     kb = _sub_main_keyboard(
         has_active=sub is not None,
         auto_renew=sub.auto_renew if sub else False,
+        subscription_url=sub_url,
     ).as_markup()
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
@@ -133,12 +141,13 @@ async def cb_buy_plan(
     if not cq.message or cq.bot is None:
         return
     if ok:
-        cap, _u = await build_subscription_detail_caption(session, user=db_user, settings=settings)
+        cap, sub_url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
         full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
         kb = _sub_main_keyboard(
             has_active=sub is not None,
             auto_renew=sub.auto_renew if sub else False,
+            subscription_url=sub_url,
         ).as_markup()
         await answer_callback_with_photo_screen(
             cq,
