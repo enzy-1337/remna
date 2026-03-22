@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -15,7 +15,12 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from bot.states.admin import AdminFactoryResetStates, AdminFindUserStates, AdminSubscriptionStates
+from bot.states.admin import (
+    AdminBroadcastStates,
+    AdminFactoryResetStates,
+    AdminFindUserStates,
+    AdminSubscriptionStates,
+)
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
@@ -26,6 +31,12 @@ from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
+from shared.services.broadcast_service import (
+    MAX_MESSAGE_LEN,
+    broadcast_plain_text,
+    collect_recipient_telegram_ids,
+)
+from shared.database import get_session_factory
 from shared.services.referral_service import count_invited_users
 
 logger = logging.getLogger(__name__)
@@ -45,6 +56,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Пользователи", callback_data="admin:users:0"))
     b.row(InlineKeyboardButton(text="🔎 Найти по Telegram ID", callback_data="admin:find"))
+    b.row(InlineKeyboardButton(text="📢 Рассылка всем", callback_data="admin:broadcast"))
     b.row(InlineKeyboardButton(text="⛔ Полный сброс БД", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
@@ -1110,3 +1122,179 @@ async def msg_admin_reset_step_telegram_id(
             plain("Отправьте /start, чтобы зарегистрироваться заново."),
         ),
     )
+
+
+def _broadcast_confirm_markup() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast_go"))
+    kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:broadcast_cancel"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data == "admin:broadcast")
+async def cb_broadcast_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await state.set_state(AdminBroadcastStates.waiting_text)
+    await cq.answer()
+    if cq.bot is None or cq.message is None:
+        return
+    await cq.bot.send_message(
+        cq.message.chat.id,
+        join_lines(
+            "📢 " + bold("Рассылка всем пользователям"),
+            "",
+            plain("Отправьте одним сообщением текст рассылки "),
+            plain("(до ")
+            + code(str(MAX_MESSAGE_LEN))
+            + plain(" символов, без форматирования Markdown)."),
+            "",
+            italic("Не получат пользователи, отмеченные в боте как заблокированные."),
+            "",
+            plain("Отмена: команда ") + code("/cancel_broadcast"),
+        ),
+    )
+
+
+@router.message(Command("cancel_broadcast"), StateFilter(AdminBroadcastStates))
+async def cmd_cancel_broadcast(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer(esc("Рассылка отменена."))
+
+
+@router.callback_query(F.data == "admin:broadcast_cancel")
+async def cb_broadcast_cancel(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    await state.clear()
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    await cq.answer("Отменено.")
+    if db_user is None:
+        return
+    settings = get_settings()
+    text = join_lines(
+        "🛠 " + bold("Админ-панель"),
+        "",
+        plain("Выберите действие."),
+        "",
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=admin_panel_keyboard(),
+        settings=settings,
+    )
+
+
+@router.message(StateFilter(AdminBroadcastStates.waiting_text), F.text)
+async def msg_broadcast_receive_text(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if raw.startswith("/"):
+        await message.answer(
+            esc("Пришлите обычный текст рассылки без слэша или отмените: /cancel_broadcast")
+        )
+        return
+    if not raw:
+        await message.answer(esc("Текст пустой. Отправьте непустое сообщение."))
+        return
+    if len(raw) > MAX_MESSAGE_LEN:
+        await message.answer(
+            esc(f"Слишком длинно. Максимум {MAX_MESSAGE_LEN} символов. Сократите и отправьте снова.")
+        )
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        n = len(await collect_recipient_telegram_ids(session, skip_blocked=True))
+
+    await state.update_data(broadcast_text=raw)
+    await state.set_state(AdminBroadcastStates.waiting_confirm)
+
+    preview = raw if len(raw) <= 600 else raw[:597] + "..."
+    await message.answer(
+        join_lines(
+            "📋 " + bold("Предпросмотр"),
+            "",
+            plain(preview),
+            "",
+            plain("— ➖➖➖➖➖ —"),
+            "",
+            plain("Получателей (не в блок-листе бота): ") + bold(str(n)),
+            "",
+            plain("Подтвердите отправку кнопками ниже."),
+        ),
+        reply_markup=_broadcast_confirm_markup(),
+    )
+
+
+@router.callback_query(F.data == "admin:broadcast_go", StateFilter(AdminBroadcastStates.waiting_confirm))
+async def cb_broadcast_go(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    await state.clear()
+    if not isinstance(text, str) or not text.strip():
+        await cq.answer("Нет текста. Начните снова.", show_alert=True)
+        return
+    if cq.bot is None:
+        await cq.answer("Ошибка бота.", show_alert=True)
+        return
+
+    await cq.answer("Идёт рассылка…")
+    if cq.message:
+        try:
+            await cq.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    ok, fail = await broadcast_plain_text(cq.bot, text)
+
+    settings = get_settings()
+    summary = join_lines(
+        "✅ " + bold("Рассылка завершена"),
+        "",
+        plain("Доставлено: ") + bold(str(ok)),
+        plain("Не доставлено: ") + bold(str(fail)),
+        "",
+        italic("(Не доставлено: бот заблокирован, аккаунт удалён, лимиты Telegram и т.п.)"),
+    )
+    if cq.message:
+        await cq.message.answer(summary)
+    if db_user is not None:
+        await notify_admin(
+            settings,
+            title="📢 " + bold("Массовая рассылка"),
+            lines=[
+                plain("Доставлено: ") + bold(str(ok)) + plain(", ошибок: ") + bold(str(fail)),
+            ],
+            event_type="broadcast",
+            topic=AdminLogTopic.GENERAL,
+            subject_user=db_user,
+            session=None,
+        )

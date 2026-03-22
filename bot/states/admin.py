@@ -18,3 +18,10 @@ class AdminFactoryResetStates(StatesGroup):
     waiting_first_name = State()
     waiting_username = State()
     waiting_telegram_numeric_id = State()
+
+
+class AdminBroadcastStates(StatesGroup):
+    """Общая рассылка: текст → подтверждение → отправка."""
+
+    waiting_text = State()
+    waiting_confirm = State()
