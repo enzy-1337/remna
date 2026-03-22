@@ -70,10 +70,12 @@ async def build_subscription_detail_caption(
     *,
     user: User,
     settings: Settings,
+    is_bot_admin: bool = False,
 ) -> tuple[str, str | None]:
     """
     Возвращает (подпись MarkdownV2, url подписки или None).
     Трафик и устройства: из панели Remnawave при наличии uuid; ∞ если лимит отключён в панели.
+    Слоты: лимит из панели (или учёт бота) / макс. MAX_DEVICES или ∞ для админа бота.
     """
     sub = await get_active_subscription(session, user.id)
     now = datetime.now(timezone.utc)
@@ -137,40 +139,29 @@ async def build_subscription_detail_caption(
                 + limit_hint
             )
 
-    # --- Устройства: подключено / макс; hwidDeviceLimit null или ≤0 = ∞; счёт из HWID API
+    # --- Слоты: лимит (панель → hwidDeviceLimit, иначе учёт бота) / макс. в боте; отдельно список HWID
     if uinf:
         if hwid_list_ok:
-            n_dev = hwid_devices_count
+            n_hwid = hwid_devices_count
         else:
-            n_dev = extract_connected_devices_from_rw_user(uinf)
-            if n_dev is None:
-                n_dev = await count_devices(session, sub.id)
-        max_panel = rw_hwid_device_max(uinf)
-        if max_panel is None:
-            max_part = bold("∞")
-        else:
-            max_part = bold(str(max_panel))
-        devices_line = (
-            plain("📟 Устройства ")
-            # + plain("(панель)")
-            + plain(": ")
-            + bold(str(n_dev))
-            + plain(" / ")
-            + max_part
-        )
+            n_hwid = extract_connected_devices_from_rw_user(uinf)
+            if n_hwid is None:
+                n_hwid = await count_devices(session, sub.id)
+        panel_lim = rw_hwid_device_max(uinf)
+        slot_limit_shown = panel_lim if panel_lim is not None else sub.devices_count
     else:
-        n_dev = await count_devices(session, sub.id)
-        devices_line = (
-            plain("📟 Устройства ")
-            # + plain("(бот)")
-            + plain(": ")
-            + bold(str(n_dev))
-            + plain(" / ")
-            + bold(str(sub.devices_count))
-            + plain(" ")
-            # + italic(f"(макс. слотов в боте до {MAX_DEVICES})")
-            + italic(f"(макс. слотов до {MAX_DEVICES})")
-        )
+        n_hwid = await count_devices(session, sub.id)
+        slot_limit_shown = sub.devices_count
+
+    max_slots_bot = bold("∞") if is_bot_admin else bold(str(MAX_DEVICES))
+    devices_slots_line = (
+        plain("📟 Слоты: ")
+        + bold(str(slot_limit_shown))
+        + plain(" / ")
+        + max_slots_bot
+        + plain(" (лимит в панели / макс. в боте)")
+    )
+    devices_hwid_line = plain("📱 В списке HWID: ") + bold(str(n_hwid))
 
     exp = sub.expires_at
     if exp.tzinfo is None:
@@ -182,7 +173,8 @@ async def build_subscription_detail_caption(
         status_human,
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
-        devices_line,
+        devices_slots_line,
+        devices_hwid_line,
         plain("🗓️ До: ")
         + bold(exp.strftime("%d.%m.%Y %H:%M"))
         + plain(" (")

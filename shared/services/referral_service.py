@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.md2 import bold, code, join_lines
+from shared.md2 import bold, code, join_lines, plain
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.referral_reward import ReferralReward
@@ -145,7 +145,7 @@ async def grant_referrer_reward_first_paid_plan(
                 },
             )
         )
-        parts.append(f"+{bold(str(rub))} ₽ на баланс")
+        parts.append(plain("+") + bold(str(rub)) + plain(" ₽ на баланс"))
 
     if days > 0:
         sub = await get_active_subscription(session, referrer.id)
@@ -162,7 +162,7 @@ async def grant_referrer_reward_first_paid_plan(
                     )
                 except RemnaWaveError as e:
                     logger.warning("Referrer RW extend failed user=%s: %s", referrer.id, e)
-            parts.append(f"+{bold(str(days))} дн. к подписке")
+            parts.append(plain("+") + bold(str(days)) + plain(" дн. к подписке"))
         else:
             logger.info(
                 "Referral bonus days skipped: no active sub for referrer_id=%s", referrer.id
@@ -173,7 +173,9 @@ async def grant_referrer_reward_first_paid_plan(
     if parts:
         msg = join_lines(
             "🎁 " + bold("Реферальный бонус"),
-            f"Ваш приглашённый оформил первый платный тариф {bold(plan.name)}.",
+            plain("Ваш приглашённый оформил первый платный тариф ")
+            + bold(plan.name)
+            + plain("."),
             *parts,
         )
         await send_telegram_message(referrer.telegram_id, msg, settings=settings)
@@ -193,8 +195,8 @@ async def grant_referrer_reward_first_paid_plan(
                 + bold(f"#{buyer.id}")
                 + " tg "
                 + code(str(buyer.telegram_id)),
-                f"Тариф: {bold(plan.name)}",
-                "Начисление: " + " · ".join(parts),
+                plain("Тариф: ") + bold(plan.name),
+                plain("Начисление: ") + plain(" · ").join(parts),
             ],
             event_type="referral_reward",
             topic=AdminLogTopic.BONUSES,

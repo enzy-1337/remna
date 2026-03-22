@@ -48,9 +48,13 @@ async def _show_subscription_main(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User,
+    *,
+    is_bot_admin: bool = False,
 ) -> None:
     settings = get_settings()
-    cap, sub_url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
+    cap, sub_url = await build_subscription_detail_caption(
+        session, user=db_user, settings=settings, is_bot_admin=is_bot_admin
+    )
     sub = await get_active_subscription(session, db_user.id)
     kb = _sub_main_keyboard(
         has_active=sub is not None,
@@ -65,11 +69,12 @@ async def cb_subscription_main(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    await _show_subscription_main(cq, session, db_user)
+    await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)
 
 
 @router.callback_query(F.data.in_(("sub:plans", "sub:extend")))
@@ -119,6 +124,7 @@ async def cb_buy_plan(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -141,7 +147,9 @@ async def cb_buy_plan(
     if not cq.message or cq.bot is None:
         return
     if ok:
-        cap, sub_url = await build_subscription_detail_caption(session, user=db_user, settings=settings)
+        cap, sub_url = await build_subscription_detail_caption(
+            session, user=db_user, settings=settings, is_bot_admin=is_bot_admin
+        )
         full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
         kb = _sub_main_keyboard(
@@ -242,6 +250,7 @@ async def cb_toggle_ar(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -255,4 +264,4 @@ async def cb_toggle_ar(
     if not ok:
         await cq.answer(strip_for_popup_alert(tip)[:200], show_alert=True)
         return
-    await _show_subscription_main(cq, session, db_user)
+    await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)

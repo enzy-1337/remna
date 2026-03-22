@@ -647,13 +647,21 @@ async def cb_admin_add_days_start(
         await cq.answer("Подписка не найдена", show_alert=True)
         return
     await state.set_state(AdminSubscriptionStates.waiting_add_days)
-    await state.update_data(admin_add_days_sub_id=sub_id, admin_add_days_user_id=user_id)
     await cq.answer()
     if cq.message and cq.bot:
-        await cq.bot.send_message(
-            cq.message.chat.id,
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
             esc("Введите целое число дней для продления подписки (1-3650)."),
         )
+        await state.update_data(
+            admin_add_days_sub_id=sub_id,
+            admin_add_days_user_id=user_id,
+            admin_add_days_prompt_mid=sent.message_id,
+        )
+    else:
+        await state.update_data(admin_add_days_sub_id=sub_id, admin_add_days_user_id=user_id)
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_add_days), F.text)
@@ -672,15 +680,24 @@ async def msg_admin_add_days(
     data = await state.get_data()
     sub_id = data.get("admin_add_days_sub_id")
     user_id = data.get("admin_add_days_user_id")
-    await state.clear()
+    prompt_mid = data.get("admin_add_days_prompt_mid")
+
+    async def _del_admin_input() -> None:
+        if message.bot:
+            await _try_delete_message(message.bot, message.chat.id, message.message_id)
+
     if not isinstance(sub_id, int) or not isinstance(user_id, int):
+        await _del_admin_input()
+        await state.clear()
         return
     raw = (message.text or "").strip()
     if not raw.isdigit():
+        await _del_admin_input()
         await message.answer("Нужно целое число дней.")
         return
     days = int(raw)
     if days < 1 or days > 3650:
+        await _del_admin_input()
         await message.answer("Допустимо от 1 до 3650 дней.")
         return
 
@@ -692,8 +709,17 @@ async def msg_admin_add_days(
         )
     ).scalar_one_or_none()
     if sub is None:
+        await _del_admin_input()
+        if message.bot and prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+        await state.clear()
         await message.answer("Подписка не найдена.")
         return
+
+    await _del_admin_input()
+    if message.bot and prompt_mid is not None:
+        await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
 
     sub.expires_at = sub.expires_at + timedelta(days=days)
     pl = sub.plan
@@ -748,10 +774,20 @@ async def cb_admin_add_balance_start(
         return
 
     await state.set_state(AdminSubscriptionStates.waiting_add_balance)
-    await state.update_data(admin_add_balance_user_id=uid)
     await cq.answer()
-    if cq.message:
-        await cq.message.answer(esc("Введите сумму для добавления баланса (например 10 или 10.5)."))
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc("Введите сумму для добавления баланса (например 10 или 10.5)."),
+        )
+        await state.update_data(
+            admin_add_balance_user_id=uid,
+            admin_add_balance_prompt_mid=sent.message_id,
+        )
+    else:
+        await state.update_data(admin_add_balance_user_id=uid)
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_add_balance), F.text)
@@ -770,25 +806,42 @@ async def msg_admin_add_balance(
 
     data = await state.get_data()
     user_id = data.get("admin_add_balance_user_id")
-    await state.clear()
+    prompt_mid = data.get("admin_add_balance_prompt_mid")
+
+    async def _del_admin_input() -> None:
+        if message.bot:
+            await _try_delete_message(message.bot, message.chat.id, message.message_id)
 
     if not isinstance(user_id, int):
+        await _del_admin_input()
+        await state.clear()
         return
 
     raw = (message.text or "").strip().replace(",", ".")
     try:
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
+        await _del_admin_input()
         await message.answer("Нужно число, например 10 или 10.5.")
         return
     if amount <= 0:
+        await _del_admin_input()
         await message.answer("Сумма должна быть > 0.")
         return
 
     u = await session.get(User, user_id)
     if u is None:
+        await _del_admin_input()
+        if message.bot and prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+        await state.clear()
         await message.answer("Пользователь не найден.")
         return
+
+    await _del_admin_input()
+    if message.bot and prompt_mid is not None:
+        await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
 
     u.balance += amount
     session.add(

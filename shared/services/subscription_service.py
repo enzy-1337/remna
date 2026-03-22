@@ -423,8 +423,8 @@ async def remove_hwid_device_from_panel(
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Нет активной подписки.")
-    if sub.devices_count <= MIN_DEVICES:
-        return False, plain(f"Минимум {MIN_DEVICES} устройства — отвязка недоступна.")
+    if sub.devices_count < 1:
+        return False, plain("Нет оплаченных слотов для уменьшения лимита.")
 
     if user.remnawave_uuid is None:
         return False, plain("Ошибка профиля VPN.")
@@ -439,7 +439,7 @@ async def remove_hwid_device_from_panel(
     except RemnaWaveError as e:
         return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
-    new_limit = sub.devices_count - 1
+    new_limit = max(0, sub.devices_count - 1)
     try:
         await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
     except RemnaWaveError as e:
@@ -472,8 +472,8 @@ async def remove_device_slot(
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Нет активной подписки.")
-    if sub.devices_count <= MIN_DEVICES:
-        return False, plain(f"Минимум {MIN_DEVICES} устройства — удаление недоступно.")
+    if sub.devices_count < 1:
+        return False, plain("Нет слотов для уменьшения лимита.")
 
     dev = await session.get(Device, device_id)
     if dev is None or dev.user_id != user.id or dev.subscription_id != sub.id:
@@ -483,7 +483,7 @@ async def remove_device_slot(
         return False, plain("Ошибка профиля VPN.")
 
     rw = RemnaWaveClient(settings)
-    new_limit = sub.devices_count - 1
+    new_limit = max(0, sub.devices_count - 1)
     try:
         await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
     except RemnaWaveError as e:

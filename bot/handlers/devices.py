@@ -23,7 +23,6 @@ from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
     MAX_DEVICES,
-    MIN_DEVICES,
     add_paid_device_slot,
     get_active_subscription,
     remove_hwid_device_from_panel,
@@ -96,6 +95,7 @@ async def _render_devices(
     user: User,
     *,
     ctx: str,
+    is_bot_admin: bool = False,
 ) -> tuple[str, object]:
     settings = get_settings()
     sub = await get_active_subscription(session, user.id)
@@ -133,26 +133,23 @@ async def _render_devices(
         if n_alt is not None:
             used = n_alt
 
-    if uinf is not None:
-        max_panel = rw_hwid_device_max(uinf)
-        if max_panel is None:
-            max_part = bold("∞")
-        else:
-            max_part = bold(str(max_panel))
-    else:
-        max_part = bold(str(sub.devices_count))
+    panel_lim = rw_hwid_device_max(uinf) if uinf is not None else None
+    slot_limit_shown = panel_lim if panel_lim is not None else sub.devices_count
+    max_slots_bot = bold("∞") if is_bot_admin else bold(str(MAX_DEVICES))
+    slots_line = (
+        plain("📟 Слоты: ")
+        + bold(str(slot_limit_shown))
+        + plain(" / ")
+        + max_slots_bot
+        + plain(" (лимит в панели / макс. в боте)")
+    )
+    hwid_line = plain("📱 В списке HWID: ") + bold(str(used))
 
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
-        plain("Слотов в подписке (бот): ")
-        + bold(str(sub.devices_count))
-        + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})"),
-        plain("В панели: ")
-        + bold(str(used))
-        + plain(" / ")
-        + max_part
-        + plain(" (подключено / лимит)"),
+        slots_line,
+        hwid_line,
         "",
         plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
     )
@@ -166,9 +163,10 @@ async def _open_devices_screen(
     db_user: User,
     *,
     ctx: str,
+    is_bot_admin: bool = False,
 ) -> None:
     settings = get_settings()
-    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    text, kb = await _render_devices(session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
@@ -182,11 +180,12 @@ async def cb_devices_main(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    await _open_devices_screen(cq, session, db_user, ctx=CTX_MAIN)
+    await _open_devices_screen(cq, session, db_user, ctx=CTX_MAIN, is_bot_admin=is_bot_admin)
 
 
 @router.callback_query(F.data == "sub:devices")
@@ -194,11 +193,12 @@ async def cb_devices_from_sub(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    await _open_devices_screen(cq, session, db_user, ctx=CTX_SUB)
+    await _open_devices_screen(cq, session, db_user, ctx=CTX_SUB, is_bot_admin=is_bot_admin)
 
 
 @router.callback_query(F.data.startswith("dev:list:"))
@@ -206,13 +206,14 @@ async def cb_dev_list(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
     parts = cq.data.split(":")
     ctx = parts[2] if len(parts) > 2 else CTX_MAIN
-    await _open_devices_screen(cq, session, db_user, ctx=ctx)
+    await _open_devices_screen(cq, session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
     await cq.answer()
 
 
@@ -221,6 +222,7 @@ async def cb_dev_add(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -233,7 +235,11 @@ async def cb_dev_add(
         await notify_admin(
             settings,
             title="🖥 " + bold("Куплен слот устройства"),
-            lines=[f"Списано: {bold(str(settings.extra_device_price_rub))} ₽"],
+            lines=[
+                plain("Списано: ")
+                + bold(str(settings.extra_device_price_rub))
+                + plain(" ₽"),
+            ],
             event_type="extra_device_purchase",
             topic=AdminLogTopic.DEVICES,
             subject_user=db_user,
@@ -242,7 +248,7 @@ async def cb_dev_add(
     if not ok:
         await cq.answer(msg, show_alert=True)
         return
-    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    text, kb = await _render_devices(session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
     cap = join_lines(text, "", msg)
     await answer_callback_with_photo_screen(
         cq,
@@ -317,6 +323,7 @@ async def cb_dev_rw_unlink(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -341,7 +348,7 @@ async def cb_dev_rw_unlink(
         await cq.answer(strip_for_popup_alert(msg)[:200], show_alert=True)
         return
 
-    text, kb = await _render_devices(session, db_user, ctx=ctx)
+    text, kb = await _render_devices(session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
     cap = join_lines(text, "", msg)
     await answer_callback_with_photo_screen(
         cq,
