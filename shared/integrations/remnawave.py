@@ -27,6 +27,13 @@ class RemnaWaveError(Exception):
     """Ошибка вызова Remnawave API."""
 
 
+def is_remnawave_not_found(err: BaseException) -> bool:
+    """Панель вернула 404 (учётка удалена или uuid не существует)."""
+    if not isinstance(err, RemnaWaveError):
+        return False
+    return "HTTP 404" in str(err)
+
+
 class RemnaWaveClient:
     """Минимальный клиент для шага 6 (создание пользователя, ссылка подписки)."""
 
@@ -116,14 +123,30 @@ class RemnaWaveClient:
                     logger.error("Remnawave 401 Unauthorized — проверьте REMNAWAVE_API_TOKEN")
                     raise RemnaWaveError("Неверный или просроченный токен Remnawave")
                 if r.status_code >= 400:
-                    logger.warning(
-                        "Remnawave %s %s -> %s %s",
-                        method,
-                        resource,
-                        r.status_code,
-                        r.text[:500],
+                    # GET users/{uuid} 404 — обычно удалённый пользователь; не засоряем WARNING при каждом sync
+                    res_parts = resource.split("/")
+                    quiet_404_user = (
+                        method == "GET"
+                        and r.status_code == 404
+                        and len(res_parts) == 2
+                        and res_parts[0] == "users"
+                        and not res_parts[1].startswith("by-")
                     )
-                    raise RemnaWaveError(f"Remnawave HTTP {r.status_code}: {r.text[:200]}")
+                    if quiet_404_user:
+                        logger.debug(
+                            "Remnawave %s %s -> 404 (user not found in panel)",
+                            method,
+                            resource,
+                        )
+                    else:
+                        logger.warning(
+                            "Remnawave %s %s -> %s %s",
+                            method,
+                            resource,
+                            r.status_code,
+                            r.text[:500],
+                        )
+                    raise RemnawaveError(f"Remnawave HTTP {r.status_code}: {r.text[:200]}")
                 return r.json()
             except httpx.RequestError as e:
                 last_exc = e

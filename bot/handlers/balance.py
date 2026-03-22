@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_keyboard, topup_providers_keyboard
 from bot.states.payment import TopupStates
-from bot.utils.screen_photo import answer_callback_with_photo_screen
+from bot.utils.screen_photo import (
+    answer_callback_with_photo_screen,
+    delete_message_safe,
+    send_profile_screen,
+)
 from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.transaction import Transaction
@@ -187,6 +191,8 @@ async def cb_topup_custom(
         return
     await state.set_state(TopupStates.waiting_amount_rub)
     await cq.answer()
+    if cq.message is not None:
+        await state.update_data(topup_prompt_message_id=cq.message.message_id)
     cancel_kb = InlineKeyboardBuilder()
     cancel_kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="topup:cancel_fsm"))
     await _edit_or_send_balance(
@@ -241,24 +247,57 @@ async def msg_topup_custom_amount(
         await state.clear()
         return
     assert db_user is not None
+    bot = message.bot
+    chat_id = message.chat.id
+    data = await state.get_data()
+    prompt_mid = data.get("topup_prompt_message_id")
+
+    async def _cleanup_input() -> None:
+        await delete_message_safe(message)
+
     raw = (message.text or "").strip().replace(",", ".")
     try:
         d = Decimal(raw)
     except InvalidOperation:
-        await message.answer(join_lines("Введите число, например", code("250")))
+        await _cleanup_input()
+        if bot:
+            await bot.send_message(chat_id, "Введите число, например 250.")
         return
     if d != d.to_integral_value():
-        await message.answer(esc("Укажите целое число рублей."))
+        await _cleanup_input()
+        if bot:
+            await bot.send_message(chat_id, "Укажите целое число рублей.")
         return
     amt = int(d)
     if amt < 50 or amt > 100_000:
-        await message.answer(esc("Допустимо от 50 до 100000 ₽."))
+        await _cleanup_input()
+        if bot:
+            await bot.send_message(chat_id, "Допустимо от 50 до 100000 ₽.")
         return
+
     await state.clear()
-    await message.answer(
-        join_lines(f"Пополнение на {bold(str(amt))} ₽", "", plain("Выберите способ оплаты:")),
-        reply_markup=topup_providers_keyboard(amt),
+    await _cleanup_input()
+    if bot and prompt_mid is not None:
+        try:
+            await bot.delete_message(chat_id, int(prompt_mid))
+        except Exception:
+            logger.debug("delete topup prompt message failed", exc_info=True)
+
+    settings = get_settings()
+    cap = join_lines(
+        f"Пополнение на {bold(str(amt))} ₽",
+        "",
+        plain("Выберите способ оплаты:"),
     )
+    if bot:
+        await send_profile_screen(
+            bot,
+            chat_id=chat_id,
+            caption=cap,
+            reply_markup=topup_providers_keyboard(amt),
+            settings=settings,
+            delete_message=None,
+        )
 
 
 @router.callback_query(F.data.startswith("topup:prov:"))

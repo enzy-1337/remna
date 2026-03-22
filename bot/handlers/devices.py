@@ -17,7 +17,7 @@ from shared.integrations.rw_hwid_devices import (
     normalize_hwid_devices_list,
 )
 from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user, rw_hwid_device_max
-from shared.md2 import bold, code, esc, join_lines, plain
+from shared.md2 import bold, code, esc, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
@@ -338,7 +338,7 @@ async def cb_dev_rw_unlink(
 
     ok, msg = await remove_hwid_device_from_panel(session, user=db_user, hwid=hwid, settings=settings)
     if not ok:
-        await cq.answer(msg, show_alert=True)
+        await cq.answer(strip_for_popup_alert(msg)[:200], show_alert=True)
         return
 
     text, kb = await _render_devices(session, db_user, ctx=ctx)

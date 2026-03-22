@@ -152,7 +152,7 @@ async def build_subscription_detail_caption(
             max_part = bold(str(max_panel))
         devices_line = (
             plain("📟 Устройства ")
-            + plain("(панель)")
+            # + plain("(панель)")
             + plain(": ")
             + bold(str(n_dev))
             + plain(" / ")
@@ -162,13 +162,14 @@ async def build_subscription_detail_caption(
         n_dev = await count_devices(session, sub.id)
         devices_line = (
             plain("📟 Устройства ")
-            + plain("(бот)")
+            # + plain("(бот)")
             + plain(": ")
             + bold(str(n_dev))
             + plain(" / ")
             + bold(str(sub.devices_count))
             + plain(" ")
-            + italic(f"(макс. слотов в боте до {MAX_DEVICES})")
+            # + italic(f"(макс. слотов в боте до {MAX_DEVICES})")
+            + italic(f"(макс. слотов до {MAX_DEVICES})")
         )
 
     exp = sub.expires_at

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import re
+
 # Символы, которые нужно экранировать вне «сущностей» (см. документацию Bot API)
 _MD2_SPECIAL = frozenset(r"_*[]()~`>#+-=|{}.!")
 
@@ -65,3 +67,19 @@ def link(text: str, url: str) -> str:
     """Инлайн-ссылка MarkdownV2: в URL экранируются \\ и )."""
     u = url.replace("\\", r"\\").replace(")", r"\)")
     return f"[{esc(text)}]({u})"
+
+
+def strip_for_popup_alert(text: str) -> str:
+    """
+    Текст, собранный через plain/bold/join_lines для MarkdownV2, в обычную строку
+    для callback answer (show_alert) — там нет разметки, видны «\\.» и «*».
+    """
+    s = text
+    s = re.sub(r"\|\|(.+?)\|\|", r"\1", s, flags=re.DOTALL)
+    s = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", s)
+    s = re.sub(r"\*([^*]+)\*", r"\1", s)
+    s = re.sub(r"__([^_]+)__", r"\1", s)
+    s = re.sub(r"_([^_]+)_", r"\1", s)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = re.sub(r"\\(.)", r"\1", s)
+    return s.strip()

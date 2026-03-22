@@ -11,7 +11,7 @@ from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.ui.subscription_detail import build_subscription_detail_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, join_lines, plain
+from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
 from shared.services.subscription_service import (
     get_active_subscription,
@@ -253,6 +253,6 @@ async def cb_toggle_ar(
     new_val = not sub.auto_renew
     ok, tip = await set_subscription_auto_renew(session, db_user.id, new_val)
     if not ok:
-        await cq.answer(tip, show_alert=True)
+        await cq.answer(strip_for_popup_alert(tip)[:200], show_alert=True)
         return
     await _show_subscription_main(cq, session, db_user)

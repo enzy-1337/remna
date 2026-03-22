@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.database import get_session_factory
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, is_remnawave_not_found
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
@@ -185,6 +185,16 @@ async def _sync_one_linked_user(
     try:
         info = await rw.get_user(str(user.remnawave_uuid))
     except RemnaWaveError as e:
+        if is_remnawave_not_found(e):
+            gone = user.remnawave_uuid
+            user.remnawave_uuid = None
+            logger.info(
+                "RW sync: учётная запись в панели не найдена (404), сброшен remnawave_uuid "
+                "user=%s uuid=%s",
+                user.id,
+                gone,
+            )
+            return
         logger.warning("RW sync get_user failed user=%s: %s", user.id, e)
         return
     await _upsert_subscription_from_rw_payload(session, user=user, info=info, now=now)
@@ -245,10 +255,15 @@ async def sync_once(settings: Settings) -> None:
             user.remnawave_uuid = uid
 
         r = await session.execute(select(User).where(User.remnawave_uuid.is_not(None)))
-        for user in list(r.scalars().all()):
+        linked = list(r.scalars().all())
+        for user in linked:
             await _sync_one_linked_user(session, rw, settings, user, now)
 
         await session.commit()
+        logger.info(
+            "RW sync: цикл завершён (импорт списка + синхр. %s пользователей с remnawave_uuid)",
+            len(linked),
+        )
 
 
 async def sync_loop(settings: Settings, stop_event: asyncio.Event) -> None:

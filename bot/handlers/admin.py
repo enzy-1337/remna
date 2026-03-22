@@ -27,7 +27,7 @@ from bot.states.admin import (
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
-from shared.md2 import bold, code, esc, italic, join_lines, plain
+from shared.md2 import bold, code, esc, italic, join_lines, plain, strip_for_popup_alert
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
@@ -137,7 +137,8 @@ async def _admin_pick_subscription(
 def _subscription_caption_lines(sub: Subscription, plan) -> list[str]:
     now = datetime.now(timezone.utc)
     pname = plan.name if plan is not None else "—"
-    is_trial = sub.status == "trial" or (plan is not None and getattr(plan, "name", "") == "Триал")
+    # Тип «триал» только по статусу записи; имя плана «Триал» при active — рассинхрон БД, не смешиваем с триалом
+    is_trial = sub.status == "trial"
     kind = plain("триал") if is_trial else plain("платная")
     if sub.status == "cancelled":
         st = plain("отключена админом")
@@ -153,7 +154,7 @@ def _subscription_caption_lines(sub: Subscription, plan) -> list[str]:
             left = plain(f"~{days}д {hours}ч")
     exp_s = sub.expires_at.strftime("%d.%m.%Y %H:%M UTC")
     return [
-        plain("Подписка: ") + bold(pname) + plain(" · ") + kind + plain(" · ") + st,
+        plain("Тариф: ") + bold(pname) + plain(" · ") + kind + plain(" · ") + st,
         plain("До: ") + bold(exp_s),
         plain("Остаток: ") + left,
     ]
@@ -226,28 +227,39 @@ async def _build_user_card(
 
     phone_s = esc((u.phone or "").strip()) if (u.phone or "").strip() else plain("—")
     rw_line = (
-        plain("RemnaWave: ") + code(str(u.remnawave_uuid))
+        plain("UUID: ") + code(str(u.remnawave_uuid))
         if u.remnawave_uuid is not None
-        else plain("RemnaWave: не привязан")
+        else plain("Панель VPN: ") + italic("не привязана")
     )
+    sep = plain("────────────────────────")
     lines: list[str] = [
-        "👤 " + bold(f"Пользователь #{u.id}"),
-        plain("Telegram: ") + code(str(u.telegram_id)),
+        "👤 " + bold(f"Карточка пользователя · #{u.id}"),
+        sep,
+        "📱 " + bold("Telegram"),
+        plain("ID: ") + code(str(u.telegram_id)),
         plain("Username: ") + esc(u.username or "—"),
         plain("Имя: ") + esc(full_name),
         plain("Телефон: ") + phone_s,
-        plain("Язык Telegram: ") + esc(u.language_code or "—"),
+        plain("Язык: ") + esc(u.language_code or "—"),
+        sep,
+        "🖥 " + bold("Remnawave"),
         rw_line,
+        sep,
+        "💳 " + bold("Баланс и рефералы"),
         plain("Баланс: ") + bold(bal) + plain(" ₽"),
-        plain("Пригласил людей: ") + bold(str(invited)),
-        plain(f"Триал использован: {'да' if u.trial_used else 'нет'}"),
-        plain(f"Статус: {'🚫 заблокирован' if u.is_blocked else '✅ активен'}"),
+        plain("Приглашено по ссылке: ") + bold(str(invited)),
+        plain("Триал использован: ") + bold("да" if u.trial_used else "нет"),
+        sep,
+        "⚡ " + bold("Статус в боте"),
+        plain("Аккаунт: ") + bold("заблокирован 🚫" if u.is_blocked else "активен ✅"),
         plain("Причина блока: ") + reason,
         "",
     ]
     if sub is None:
-        lines.append(plain("Подписка: ") + bold("нет"))
+        lines.append("📋 " + bold("Подписка"))
+        lines.append(plain("Нет активной или отключённой записи для действий."))
     else:
+        lines.append("📋 " + bold("Подписка"))
         lines.extend(_subscription_caption_lines(sub, plan))
 
     b = InlineKeyboardBuilder()
@@ -458,7 +470,8 @@ async def cb_admin_delete_user_confirm(
     settings = get_settings()
     ok, msg = await delete_user_from_app(session, user_id=uid, settings=settings)
     if not ok:
-        await cq.answer(msg[:180] + ("…" if len(msg) > 180 else ""), show_alert=True)
+        plain_msg = strip_for_popup_alert(msg)
+        await cq.answer(plain_msg[:200] + ("…" if len(plain_msg) > 200 else ""), show_alert=True)
         return
     await cq.answer("Удалено")
     await _render_admin_users_list_screen(cq, session, page=0)
