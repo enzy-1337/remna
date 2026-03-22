@@ -31,15 +31,15 @@ def _sub_main_keyboard(
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
-        b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
+    if subscription_url:
+        b.row(InlineKeyboardButton(text="📎 Подключиться", url=subscription_url))
         b.row(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
+        b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
         ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
-    if subscription_url:
-        b.row(InlineKeyboardButton(text="📎 Подключиться", url=subscription_url))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
