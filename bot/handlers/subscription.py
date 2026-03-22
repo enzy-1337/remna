@@ -31,8 +31,8 @@ def _sub_main_keyboard(
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
-    if subscription_url:
-        b.row(InlineKeyboardButton(text="📎 Подключиться", url=subscription_url))
+        if subscription_url:
+            b.row(InlineKeyboardButton(text="📎 Подключиться", url=subscription_url))
         b.row(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
