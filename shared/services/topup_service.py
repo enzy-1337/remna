@@ -195,6 +195,8 @@ async def notify_topup_success(
         async with factory2() as session2:
             u = await session2.get(User, user_id)
             if u is not None:
+                from shared.services.admin_log_topics import AdminLogTopic
+
                 await notify_admin(
                     settings,
                     title="💳 " + bold("Пополнение баланса"),
@@ -203,6 +205,7 @@ async def notify_topup_success(
                         f"Провайдер: {bold(provider_name or '—')}",
                     ],
                     event_type="topup",
+                    topic=AdminLogTopic.PAYMENTS,
                     subject_user=u,
                     session=session2,
                 )

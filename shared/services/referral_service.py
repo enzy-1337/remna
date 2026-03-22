@@ -161,6 +161,8 @@ async def grant_referrer_reward_first_paid_plan(
         await send_telegram_message(referrer.telegram_id, msg, settings=settings)
         from shared.services.admin_notify import notify_admin
 
+        from shared.services.admin_log_topics import AdminLogTopic
+
         await notify_admin(
             settings,
             title="👥 " + bold("Реферальный бонус начислен"),
@@ -177,6 +179,7 @@ async def grant_referrer_reward_first_paid_plan(
                 "Начисление: " + " · ".join(parts),
             ],
             event_type="referral_reward",
+            topic=AdminLogTopic.BONUSES,
             subject_user=buyer,
             session=session,
         )

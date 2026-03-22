@@ -1,8 +1,9 @@
-"""Уведомления в админ-чат (шаг 12) + запись в notifications_log (MarkdownV2)."""
+"""Уведомления в админ-чат (темы форума) + запись в notifications_log (MarkdownV2)."""
 
 from __future__ import annotations
 
 import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
@@ -10,6 +11,7 @@ from shared.database import get_session_factory
 from shared.md2 import bold, code, esc, join_lines
 from shared.models.notification_log import NotificationLog
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -65,12 +67,13 @@ async def notify_admin(
     title: str,
     lines: list[str],
     event_type: str,
+    topic: AdminLogTopic = AdminLogTopic.GENERAL,
     subject_user: User | None = None,
     subject_user_id: int | None = None,
     session: AsyncSession | None = None,
 ) -> None:
     """
-    Отправка MarkdownV2 в ADMIN_LOG_CHAT_ID (опционально ADMIN_LOG_TOPIC_ID для форумов).
+    MarkdownV2 в тему форума по типу события (ADMIN_LOG_TOPIC_* или общий ADMIN_LOG_TOPIC_ID).
     """
     uid = subject_user.id if subject_user is not None else subject_user_id
     chunks: list[str] = []
@@ -93,7 +96,7 @@ async def notify_admin(
 
     chat_id = settings.admin_log_chat_id
     assert chat_id is not None
-    thread = settings.admin_log_topic_id
+    thread = settings.admin_log_thread_for(topic)
 
     ok = await send_telegram_message(
         chat_id,
@@ -104,7 +107,7 @@ async def notify_admin(
     )
     log_status = "sent" if ok else "failed"
     if not ok:
-        logger.warning("admin notify failed event=%s", event_type)
+        logger.warning("admin notify failed event=%s topic=%s", event_type, topic.value)
 
     if uid is not None:
         await _persist_log(
@@ -114,3 +117,28 @@ async def notify_admin(
             status=log_status,
             session=session,
         )
+
+
+async def notify_admin_plain(
+    settings: Settings,
+    *,
+    text: str,
+    topic: AdminLogTopic,
+    event_type: str = "plain",
+) -> bool:
+    """
+    Текст без parse_mode (эмодзи, хэштеги, многострочные шаблоны бэкапов и отчётов).
+    """
+    if not _admin_chat_configured(settings):
+        logger.debug("admin plain notify skipped: no chat event=%s", event_type)
+        return False
+    chat_id = settings.admin_log_chat_id
+    assert chat_id is not None
+    thread = settings.admin_log_thread_for(topic)
+    return await send_telegram_message(
+        chat_id,
+        text[:12000],
+        message_thread_id=thread,
+        parse_mode=None,
+        settings=settings,
+    )

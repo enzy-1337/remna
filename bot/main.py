@@ -36,6 +36,7 @@ from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
 from shared.config import get_settings
+from shared.services.admin_report_loop import admin_report_loop
 from shared.services.remnawave_sync import sync_loop
 
 
@@ -80,8 +81,11 @@ async def main() -> None:
     dp.include_router(fallback_router)
     stop_event = asyncio.Event()
     sync_task: asyncio.Task | None = None
+    report_task: asyncio.Task | None = None
     if settings.remnawave_sync_enabled and not settings.remnawave_stub:
         sync_task = asyncio.create_task(sync_loop(settings, stop_event))
+    if settings.admin_report_enabled:
+        report_task = asyncio.create_task(admin_report_loop(settings, stop_event))
     try:
         await dp.start_polling(bot)
     finally:
@@ -90,6 +94,10 @@ async def main() -> None:
             sync_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sync_task
+        if report_task is not None:
+            report_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await report_task
 
 
 if __name__ == "__main__":

@@ -11,8 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import get_settings
+from shared.md2 import bold, code, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin
 from shared.services.referral_parse import parse_referral_code_from_start_args
 
 
@@ -88,6 +91,21 @@ async def register_user(
                 )
             )
             await session.flush()
+            await notify_admin(
+                settings,
+                title="🎁 " + bold("Реферальный бонус за регистрацию друга"),
+                lines=[
+                    plain("Новый пользователь: ")
+                    + bold(f"#{user.id}")
+                    + plain(" tg ")
+                    + code(str(user.telegram_id)),
+                    plain("Реферер: ") + bold(f"#{referrer.id}") + plain(": +") + bold(str(bonus)) + plain(" ₽"),
+                ],
+                event_type="referral_signup_bonus",
+                topic=AdminLogTopic.BONUSES,
+                subject_user=user,
+                session=session,
+            )
 
     return user, True
 

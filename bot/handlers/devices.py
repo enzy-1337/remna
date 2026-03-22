@@ -17,6 +17,7 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import (
     MAX_DEVICES,
@@ -186,6 +187,7 @@ async def cb_dev_add(
             title="🖥 " + bold("Куплен слот устройства"),
             lines=[f"Списано: {bold(str(settings.extra_device_price_rub))} ₽"],
             event_type="extra_device_purchase",
+            topic=AdminLogTopic.DEVICES,
             subject_user=db_user,
             session=session,
         )

@@ -24,6 +24,8 @@ from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin
 from shared.services.referral_service import count_invited_users
 
 logger = logging.getLogger(__name__)
@@ -653,12 +655,26 @@ async def msg_admin_add_balance(
     await session.commit()
 
     built = await _build_user_card(session, user_id=user_id)
+    settings = get_settings()
+    await notify_admin(
+        settings,
+        title="💳 " + bold("Админ: пополнение баланса"),
+        lines=[
+            plain("Пользователь: ") + bold(f"#{u.id}") + plain(" tg ") + code(str(u.telegram_id)),
+            plain("Сумма: ") + bold(str(amount)) + plain(" ₽"),
+            plain("Админ: ") + bold(f"#{db_user.id}"),
+        ],
+        event_type="admin_balance_add",
+        topic=AdminLogTopic.PAYMENTS,
+        subject_user=u,
+        session=None,
+    )
+
     if built is None or message.bot is None:
         await message.answer(f"Баланс добавлен: +{amount} ₽")
         return
 
     cap, kb = built
-    settings = get_settings()
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,

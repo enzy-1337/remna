@@ -16,7 +16,9 @@ from shared.models.user import User
 from shared.config import get_settings
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
-from shared.md2 import bold, esc, join_lines
+from shared.md2 import bold, esc, join_lines, plain
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin
 from shared.services.user_registration import register_user
 
 router = Router(name="start")
@@ -62,6 +64,15 @@ async def cmd_start(
         intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
         if user.referred_by is not None:
             intro_lines.append(esc("Вы присоединились по приглашению друга."))
+        await notify_admin(
+            settings,
+            title="🆕 " + bold("Новый пользователь"),
+            lines=[plain("Первый /start в боте")],
+            event_type="user_register",
+            topic=AdminLogTopic.USERS,
+            subject_user=user,
+            session=session,
+        )
     else:
         intro_lines.append(esc("С возвращением!"))
 

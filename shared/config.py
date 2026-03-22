@@ -4,6 +4,8 @@ from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import AliasChoices, Field, computed_field, field_validator, model_validator
+
+from shared.services.admin_log_topics import AdminLogTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -79,6 +81,33 @@ class Settings(BaseSettings):
     admin_log_topic_id: int | None = Field(
         default=None,
         validation_alias="ADMIN_LOG_TOPIC_ID",
+        description="Тема по умолчанию, если не задана отдельная для типа события",
+    )
+    admin_log_topic_general: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_GENERAL")
+    admin_log_topic_payments: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_PAYMENTS")
+    admin_log_topic_users: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_USERS")
+    admin_log_topic_trials: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_TRIALS")
+    admin_log_topic_bonuses: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_BONUSES")
+    admin_log_topic_subscriptions: int | None = Field(
+        default=None, validation_alias="ADMIN_LOG_TOPIC_SUBSCRIPTIONS"
+    )
+    admin_log_topic_promo: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_PROMO")
+    admin_log_topic_devices: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_DEVICES")
+    admin_log_topic_support: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_SUPPORT")
+    admin_log_topic_backups: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_BACKUPS")
+    admin_log_topic_reports: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_REPORTS")
+    admin_report_enabled: bool = Field(default=False, validation_alias="ADMIN_REPORT_ENABLED")
+    admin_report_hour_utc: int = Field(
+        default=8,
+        ge=0,
+        le=23,
+        validation_alias="ADMIN_REPORT_HOUR_UTC",
+        description="Час UTC для ежедневного отчёта в админ-чат",
+    )
+    admin_report_timezone: str = Field(
+        default="Europe/Moscow",
+        validation_alias="ADMIN_REPORT_TIMEZONE",
+        description="Часовой пояс для границ «вчера» в отчёте (напр. Europe/Moscow)",
     )
     admin_telegram_id: int | None = Field(
         default=None,
@@ -209,12 +238,26 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("admin_log_topic_id", mode="before")
+    @field_validator(
+        "admin_log_topic_id",
+        "admin_log_topic_general",
+        "admin_log_topic_payments",
+        "admin_log_topic_users",
+        "admin_log_topic_trials",
+        "admin_log_topic_bonuses",
+        "admin_log_topic_subscriptions",
+        "admin_log_topic_promo",
+        "admin_log_topic_devices",
+        "admin_log_topic_support",
+        "admin_log_topic_backups",
+        "admin_log_topic_reports",
+        mode="before",
+    )
     @classmethod
     def _empty_admin_topic(cls, v: object) -> object:
         if v is None or v == "":
             return None
-        return v
+        return int(v)
 
     @field_validator("admin_telegram_id", mode="before")
     @classmethod
@@ -244,6 +287,27 @@ class Settings(BaseSettings):
         if self.admin_telegram_id is not None:
             out = list(dict.fromkeys([*out, self.admin_telegram_id]))
         return out
+
+    def admin_log_thread_for(self, topic: AdminLogTopic) -> int | None:
+        m: dict[AdminLogTopic, int | None] = {
+            AdminLogTopic.GENERAL: self.admin_log_topic_general,
+            AdminLogTopic.PAYMENTS: self.admin_log_topic_payments,
+            AdminLogTopic.USERS: self.admin_log_topic_users,
+            AdminLogTopic.TRIALS: self.admin_log_topic_trials,
+            AdminLogTopic.BONUSES: self.admin_log_topic_bonuses,
+            AdminLogTopic.SUBSCRIPTIONS: self.admin_log_topic_subscriptions,
+            AdminLogTopic.PROMO: self.admin_log_topic_promo,
+            AdminLogTopic.DEVICES: self.admin_log_topic_devices,
+            AdminLogTopic.SUPPORT: self.admin_log_topic_support,
+            AdminLogTopic.BACKUPS: self.admin_log_topic_backups,
+            AdminLogTopic.REPORTS: self.admin_log_topic_reports,
+        }
+        tid = m.get(topic)
+        if tid is not None:
+            return tid
+        if self.admin_log_topic_general is not None:
+            return self.admin_log_topic_general
+        return self.admin_log_topic_id
 
     @model_validator(mode="after")
     def _validate_remnawave(self) -> "Settings":

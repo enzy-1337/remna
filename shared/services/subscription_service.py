@@ -290,6 +290,8 @@ async def purchase_plan_with_balance(
     from shared.services.referral_service import grant_referrer_reward_first_paid_plan
 
     await grant_referrer_reward_first_paid_plan(session, buyer=user, plan=plan, settings=settings)
+    from shared.services.admin_log_topics import AdminLogTopic
+
     await notify_admin(
         settings,
         title="🔑 " + bold("Покупка тарифа с баланса"),
@@ -299,6 +301,7 @@ async def purchase_plan_with_balance(
             plain("До: ") + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
         ],
         event_type="purchase_plan",
+        topic=AdminLogTopic.SUBSCRIPTIONS,
         subject_user=user,
         session=session,
     )

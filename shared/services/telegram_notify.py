@@ -16,13 +16,15 @@ async def send_telegram_message(
     chat_id: int | str,
     text: str,
     *,
-    parse_mode: str = "MarkdownV2",
+    parse_mode: str | None = "MarkdownV2",
     message_thread_id: int | None = None,
     settings: Settings | None = None,
 ) -> bool:
     s = settings or get_settings()
     url = f"https://api.telegram.org/bot{s.bot_token}/sendMessage"
-    payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
     try:

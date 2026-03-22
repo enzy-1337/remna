@@ -19,6 +19,7 @@ from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import get_active_subscription
 from shared.md2 import bold, code, join_lines, plain
@@ -109,6 +110,7 @@ async def cb_trial_activate(
             + plain(" ГБ"),
         ],
         event_type="trial_activate",
+        topic=AdminLogTopic.TRIALS,
         subject_user=db_user,
         session=session,
     )
