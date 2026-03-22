@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, italic, join_lines, link, plain
+from shared.md2 import bold, code, italic, join_lines, link, plain
 from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
@@ -142,18 +142,19 @@ async def cb_ref_list(
     else:
         lines = []
         for i, u in enumerate(users, start=1):
+            # В link() только сырой текст — внутри уже вызывается esc(); plain/esc снаружи ломают разбор [].
             display_name = u.first_name or u.last_name or u.username or f"user_{u.id}"
             if u.username:
-                tag_part = link(plain("@") + esc(u.username), f"https://t.me/{u.username}")
+                tag_part = link(f"@{u.username}", f"https://t.me/{u.username}")
             else:
-                tag_part = link(plain("@без_username"), f"tg://user?id={u.telegram_id}")
+                tag_part = link("без @username", f"tg://user?id={u.telegram_id}")
             lines.append(
                 plain(f"{i}. ")
                 + tag_part
-                + plain(" - ")
+                + plain(" — ")
                 + link(display_name, f"tg://user?id={u.telegram_id}")
                 + plain(" (")
-                + esc(str(u.telegram_id))
+                + plain(str(u.telegram_id))
                 + plain(")")
             )
     body = join_lines("📋 " + bold("Приглашённые"), "", "\n".join(lines))

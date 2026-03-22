@@ -230,25 +230,53 @@ async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
     sup = support_telegram_url(settings.support_username)
     privacy = (settings.info_privacy_policy_url or "").strip()
     terms = (settings.info_terms_of_service_url or "").strip()
+
+    primary_admin_id: int | None = settings.admin_telegram_id
+    if primary_admin_id is None and settings.admin_telegram_ids:
+        primary_admin_id = settings.admin_telegram_ids[0]
+
+    help_line = plain("Нужна помощь — нажмите «Поддержка» ниже")
+    if primary_admin_id is not None:
+        help_line += plain(" или ") + link(
+            "написать администратору",
+            f"tg://user?id={primary_admin_id}",
+        )
+    help_line += plain(".")
+
+    doc_privacy = (
+        plain(f"🔒 Политика конфиденциальности ({privacy})")
+        if privacy
+        else plain("🔒 Политика конфиденциальности — задайте INFO_PRIVACY_POLICY_URL в .env.")
+    )
+    doc_terms = (
+        plain(f"📋 Пользовательское соглашение ({terms})")
+        if terms
+        else plain("📋 Пользовательское соглашение — задайте INFO_TERMS_OF_SERVICE_URL в .env.")
+    )
+
     cap = join_lines(
         "💡 " + bold("Информация"),
         "",
         plain(
-            "Этот бот помогает оформить и продлить доступ к VPN: баланс, подписка, "
-            "устройства и напоминания — всё в Telegram. Технически доступ предоставляется "
-            "через панель Remnawave."
+            "Этот сервис помогает увереннее пользоваться интернетом: обходить типичные "
+            "ограничения и «глушение» мобильного доступа — в том числе за счёт устойчивых "
+            "маршрутов и работы через белые списки там, где это уместно. Параллельно "
+            "режется навязчивая реклама и лишние трекеры, трафик проходит с более разумной "
+            "фильтрацией — меньше шума и лишних запросов в фоне."
         ),
         "",
-        (
-            plain("🔒 Политика конфиденциальности: ")
-            + (link("читать", privacy) if privacy else plain("— (задайте INFO_PRIVACY_POLICY_URL)"))
-        ),
-        (
-            plain("📜 Пользовательское соглашение: ")
-            + (link("читать", terms) if terms else plain("— (задайте INFO_TERMS_OF_SERVICE_URL)"))
+        plain(
+            "Оформить и продлить доступ, пополнить баланс и управлять устройствами можно "
+            "прямо в этом боте. В базовую подписку уже входят 2 устройства; при необходимости "
+            "можно докупить слоты и пользоваться до 10 устройствами — например, телефон, "
+            "планшет и домашний ПК."
         ),
         "",
-        plain("Нужна помощь — нажмите «Поддержка» ниже."),
+        "📄 " + bold("Документы:"),
+        doc_privacy,
+        doc_terms,
+        "",
+        help_line,
     )
     await answer_callback_with_photo_screen(
         cq,
