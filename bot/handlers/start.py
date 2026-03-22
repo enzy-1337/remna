@@ -113,7 +113,7 @@ async def cb_channel_check(
     is_bot_admin: bool = False,
 ) -> None:
     settings = get_settings()
-    if db_user is None or tg_user is None:
+    if tg_user is None:
         await cq.answer()
         return
 
@@ -131,7 +131,36 @@ async def cb_channel_check(
                 await cq.message.answer(text, reply_markup=kb)
         return
 
-    # Пользователь подписался: открываем главное меню (без сообщения об успешном подтверждении).
+    # После экрана «подпишитесь на канал» пользователя ещё нет в БД — регистрируем здесь.
+    created = False
+    invited_signup_bonus = None
+    if db_user is None:
+        db_user, created, invited_signup_bonus = await register_user(session, tg_user, None)
+
+    if await reject_if_blocked(cq, db_user):
+        return
+
+    intro_lines: list[str] = []
+    if created:
+        intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
+        if db_user.referred_by is not None:
+            intro_lines.append(esc("Вы присоединились по приглашению друга."))
+        if invited_signup_bonus is not None and invited_signup_bonus > 0:
+            intro_lines.append(
+                plain("🎁 На баланс начислено ")
+                + bold(str(invited_signup_bonus))
+                + plain(" ₽ за регистрацию по приглашению.")
+            )
+        await notify_admin(
+            settings,
+            title="🆕 " + bold("Новый пользователь"),
+            lines=[plain("Первый вход после подписки на канал")],
+            event_type="user_register",
+            topic=AdminLogTopic.USERS,
+            subject_user=db_user,
+            session=session,
+        )
+
     await cq.answer()
     if cq.message is None or cq.bot is None:
         return
@@ -145,10 +174,11 @@ async def cb_channel_check(
         is_admin=is_bot_admin,
     )
     cap = profile_caption(db_user, tg_user)
+    caption = join_lines(*intro_lines, "", cap) if intro_lines else cap
     await send_profile_screen(
         cq.bot,
         chat_id=cq.message.chat.id,
-        caption=cap,
+        caption=caption,
         reply_markup=kb,
         settings=settings,
         delete_message=cq.message,
