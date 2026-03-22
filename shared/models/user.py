@@ -61,4 +61,5 @@ class User(Base):
         "Subscription",
         back_populates="user",
         foreign_keys="Subscription.user_id",
+        cascade="all, delete-orphan",
     )

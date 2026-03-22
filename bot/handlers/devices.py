@@ -16,6 +16,7 @@ from shared.integrations.rw_hwid_devices import (
     hwid_device_title,
     normalize_hwid_devices_list,
 )
+from shared.integrations.rw_traffic import extract_connected_devices_from_rw_user, rw_hwid_device_max
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
@@ -42,15 +43,26 @@ def _list_callback(ctx: str) -> str:
     return f"dev:list:{ctx}"
 
 
-async def _fetch_hwid_devices(user: User, settings) -> tuple[list[dict], str | None]:
+async def _fetch_panel_hwid_context(
+    user: User, settings
+) -> tuple[dict | None, list[dict], str | None]:
+    """
+    get_user (для лимита слотов) + список HWID.
+    uinf может быть не None даже при ошибке списка HWID.
+    """
     if user.remnawave_uuid is None:
-        return [], "Remnawave не привязан к профилю."
+        return None, [], "Remnawave не привязан к профилю."
     rw = RemnaWaveClient(settings)
+    uinf: dict | None = None
+    try:
+        uinf = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError:
+        uinf = None
     try:
         raw = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
     except RemnaWaveError as e:
-        return [], str(e)
-    return normalize_hwid_devices_list(raw), None
+        return uinf, [], str(e)
+    return uinf, normalize_hwid_devices_list(raw), None
 
 
 def _devices_kb(
@@ -95,8 +107,7 @@ async def _render_devices(
         )
         return join_lines("🖥 " + bold("Устройства"), "", plain("Сначала оформите подписку или триал.")), kb
 
-    devices, err = await _fetch_hwid_devices(user, settings)
-    used = len(devices)
+    uinf, devices, err = await _fetch_panel_hwid_context(user, settings)
 
     if err:
         cap = join_lines(
@@ -115,13 +126,33 @@ async def _render_devices(
         )
         return cap, kb
 
+    # Как на экране «Подписка»: число из HWID API; если список пуст, но get_user есть — запасной счётчик
+    used = len(devices)
+    if uinf is not None and used == 0:
+        n_alt = extract_connected_devices_from_rw_user(uinf)
+        if n_alt is not None:
+            used = n_alt
+
+    if uinf is not None:
+        max_panel = rw_hwid_device_max(uinf)
+        if max_panel is None:
+            max_part = bold("∞")
+        else:
+            max_part = bold(str(max_panel))
+    else:
+        max_part = bold(str(sub.devices_count))
+
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
-        plain("Слотов в подписке: ")
+        plain("Слотов в подписке (бот): ")
         + bold(str(sub.devices_count))
         + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})"),
-        plain("Привязано в панели: ") + bold(str(used)) + plain("/") + bold(str(sub.devices_count)),
+        plain("В панели: ")
+        + bold(str(used))
+        + plain(" / ")
+        + max_part
+        + plain(" (подключено / лимит)"),
         "",
         plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
     )
@@ -239,7 +270,7 @@ async def cb_dev_rw_pick(
         return
 
     settings = get_settings()
-    devices, err = await _fetch_hwid_devices(db_user, settings)
+    _uinf, devices, err = await _fetch_panel_hwid_context(db_user, settings)
     if err or not devices:
         await cq.answer("Список устройств недоступен", show_alert=True)
         return
@@ -299,7 +330,7 @@ async def cb_dev_rw_unlink(
         return
 
     settings = get_settings()
-    devices, err = await _fetch_hwid_devices(db_user, settings)
+    _uinf, devices, err = await _fetch_panel_hwid_context(db_user, settings)
     if err or idx < 0 or idx >= len(devices):
         await cq.answer("Устройство не найдено", show_alert=True)
         return
