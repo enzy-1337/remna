@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -33,7 +35,7 @@ from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.broadcast_service import (
     MAX_MESSAGE_LEN,
-    broadcast_plain_text,
+    broadcast_to_users,
     collect_recipient_telegram_ids,
 )
 from shared.database import get_session_factory
@@ -1152,14 +1154,31 @@ async def cb_broadcast_start(
         join_lines(
             "📢 " + bold("Рассылка всем пользователям"),
             "",
-            plain("Отправьте одним сообщением текст рассылки "),
-            plain("(до ")
+            plain("Отправьте одним сообщением текст. Поддерживается форматирование "),
+            plain("как в Telegram "),
+            plain("(жирный, курсив, ссылки через меню сообщения) "),
+            plain("и HTML-теги вручную."),
+            "",
+            plain("Примеры HTML: ")
+            + code("<b>жирный</b>")
+            + plain(", ")
+            + code("<i>курсив</i>")
+            + plain(", ")
+            + code("<u>подчёркнутый</u>")
+            + plain(", "),
+            plain("ссылка: ")
+            + code('<a href="https://example.com">текст</a>')
+            + plain(", код: ")
+            + code("<code>фрагмент</code>")
+            + plain("."),
+            "",
+            plain("Смайлики можно вставлять как обычно. До ")
             + code(str(MAX_MESSAGE_LEN))
-            + plain(" символов, без форматирования Markdown)."),
+            + plain(" символов в итоговом сообщении."),
             "",
             italic("Не получат пользователи, отмеченные в боте как заблокированные."),
             "",
-            plain("Отмена: команда ") + code("/cancel_broadcast"),
+            plain("Отмена: ") + code("/cancel_broadcast"),
         ),
     )
 
@@ -1208,12 +1227,14 @@ async def msg_broadcast_receive_text(
     if message.from_user is None or not _is_admin(message.from_user.id):
         await state.clear()
         return
-    raw = (message.text or "").strip()
-    if raw.startswith("/"):
+    if (message.text or "").strip().startswith("/"):
         await message.answer(
-            esc("Пришлите обычный текст рассылки без слэша или отмените: /cancel_broadcast")
+            esc("Пришлите текст рассылки без команд или отмените: /cancel_broadcast")
         )
         return
+
+    # Сохраняем форматирование из клиента Telegram (жирный и т.д.) → HTML
+    raw = (getattr(message, "html_text", None) or message.text or "").strip()
     if not raw:
         await message.answer(esc("Текст пустой. Отправьте непустое сообщение."))
         return
@@ -1227,24 +1248,31 @@ async def msg_broadcast_receive_text(
     async with factory() as session:
         n = len(await collect_recipient_telegram_ids(session, skip_blocked=True))
 
+    preview = raw if len(raw) <= 800 else raw[:797] + "..."
+    footer = (
+        f"\n\n➖➖➖➖➖\n"
+        f"Получателей (не в блок-листе бота): <b>{n}</b>\n"
+        f"<i>Подтвердите отправку кнопками ниже.</i>"
+    )
+    preview_html = f"<b>Предпросмотр рассылки</b>\n\n{preview}{footer}"
+    try:
+        await message.answer(
+            preview_html,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_broadcast_confirm_markup(),
+        )
+    except TelegramBadRequest:
+        await message.answer(
+            esc(
+                "Telegram не принял разметку: проверьте парные теги "
+                "(<b>, <i>, <a>), кавычки в href и спецсимволы < и & в тексте "
+                "(замените на &lt; и &amp;). Отправьте исправленный текст."
+            )
+        )
+        return
+
     await state.update_data(broadcast_text=raw)
     await state.set_state(AdminBroadcastStates.waiting_confirm)
-
-    preview = raw if len(raw) <= 600 else raw[:597] + "..."
-    await message.answer(
-        join_lines(
-            "📋 " + bold("Предпросмотр"),
-            "",
-            plain(preview),
-            "",
-            plain("— ➖➖➖➖➖ —"),
-            "",
-            plain("Получателей (не в блок-листе бота): ") + bold(str(n)),
-            "",
-            plain("Подтвердите отправку кнопками ниже."),
-        ),
-        reply_markup=_broadcast_confirm_markup(),
-    )
 
 
 @router.callback_query(F.data == "admin:broadcast_go", StateFilter(AdminBroadcastStates.waiting_confirm))
@@ -1273,7 +1301,7 @@ async def cb_broadcast_go(
         except Exception:
             pass
 
-    ok, fail = await broadcast_plain_text(cq.bot, text)
+    ok, fail = await broadcast_to_users(cq.bot, text)
 
     settings = get_settings()
     summary = join_lines(

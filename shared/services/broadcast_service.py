@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,16 +34,18 @@ async def collect_recipient_telegram_ids(
     return [int(row[0]) for row in r.all()]
 
 
-async def broadcast_plain_text(
+async def broadcast_to_users(
     bot: Bot,
     text: str,
     *,
     skip_blocked: bool = True,
     delay_sec: float = DEFAULT_DELAY_SEC,
+    parse_mode: str | None = ParseMode.HTML,
 ) -> tuple[int, int]:
     """
-    Отправляет одинаковый текст всем пользователям из БД.
-    Возвращает (успешно, ошибок).
+    Отправляет сообщение всем пользователям из БД.
+    По умолчанию HTML: <b>, <i>, <u>, <s>, <code>, <pre>, <a href="">, эмодзи как есть.
+    parse_mode=None — только обычный текст без разметки.
     """
     body = (text or "").strip()
     if not body:
@@ -56,16 +59,19 @@ async def broadcast_plain_text(
     ok = 0
     failed = 0
 
+    async def _send(chat_id: int) -> None:
+        await bot.send_message(chat_id, body, parse_mode=parse_mode)
+
     for tid in ids:
         try:
-            await bot.send_message(chat_id=tid, text=body)
+            await _send(tid)
             ok += 1
         except TelegramRetryAfter as e:
             wait = float(getattr(e, "retry_after", None) or 1)
             logger.warning("broadcast flood wait %s s for chat=%s", wait, tid)
             await asyncio.sleep(wait + 0.5)
             try:
-                await bot.send_message(chat_id=tid, text=body)
+                await _send(tid)
                 ok += 1
             except Exception:
                 logger.debug("broadcast retry failed chat=%s", tid, exc_info=True)
