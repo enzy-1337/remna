@@ -15,7 +15,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from bot.states.admin import AdminFindUserStates, AdminSubscriptionStates
+from bot.states.admin import AdminFactoryResetStates, AdminFindUserStates, AdminSubscriptionStates
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
@@ -23,6 +23,7 @@ from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,26 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Пользователи", callback_data="admin:users:0"))
     b.row(InlineKeyboardButton(text="🔎 Найти по Telegram ID", callback_data="admin:find"))
+    b.row(InlineKeyboardButton(text="⛔ Полный сброс БД", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
+
+
+def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Отмена сброса", callback_data="admin:reset:cancel"))
+    return kb.as_markup()
+
+
+def _norm_display_name(s: str) -> str:
+    return (s or "").strip().casefold()
+
+
+def _norm_username_typed(raw: str) -> str:
+    t = (raw or "").strip()
+    if t.startswith("@"):
+        t = t[1:]
+    return t.casefold()
 
 
 def _list_button_label(u: User) -> str:
@@ -805,4 +824,250 @@ async def cmd_admin(
         reply_markup=admin_panel_keyboard(),
         settings=settings,
         delete_message=None,
+    )
+
+
+@router.callback_query(F.data == "admin:reset:start")
+async def cb_admin_reset_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await state.clear()
+    settings = get_settings()
+    warn = join_lines(
+        "⛔ " + bold("Полный сброс базы данных"),
+        "",
+        plain("Будут удалены все пользователи, подписки, устройства, транзакции, промокоды, планы и прочие данные бота."),
+        plain("Настройки в .env и аккаунт RemnaWave не трогаются."),
+        "",
+        italic("Дальше нужно трижды подтвердить личность: имя в Telegram, username без @ и числовой Telegram ID."),
+        "",
+        plain("Если вы нажали случайно — «Отмена»."),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Продолжить к проверкам", callback_data="admin:reset:proceed"),
+    )
+    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:reset:cancel"))
+    await cq.answer()
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=warn,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "admin:reset:proceed")
+async def cb_admin_reset_proceed(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    fu = cq.from_user
+    fn_cf = _norm_display_name(fu.first_name or "")
+    un_cf = _norm_username_typed(fu.username or "")
+    await state.set_state(AdminFactoryResetStates.waiting_first_name)
+    await state.update_data(
+        reset_fn_cf=fn_cf,
+        reset_un_cf=un_cf,
+        reset_tid=fu.id,
+    )
+    await cq.answer()
+    if cq.bot is None or cq.message is None:
+        return
+    hint_un = (
+        plain("У вас в Telegram не задан username. На следующем шаге отправьте ")
+        + code("-")
+        + plain(".")
+        if not un_cf
+        else plain("")
+    )
+    step1 = join_lines(
+        "1/3 " + bold("Имя в Telegram"),
+        "",
+        plain("Отправьте одним сообщением имя так, как оно указано в вашем профиле Telegram (поле «Имя»)."),
+        plain("Пример: если в профиле написано «Enzy» — отправьте именно это, без фамилии."),
+        hint_un,
+        "",
+        plain("Если имени в профиле нет, отправьте ")
+        + code("-")
+        + plain("."),
+    )
+    await cq.bot.send_message(
+        cq.message.chat.id,
+        step1,
+        reply_markup=_admin_reset_cancel_markup(),
+    )
+
+
+@router.callback_query(F.data == "admin:reset:cancel")
+async def cb_admin_reset_cancel(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    await state.clear()
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Отменено.", show_alert=True)
+        return
+    await cq.answer("Сброс отменён.")
+    if db_user is None:
+        return
+    settings = get_settings()
+    text = join_lines(
+        "🛠 " + bold("Админ-панель"),
+        "",
+        plain("Выберите действие."),
+        "",
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=admin_panel_keyboard(),
+        settings=settings,
+    )
+
+
+def _reset_first_name_ok(expected_cf: str, typed: str) -> bool:
+    t = _norm_display_name(typed)
+    if expected_cf == "":
+        return t in ("-", "—", "нет", "пусто")
+    return t == expected_cf
+
+
+def _reset_username_ok(expected_cf: str, typed: str) -> bool:
+    t = _norm_username_typed(typed)
+    if expected_cf == "":
+        return t in ("-", "—", "нет", "пусто")
+    return t == expected_cf
+
+
+@router.message(StateFilter(AdminFactoryResetStates.waiting_first_name), F.text)
+async def msg_admin_reset_step_first_name(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    exp = data.get("reset_fn_cf")
+    if not isinstance(exp, str):
+        await state.clear()
+        return
+    raw = message.text or ""
+    if not _reset_first_name_ok(exp, raw):
+        await message.answer(
+            esc("Имя не совпадает. Отправьте имя из профиля Telegram (как в настройках «Имя»)."),
+            reply_markup=_admin_reset_cancel_markup(),
+        )
+        return
+    await state.set_state(AdminFactoryResetStates.waiting_username)
+    un_hint = (
+        join_lines(
+            "2/3 " + bold("Username в Telegram"),
+            "",
+            plain("Отправьте username без символа @ — только латиница, цифры и подчёркивание."),
+            plain("Пример: для @enzy_dmitriev отправьте enzy_dmitriev"),
+            "",
+            plain("Если username не задан, отправьте ")
+            + code("-")
+            + plain("."),
+        )
+        if data.get("reset_un_cf")
+        else join_lines(
+            "2/3 " + bold("Username в Telegram"),
+            "",
+            plain("У вас не задан username. Отправьте ")
+            + code("-")
+            + plain("."),
+        )
+    )
+    await message.answer(un_hint, reply_markup=_admin_reset_cancel_markup())
+
+
+@router.message(StateFilter(AdminFactoryResetStates.waiting_username), F.text)
+async def msg_admin_reset_step_username(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    exp = data.get("reset_un_cf")
+    if not isinstance(exp, str):
+        await state.clear()
+        return
+    raw = message.text or ""
+    if not _reset_username_ok(exp, raw):
+        await message.answer(
+            esc("Username не совпадает. Без @, в нижнем регистре не обязательно — регистр игнорируется."),
+            reply_markup=_admin_reset_cancel_markup(),
+        )
+        return
+    await state.set_state(AdminFactoryResetStates.waiting_telegram_numeric_id)
+    await message.answer(
+        join_lines(
+            "3/3 " + bold("Числовой Telegram ID"),
+            "",
+            plain("Отправьте только цифры вашего Telegram ID, без пробелов."),
+            plain("Пример: 883400626"),
+        ),
+        reply_markup=_admin_reset_cancel_markup(),
+    )
+
+
+@router.message(StateFilter(AdminFactoryResetStates.waiting_telegram_numeric_id), F.text)
+async def msg_admin_reset_step_telegram_id(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    exp_id = data.get("reset_tid")
+    if not isinstance(exp_id, int):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdigit() or int(raw) != exp_id:
+        await message.answer(
+            esc("ID не совпадает. Нужен ваш числовой Telegram ID (можно узнать у @userinfobot и др.)."),
+            reply_markup=_admin_reset_cancel_markup(),
+        )
+        return
+    await state.clear()
+    try:
+        await wipe_all_application_data(session)
+        await session.commit()
+    except Exception:
+        logger.exception("factory reset failed")
+        await session.rollback()
+        await message.answer(esc("Ошибка при очистке БД. Данные не тронуты."))
+        return
+    logger.warning("factory reset completed by telegram_id=%s", exp_id)
+    await message.answer(
+        join_lines(
+            "✅ " + bold("База данных очищена."),
+            "",
+            plain("Все записи приложения удалены. Ваш пользователь в боте тоже удалён."),
+            plain("Отправьте /start, чтобы зарегистрироваться заново."),
+        ),
     )

@@ -10,3 +10,11 @@ class AdminFindUserStates(StatesGroup):
 class AdminSubscriptionStates(StatesGroup):
     waiting_add_days = State()
     waiting_add_balance = State()
+
+
+class AdminFactoryResetStates(StatesGroup):
+    """Подтверждение полного сброса БД (три проверки по данным Telegram)."""
+
+    waiting_first_name = State()
+    waiting_username = State()
+    waiting_telegram_numeric_id = State()
