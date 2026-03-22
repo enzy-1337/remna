@@ -18,6 +18,7 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_description import (
     build_remnawave_panel_description,
     normalize_remnawave_description,
@@ -197,6 +198,7 @@ async def sync_once(settings: Settings) -> None:
     factory = get_session_factory()
     max_items = max(50, int(settings.remnawave_sync_import_limit))
     async with factory() as session:
+        await ensure_default_plans_if_needed(session)
         now = datetime.now(timezone.utc)
         try:
             rw_users = await rw.list_all_users(page_size=min(200, max_items), max_items=max_items)

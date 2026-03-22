@@ -36,7 +36,9 @@ from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
 from shared.config import get_settings
+from shared.database import get_session_factory
 from shared.services.admin_report_loop import admin_report_loop
+from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_sync import sync_loop
 
 
@@ -57,6 +59,11 @@ async def main() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    factory = get_session_factory()
+    async with factory() as s:
+        await ensure_default_plans_if_needed(s)
+        await s.commit()
 
     bot = Bot(
         token=settings.bot_token,
