@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, FSInputFile, InputFile, Message, URLInputFile
 
 if TYPE_CHECKING:
@@ -15,6 +16,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TELEGRAM_PHOTO_CAPTION_MAX = 1024
+
+
+async def safe_callback_answer(cq: CallbackQuery, **kwargs: Any) -> None:
+    """
+    Ответ на callback_query. Игнорируем устаревший/повторный query — иначе падает весь хендлер и откатывается БД.
+    """
+    try:
+        await cq.answer(**kwargs)
+    except TelegramBadRequest as e:
+        msg = (getattr(e, "message", None) or str(e)).lower()
+        if any(
+            part in msg
+            for part in (
+                "query is too old",
+                "response timeout expired",
+                "query id is invalid",
+                "already been answered",
+                "already answered",
+            )
+        ):
+            logger.debug("callback answer skipped: %s", e)
+            return
+        raise
 
 
 def truncate_caption(text: str, max_len: int = TELEGRAM_PHOTO_CAPTION_MAX) -> str:
@@ -79,7 +103,7 @@ async def answer_callback_with_photo_screen(
 ) -> Message | None:
     if cq.message is None or cq.bot is None:
         return None
-    await cq.answer()
+    await safe_callback_answer(cq)
     return await send_profile_screen(
         cq.bot,
         chat_id=cq.message.chat.id,
