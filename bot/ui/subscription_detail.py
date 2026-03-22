@@ -14,7 +14,7 @@ from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
 )
-from shared.md2 import bold, esc, italic, join_lines, plain
+from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.subscription_service import (
     MAX_DEVICES,
@@ -128,8 +128,8 @@ async def build_subscription_detail_caption(
         exp = exp.replace(tzinfo=timezone.utc)
     left_phrase = _humanize_left(exp, now)
 
-    lines = [
-        "🔑 " + bold("Подписка:"),
+    header = "🔑 " + bold("Подписка:")
+    quote_lines = [
         status_human,
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
@@ -145,5 +145,8 @@ async def build_subscription_detail_caption(
         + plain(")"),
         plain("💸 Стоимость: ") + _monthly_price_line(plan),
     ]
-    caption = join_lines(*lines)
+    quoted_block = "\n".join("> " + line for line in quote_lines)
+    caption = join_lines(header, "", quoted_block)
+    if sub_url:
+        caption += "\n\n" + plain("📎 ") + bold("Ссылка:") + "\n" + code(sub_url)
     return caption, sub_url

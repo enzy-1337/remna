@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
@@ -37,21 +38,48 @@ def _can_platega() -> bool:
     return s.platega_stub or bool(s.platega_merchant_id.strip() and s.platega_secret_key.strip())
 
 
+def _ru_payment_provider(name: str | None) -> str:
+    if not name:
+        return plain("—")
+    key = name.strip().lower()
+    mapping = {
+        "cryptobot": plain("CryptoBot"),
+        "platega": plain("Platega (карта / СБП)"),
+    }
+    return mapping.get(key, esc(name))
+
+
 async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) -> list[str]:
     r = await session.execute(
         select(Transaction)
-        .where(Transaction.user_id == user_id)
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.type == "topup",
+            Transaction.status == "completed",
+        )
         .order_by(Transaction.id.desc())
         .limit(limit)
     )
     rows = r.scalars().all()
     if not rows:
-        return [plain("История пуста.")]
+        return [plain("Успешных оплат пока нет.")]
     lines: list[str] = []
     for t in rows:
+        amt_s = f"{t.amount:.2f}"
+        dt = t.created_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_s = dt.strftime("%d.%m.%Y %H:%M")
+        prov = _ru_payment_provider(t.payment_provider)
         lines.append(
             "• "
-            + esc(f"{t.type} | {t.amount} {t.currency or 'RUB'} | {t.status} | {t.payment_provider or '—'}")
+            + plain("Пополнение ")
+            + bold(amt_s)
+            + plain(" ₽ · ")
+            + prov
+            + plain(" · ")
+            + esc(dt_s)
+            + plain(" UTC")
         )
     return lines
 
@@ -66,7 +94,7 @@ def _balance_caption(user: User, history: list[str]) -> str:
         plain("Основной: ") + bold(bal) + plain(" ₽"),
         plain("Бонусный: ") + bold(bonus) + plain(" ₽"),
         "",
-        bold("Последние операции:") + "\n" + hist_block,
+        bold("Успешные оплаты:") + "\n" + hist_block,
     )
 
 
