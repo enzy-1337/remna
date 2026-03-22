@@ -30,19 +30,10 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
     )
     if is_admin:
-        if support_url:
-            b.row(
-                InlineKeyboardButton(text="💬 Поддержка", url=support_url),
-                InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"),
-            )
-        else:
-            b.row(
-                InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"),
-                InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"),
-            )
+        b.row(
+            InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"),
+            InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"),
+        )
     else:
-        if support_url:
-            b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url))
-        else:
-            b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"))
+        b.row(InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"))
     return b.as_markup()

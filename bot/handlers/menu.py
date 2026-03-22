@@ -22,12 +22,22 @@ from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.subscription_service import get_active_subscription
-from shared.md2 import bold, code, join_lines, plain
+from shared.md2 import bold, code, join_lines, link, plain
 from shared.services.trial_service import activate_trial, trial_eligible
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="menu")
+
+
+def _service_info_keyboard(support_url: str | None) -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    if support_url:
+        b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url))
+    else:
+        b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"))
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    return b
 
 
 @router.callback_query(F.data == "menu:main")
@@ -210,17 +220,39 @@ async def cb_support(cq: CallbackQuery, db_user: User | None) -> None:
     )
 
 
-@router.callback_query(F.data == "menu:about")
-async def cb_about(cq: CallbackQuery, db_user: User | None) -> None:
+@router.callback_query(F.data.in_(("menu:info", "menu:about")))
+async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
+    """Экран «Информация»: о боте, ссылки на документы, кнопка поддержки снизу."""
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
     settings = get_settings()
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    sup = support_telegram_url(settings.support_username)
+    privacy = (settings.info_privacy_policy_url or "").strip()
+    terms = (settings.info_terms_of_service_url or "").strip()
+    cap = join_lines(
+        "💡 " + bold("Информация"),
+        "",
+        plain(
+            "Этот бот помогает оформить и продлить доступ к VPN: баланс, подписка, "
+            "устройства и напоминания — всё в Telegram. Технически доступ предоставляется "
+            "через панель Remnawave."
+        ),
+        "",
+        (
+            plain("🔒 Политика конфиденциальности: ")
+            + (link("читать", privacy) if privacy else plain("— (задайте INFO_PRIVACY_POLICY_URL)"))
+        ),
+        (
+            plain("📜 Пользовательское соглашение: ")
+            + (link("читать", terms) if terms else plain("— (задайте INFO_TERMS_OF_SERVICE_URL)"))
+        ),
+        "",
+        plain("Нужна помощь — нажмите «Поддержка» ниже."),
+    )
     await answer_callback_with_photo_screen(
         cq,
-        caption=join_lines("ℹ️ " + bold("О сервисе"), "", plain("VPN через панель Remnawave.")),
-        reply_markup=b.as_markup(),
+        caption=cap,
+        reply_markup=_service_info_keyboard(sup).as_markup(),
         settings=settings,
     )

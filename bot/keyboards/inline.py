@@ -29,7 +29,8 @@ def main_menu_keyboard(
     support_url: str | None = None,
     is_admin: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Главное меню по ТЗ (inline)."""
+    """Главное меню по ТЗ (inline). support_url/is_admin — для совместимости сигнатуры."""
+    _ = (support_url, is_admin)
     builder = InlineKeyboardBuilder()
     if show_trial:
         builder.row(
@@ -50,16 +51,7 @@ def main_menu_keyboard(
         InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"),
         InlineKeyboardButton(text="📖 Инструкции", callback_data="menu:instructions"),
     )
-    if support_url:
-        builder.row(
-            InlineKeyboardButton(text="💬 Поддержка", url=support_url),
-            InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:about"),
-        )
-    else:
-        builder.row(
-            InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"),
-            InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:about"),
-        )
+    builder.row(InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"))
     return builder.as_markup()
 
 

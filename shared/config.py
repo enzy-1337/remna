@@ -36,6 +36,16 @@ class Settings(BaseSettings):
         validation_alias="SUPPORT_USERNAME",
         description="Поддержка: username без @",
     )
+    info_privacy_policy_url: str = Field(
+        default="https://telegra.ph/Politika-konfidencialnosti-08-15-17",
+        validation_alias="INFO_PRIVACY_POLICY_URL",
+        description="Ссылка на политику конфиденциальности (экран «Информация»)",
+    )
+    info_terms_of_service_url: str = Field(
+        default="https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10",
+        validation_alias="INFO_TERMS_OF_SERVICE_URL",
+        description="Ссылка на пользовательское соглашение (экран «Информация»)",
+    )
     instruction_android_url: str | None = Field(
         default=None,
         validation_alias="INSTRUCTION_ANDROID_URL",
