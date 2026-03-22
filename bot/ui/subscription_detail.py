@@ -101,26 +101,35 @@ async def build_subscription_detail_caption(
         except RemnaWaveError:
             logger.warning("RW get_user failed for subscription screen user=%s", user.id)
 
+    # Лимит: из тарифа в БД (если задан), иначе из панели (trafficLimitBytes)
     if plan and plan.traffic_limit_gb is not None and plan.traffic_limit_gb > 0:
         limit_gb = float(plan.traffic_limit_gb)
 
-    if used_gb is None:
-        used_gb = 0.0
-    if limit_gb is not None:
-        traffic_line = (
-            plain("📊 Трафик: ")
-            + bold(f"{used_gb:.1f}")
-            + plain("/")
-            + bold(f"{limit_gb:.1f}")
-            + plain(" ГБ")
-        )
+    if used_gb is not None:
+        if limit_gb is not None:
+            traffic_line = (
+                plain("📊 Трафик: ")
+                + bold(f"{used_gb:.2f}")
+                + plain("/")
+                + bold(f"{limit_gb:.1f}")
+                + plain(" ГБ")
+            )
+        else:
+            traffic_line = (
+                plain("📊 Трафик: ")
+                + bold(f"{used_gb:.2f}")
+                + plain(" ГБ ")
+                + italic("(без лимита)")
+            )
     else:
-        traffic_line = (
-            plain("📊 Трафик: ")
-            + bold(f"{used_gb:.1f}")
-            + plain(" ГБ ")
-            + italic("(без лимита)")
-        )
+        if user.remnawave_uuid is None:
+            traffic_line = plain("📊 Трафик: ") + italic("(нет учётной записи VPN)")
+        else:
+            traffic_line = (
+                plain("📊 Трафик: ")
+                + italic("(не удалось получить из панели)")
+                + plain(" — откройте позже или проверьте API")
+            )
 
     n_dev = connected_devices if connected_devices is not None else await count_devices(session, sub.id)
     exp = sub.expires_at

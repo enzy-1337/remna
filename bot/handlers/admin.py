@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -30,6 +31,7 @@ from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
@@ -156,10 +158,59 @@ def _subscription_caption_lines(sub: Subscription, plan) -> list[str]:
     ]
 
 
+async def _render_admin_users_list_screen(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    *,
+    page: int,
+) -> None:
+    settings = get_settings()
+    total = (await session.execute(select(func.count()).select_from(User))).scalar_one()
+    offset = page * PAGE_SIZE
+    res = await session.execute(
+        select(User).order_by(desc(User.id)).offset(offset).limit(PAGE_SIZE)
+    )
+    rows = list(res.scalars().all())
+
+    lines = [
+        "📋 " + bold("Пользователи"),
+        plain(f"Стр. {page + 1} · всего записей: ") + bold(str(total)),
+        "",
+    ]
+    b = InlineKeyboardBuilder()
+    for u in rows:
+        b.row(InlineKeyboardButton(text=_list_button_label(u), callback_data=f"admin:u:{u.id}"))
+    total_pages = max(1, math.ceil(total / PAGE_SIZE)) if total else 1
+    cur_page = page + 1
+    page_label = f"{cur_page}/{total_pages}"
+    placeholder = InlineKeyboardButton(text="·", callback_data="admin:users:noop")
+    left_btn = (
+        InlineKeyboardButton(text="⬅️", callback_data=f"admin:users:{page - 1}")
+        if page > 0
+        else placeholder
+    )
+    mid_btn = InlineKeyboardButton(text=page_label, callback_data="admin:users:noop")
+    right_btn = (
+        InlineKeyboardButton(text="➡️", callback_data=f"admin:users:{page + 1}")
+        if offset + len(rows) < total
+        else placeholder
+    )
+    b.row(left_btn, mid_btn, right_btn)
+    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(*lines),
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
 async def _build_user_card(
     session: AsyncSession,
     *,
     user_id: int,
+    viewer_telegram_id: int | None = None,
 ) -> tuple[str, InlineKeyboardMarkup] | None:
     res = await session.execute(select(User).where(User.id == user_id))
     u = res.scalar_one_or_none()
@@ -239,6 +290,14 @@ async def _build_user_card(
         )
     )
 
+    if viewer_telegram_id is not None and viewer_telegram_id != u.telegram_id:
+        b.row(
+            InlineKeyboardButton(
+                text="🗑 Удалить пользователя",
+                callback_data=f"admin:dask:{u.id}",
+            )
+        )
+
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0"))
     return join_lines(*lines), b.as_markup()
 
@@ -250,7 +309,8 @@ async def _render_user_card(
     user_id: int,
 ) -> None:
     settings = get_settings()
-    built = await _build_user_card(session, user_id=user_id)
+    viewer = cq.from_user.id if cq.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     if built is None:
         await cq.answer("Пользователь не найден", show_alert=True)
         return
@@ -298,43 +358,15 @@ async def cb_admin_users_page(
     if db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
+    parts = cq.data.split(":")
+    if len(parts) >= 3 and parts[2] == "noop":
+        await cq.answer()
+        return
     try:
-        page = int(cq.data.split(":")[2])
+        page = int(parts[2])
     except (IndexError, ValueError):
         page = 0
-    settings = get_settings()
-
-    total = (await session.execute(select(func.count()).select_from(User))).scalar_one()
-
-    offset = page * PAGE_SIZE
-    res = await session.execute(
-        select(User).order_by(desc(User.id)).offset(offset).limit(PAGE_SIZE)
-    )
-    rows = list(res.scalars().all())
-
-    lines = [
-        "📋 " + bold("Пользователи"),
-        plain(f"Стр. {page + 1} · всего записей: ") + bold(str(total)),
-        "",
-    ]
-    b = InlineKeyboardBuilder()
-    for u in rows:
-        b.row(InlineKeyboardButton(text=_list_button_label(u), callback_data=f"admin:u:{u.id}"))
-    nav_buttons: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:users:{page - 1}"))
-    if offset + len(rows) < total:
-        nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:users:{page + 1}"))
-    if nav_buttons:
-        b.row(*nav_buttons)
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
-
-    await answer_callback_with_photo_screen(
-        cq,
-        caption=join_lines(*lines),
-        reply_markup=b.as_markup(),
-        settings=settings,
-    )
+    await _render_admin_users_list_screen(cq, session, page=page)
 
 
 @router.callback_query(F.data.startswith("admin:u:"))
@@ -352,6 +384,88 @@ async def cb_admin_user_card(
         await cq.answer("Неверный id", show_alert=True)
         return
     await _render_user_card(cq, session, user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:dask:"))
+async def cb_admin_delete_user_ask(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    target = await session.get(User, uid)
+    if target is None:
+        await cq.answer("Не найден", show_alert=True)
+        return
+    if target.telegram_id == cq.from_user.id:
+        await cq.answer("Нельзя удалить самого себя.", show_alert=True)
+        return
+    settings = get_settings()
+    cap = join_lines(
+        "⚠️ " + bold("Удаление пользователя"),
+        "",
+        plain("Учётная запись ")
+        + bold(f"#{uid}")
+        + plain(" будет удалена из бота: подписки, баланс, история."),
+        plain("Если в профиле указан Remnawave, пользователь будет удалён и в панели."),
+        "",
+        plain("Продолжить?"),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin:dyes:{uid}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin:u:{uid}"),
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("admin:dyes:"))
+async def cb_admin_delete_user_confirm(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    target = await session.get(User, uid)
+    if target is None:
+        await cq.answer("Уже удалён или не найден.", show_alert=True)
+        await _render_admin_users_list_screen(cq, session, page=0)
+        return
+    if target.telegram_id == cq.from_user.id:
+        await cq.answer("Нельзя удалить самого себя.", show_alert=True)
+        return
+    settings = get_settings()
+    ok, msg = await delete_user_from_app(session, user_id=uid, settings=settings)
+    if not ok:
+        await cq.answer(msg[:180] + ("…" if len(msg) > 180 else ""), show_alert=True)
+        return
+    await cq.answer("Удалено")
+    await _render_admin_users_list_screen(cq, session, page=0)
 
 
 @router.callback_query(F.data.startswith("admin:block:"))
@@ -575,7 +689,8 @@ async def msg_admin_add_days(
             logger.warning("admin add days RW failed: %s", e)
 
     await session.commit()
-    built = await _build_user_card(session, user_id=user_id)
+    viewer = message.from_user.id if message.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     if built is None or message.bot is None:
         await message.answer(f"Добавлено дней: {days}")
         return
@@ -668,7 +783,8 @@ async def msg_admin_add_balance(
 
     await session.commit()
 
-    built = await _build_user_card(session, user_id=user_id)
+    viewer = message.from_user.id if message.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     settings = get_settings()
     await notify_admin(
         settings,

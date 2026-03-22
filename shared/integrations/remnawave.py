@@ -178,11 +178,45 @@ class RemnaWaveClient:
                 ),
                 "hwidDeviceLimit": 2,
                 "trafficLimitBytes": 1024**3,
-                "usedTrafficBytes": 0,
+                "trafficLimitStrategy": "NO_RESET",
+                "userTraffic": {
+                    "usedTrafficBytes": 256 * 1024 * 1024,
+                    "lifetimeUsedTrafficBytes": 512 * 1024 * 1024,
+                    "onlineAt": None,
+                    "firstConnectedAt": None,
+                    "lastConnectedNodeUuid": None,
+                },
                 "status": "ACTIVE",
             }
         data = await self._request("GET", f"users/{user_uuid}")
         return self._unwrap(data)
+
+    async def delete_panel_user(self, user_uuid: str) -> None:
+        """Удаление пользователя в панели: DELETE /api/users/{uuid} (см. OpenAPI DeleteUser)."""
+        if self._s.remnawave_stub:
+            return
+
+        def _miss(err: RemnaWaveError) -> bool:
+            m = str(err)
+            return "HTTP 404" in m or "HTTP 405" in m
+
+        attempts: list[tuple[str, str, dict[str, Any] | None]] = [
+            ("DELETE", f"users/{user_uuid}", None),
+            ("POST", "users/delete", {"uuid": user_uuid}),
+            ("POST", "users/delete", {"userUuid": user_uuid}),
+        ]
+        last_err: RemnaWaveError | None = None
+        for method, resource, body in attempts:
+            try:
+                await self._request(method, resource, json_body=body)
+                return
+            except RemnaWaveError as e:
+                last_err = e
+                if _miss(e):
+                    continue
+                raise
+        if last_err is not None:
+            raise last_err
 
     async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if self._s.remnawave_stub:
@@ -378,6 +412,40 @@ class RemnaWaveClient:
                     continue
                 raise
         raise last_err or RemnaWaveError("Не удалось обновить пользователя Remnawave")
+
+    async def get_user_hwid_devices(self, user_uuid: str) -> list[dict[str, Any]]:
+        """GET /api/hwid/devices/{userUuid} → response.devices (OpenAPI)."""
+        if self._s.remnawave_stub:
+            return [
+                {
+                    "hwid": "stub_hwid_1",
+                    "userUuid": user_uuid,
+                    "platform": "Windows",
+                    "osVersion": "25H2",
+                    "deviceModel": "Windows 11 Pro",
+                    "userAgent": "koala-clash/1.1.0",
+                    "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                }
+            ]
+        data = await self._request("GET", f"hwid/devices/{user_uuid}")
+        root = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(root, dict):
+            root = self._unwrap(data) if isinstance(data, dict) else {}
+        devs = root.get("devices") if isinstance(root, dict) else None
+        if not isinstance(devs, list):
+            return []
+        return [x for x in devs if isinstance(x, dict)]
+
+    async def delete_user_hwid_device(self, user_uuid: str, hwid: str) -> None:
+        """POST /api/hwid/devices/delete — тело { userUuid, hwid }."""
+        if self._s.remnawave_stub:
+            return
+        await self._request(
+            "POST",
+            "hwid/devices/delete",
+            json_body={"userUuid": user_uuid, "hwid": hwid},
+        )
 
     @staticmethod
     def default_expire(days: int) -> datetime:

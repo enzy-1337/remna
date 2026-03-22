@@ -7,7 +7,7 @@ from typing import Any
 
 def _bytes_to_gb(value: Any) -> float | None:
     try:
-        n = int(value)
+        n = float(value)
     except (TypeError, ValueError):
         return None
     if n < 0:
@@ -18,25 +18,39 @@ def _bytes_to_gb(value: Any) -> float | None:
 def extract_traffic_gb_from_rw_user(u: dict[str, Any]) -> tuple[float | None, float | None]:
     """
     Возвращает (used_gb, limit_gb).
-    Если лимит 0 в API — часто значит «без лимита» → limit_gb = None.
+
+    По OpenAPI Remnawave (GetUserByUuidResponseDto): расход в ``userTraffic.usedTrafficBytes``,
+    накопительно — ``userTraffic.lifetimeUsedTrafficBytes``; лимит — ``trafficLimitBytes`` (0 = без лимита).
     """
     used: float | None = None
-    for key in (
-        "usedTrafficBytes",
-        "usedBytes",
-        "userTrafficInBytes",
-        "totalUsedBytes",
-        "consumedTrafficBytes",
-    ):
-        if key in u and u[key] is not None:
-            used = _bytes_to_gb(u[key])
-            if used is not None:
-                break
+
+    ut = u.get("userTraffic")
+    if isinstance(ut, dict):
+        # Текущий период / основной счётчик панели
+        if ut.get("usedTrafficBytes") is not None:
+            used = _bytes_to_gb(ut["usedTrafficBytes"])
+        # Fallback: некоторые инсталлы отдают только lifetime
+        if used is None and ut.get("lifetimeUsedTrafficBytes") is not None:
+            used = _bytes_to_gb(ut["lifetimeUsedTrafficBytes"])
+
+    if used is None:
+        for key in (
+            "usedTrafficBytes",
+            "usedBytes",
+            "userTrafficInBytes",
+            "totalUsedBytes",
+            "consumedTrafficBytes",
+            "lifetimeUsedTrafficBytes",
+        ):
+            if key in u and u[key] is not None:
+                used = _bytes_to_gb(u[key])
+                if used is not None:
+                    break
 
     if used is None:
         nested = u.get("trafficStatistics") or u.get("statistics") or {}
         if isinstance(nested, dict):
-            for key in ("usedBytes", "usedTrafficBytes", "totalUsedBytes", "used"):
+            for key in ("usedBytes", "usedTrafficBytes", "totalUsedBytes", "used", "lifetimeUsedTrafficBytes"):
                 if key in nested and nested[key] is not None:
                     used = _bytes_to_gb(nested[key])
                     if used is not None:
@@ -46,7 +60,7 @@ def extract_traffic_gb_from_rw_user(u: dict[str, Any]) -> tuple[float | None, fl
     limit_gb = _bytes_to_gb(raw_limit) if raw_limit is not None else None
     if raw_limit is not None:
         try:
-            if int(raw_limit) == 0:
+            if int(float(raw_limit)) == 0:
                 limit_gb = None
         except (TypeError, ValueError):
             pass

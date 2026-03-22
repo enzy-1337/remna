@@ -385,6 +385,56 @@ async def add_paid_device_slot(
     )
 
 
+async def remove_hwid_device_from_panel(
+    session: AsyncSession,
+    *,
+    user: User,
+    hwid: str,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Удалить устройство в Remnawave (HWID API) и синхронизировать лимит слотов в боте."""
+    sub = await get_active_subscription(session, user.id)
+    if not sub:
+        return False, plain("Нет активной подписки.")
+    if sub.devices_count <= MIN_DEVICES:
+        return False, plain(f"Минимум {MIN_DEVICES} устройства — отвязка недоступна.")
+
+    if user.remnawave_uuid is None:
+        return False, plain("Ошибка профиля VPN.")
+
+    hwid = (hwid or "").strip()
+    if not hwid:
+        return False, plain("Некорректный HWID.")
+
+    rw = RemnaWaveClient(settings)
+    try:
+        await rw.delete_user_hwid_device(str(user.remnawave_uuid), hwid)
+    except RemnaWaveError as e:
+        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
+
+    new_limit = sub.devices_count - 1
+    try:
+        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
+    except RemnaWaveError as e:
+        return False, join_lines(plain("Устройство снято, но лимит слотов не обновлён:"), esc(str(e)))
+
+    sub.devices_count = new_limit
+    r = await session.execute(
+        select(Device).where(
+            Device.user_id == user.id,
+            Device.subscription_id == sub.id,
+            Device.remnawave_client_id == hwid,
+        )
+    )
+    for row in r.scalars().all():
+        await session.delete(row)
+    await session.flush()
+    return True, join_lines(
+        plain("Устройство отвязано."),
+        plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),
+    )
+
+
 async def remove_device_slot(
     session: AsyncSession,
     *,
