@@ -58,7 +58,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
         select(Transaction)
         .where(
             Transaction.user_id == user_id,
-            Transaction.type == "topup",
+            Transaction.type.in_(("topup", "promo_topup_bonus")),
             Transaction.status == "completed",
         )
         .order_by(Transaction.id.desc())
@@ -74,17 +74,30 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         dt_s = dt.strftime("%d.%m.%Y %H:%M")
-        prov = _ru_payment_provider(t.payment_provider)
-        lines.append(
-            "• "
-            + plain("Пополнение ")
-            + bold(amt_s)
-            + plain(" ₽ · ")
-            + prov
-            + plain(" · ")
-            + esc(dt_s)
-            + plain(" UTC")
-        )
+        if t.type == "promo_topup_bonus":
+            promo_code = str(t.payment_id or "—")
+            lines.append(
+                "• "
+                + plain("Промокод бонус ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
+                + code(promo_code)
+                + plain(" · ")
+                + esc(dt_s)
+                + plain(" UTC")
+            )
+        else:
+            prov = _ru_payment_provider(t.payment_provider)
+            lines.append(
+                "• "
+                + plain("Пополнение ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
+                + prov
+                + plain(" · ")
+                + esc(dt_s)
+                + plain(" UTC")
+            )
     return lines
 
 
@@ -96,7 +109,7 @@ def _balance_caption(user: User, history: list[str]) -> str:
         "",
         plain("На счёте: ") + bold(bal) + plain(" ₽"),
         "",
-        bold("Успешные оплаты:") + "\n" + hist_block,
+        bold("История пополнений и бонусов:") + "\n" + hist_block,
     )
 
 

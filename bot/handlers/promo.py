@@ -86,23 +86,44 @@ async def msg_promo_code(
         await state.clear()
         return
 
+    settings = get_settings()
     ok, text, meta = await apply_promo_code_for_user(
         session,
+        settings=settings,
         user=db_user,
         raw_code=message.text or "",
     )
     await state.clear()
-    settings = get_settings()
     if ok:
         if meta:
-            await notify_admin(
-                settings,
-                title="🎁 " + bold("Промокод применён"),
-                lines=[
+            mt = (meta.get("type") or "").strip().lower()
+            lines: list[str]
+            if mt == "topup_bonus_percent":
+                lines = [
+                    f"Код: {code(meta['code'])}",
+                    "Тип: " + code(meta["type"]),
+                    f"Бонус: +{bold(str(meta['value']))}%",
+                    plain("Сработает 1 раз на первое пополнение после активации."),
+                ]
+            elif mt == "subscription_days":
+                fb = meta.get("fallback")
+                lines = [
+                    f"Код: {code(meta['code'])}",
+                    "Тип: " + code(meta["type"]),
+                    f"Награда: +{bold(str(meta['value']))} дн. к подписке",
+                ]
+                if fb is not None:
+                    lines.append(f"Фолбэк при отсутствии подписки: +{bold(str(fb))} ₽")
+            else:
+                lines = [
                     f"Код: {code(meta['code'])}",
                     f"Тип: {code(meta['type'])}",
                     f"Сумма: {bold(str(meta['value']))} ₽",
-                ],
+                ]
+            await notify_admin(
+                settings,
+                title="🎁 " + bold("Промокод применён"),
+                lines=lines,
                 event_type="promo_apply",
                 topic=AdminLogTopic.PROMO,
                 subject_user=db_user,

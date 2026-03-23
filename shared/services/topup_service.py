@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.config import Settings
 from shared.md2 import bold, join_lines, plain
 from shared.models.transaction import Transaction
+from shared.models.promo import PromoCode, PromoUsage
 from shared.models.user import User
 from shared.payments.base import ParsedWebhookTopup
 from shared.payments.registry import get_payment_provider
@@ -109,7 +111,7 @@ async def apply_topup_from_webhook(
     provider_name: str,
     parsed: ParsedWebhookTopup,
     settings: Settings,
-) -> tuple[str, int | None, Decimal | None, int | None]:
+) -> tuple[str, int | None, Decimal | None, int | None, Decimal | None]:
     """
     Идемпотентное зачисление.
     Возвращает (status, telegram_id, сумма_зачисления_₽, user_id при status=completed).
@@ -119,17 +121,17 @@ async def apply_topup_from_webhook(
     txn = r.scalar_one_or_none()
     if txn is None:
         logger.warning("topup webhook: txn id=%s not found", parsed.internal_transaction_id)
-        return "not_found", None, None, None
+        return "not_found", None, None, None, None
 
     if txn.type != "topup":
-        return "rejected", None, None, None
+        return "rejected", None, None, None, None
 
     if (txn.payment_provider or "").lower() != provider_name.lower():
         logger.warning("topup webhook: provider mismatch txn=%s expected=%s got=%s", txn.id, txn.payment_provider, provider_name)
-        return "rejected", None, None, None
+        return "rejected", None, None, None, None
 
     if txn.status == "completed":
-        return "duplicate", None, None, None
+        return "duplicate", None, None, None, None
 
     if txn.payment_id and parsed.external_payment_id and txn.payment_id != parsed.external_payment_id:
         logger.warning(
@@ -138,7 +140,7 @@ async def apply_topup_from_webhook(
             txn.payment_id,
             parsed.external_payment_id,
         )
-        return "rejected", None, None, None
+        return "rejected", None, None, None, None
 
     # Сумма: доверяем нашей записи в БД; вебхук может уточнить для fiat
     credited = txn.amount
@@ -153,9 +155,51 @@ async def apply_topup_from_webhook(
 
     user = await session.get(User, txn.user_id)
     if user is None:
-        return "not_found", None, None, None
+        return "not_found", None, None, None, None
 
     user.balance += credited
+
+    # Применяем бонус к первому успешному пополнению после активации промокода.
+    # Начисление идемпотентно: если промокод уже применялся к пополнению, это отмечено в promo_usages.
+    promo_bonus_total = Decimal("0")
+    now = datetime.now(timezone.utc)  # местное время для метки applied_at
+    r2 = await session.execute(
+        select(PromoUsage, PromoCode)
+        .join(PromoCode, PromoUsage.promo_id == PromoCode.id)
+        .where(
+            PromoUsage.user_id == user.id,
+            PromoCode.type == "topup_bonus_percent",
+            PromoUsage.topup_bonus_applied_at.is_(None),
+        )
+    )
+    for usage, promo in r2.all():
+        percent = Decimal(str(promo.value))
+        if percent <= 0:
+            usage.topup_bonus_applied_at = now
+            continue
+        bonus = (credited * percent / Decimal("100")).quantize(Decimal("0.01"))
+        if bonus > 0:
+            user.balance += bonus
+            promo_bonus_total += bonus
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="promo_topup_bonus",
+                    amount=bonus,
+                    currency="RUB",
+                    payment_provider="promo",
+                    payment_id=promo.code,
+                    status="completed",
+                    description=f"Промокод {promo.code}: бонус к пополнению (+{percent}%)",
+                    meta={
+                        "promo_id": promo.id,
+                        "promo_type": promo.type,
+                        "promo_percent": str(percent),
+                        "base_topup_amount": str(credited),
+                    },
+                )
+            )
+        usage.topup_bonus_applied_at = now
     txn.status = "completed"
     meta = dict(txn.meta or {})
     meta["webhook_parsed"] = {
@@ -167,13 +211,15 @@ async def apply_topup_from_webhook(
     tg_id = int(meta.get("telegram_id") or 0)
     await session.flush()
 
-    return "completed", (tg_id if tg_id else None), credited, user.id
+    credited_total = credited + promo_bonus_total
+    return "completed", (tg_id if tg_id else None), credited_total, user.id, promo_bonus_total
 
 
 async def notify_topup_success(
     *,
     telegram_id: int,
     amount_rub: Decimal,
+    promo_bonus_rub: Decimal | None = None,
     settings: Settings,
     user_id: int | None = None,
     provider_name: str | None = None,
@@ -186,6 +232,8 @@ async def notify_topup_success(
     text = plain("✅ Баланс пополнен на ") + bold(str(amount_rub)) + plain(" ₽.")
     if extra:
         text += f"\n\n{extra}"
+    if promo_bonus_rub is not None and promo_bonus_rub > 0:
+        text += f"\n\n🎁 Промокод бонус: +{bold(str(promo_bonus_rub))} ₽."
     await send_telegram_message(telegram_id, text, settings=settings)
 
     if user_id is not None:
@@ -197,13 +245,17 @@ async def notify_topup_success(
             if u is not None:
                 from shared.services.admin_log_topics import AdminLogTopic
 
+                admin_lines: list[str] = [
+                    f"Сумма: {bold(str(amount_rub))} ₽",
+                    f"Провайдер: {bold(provider_name or '—')}",
+                ]
+                if promo_bonus_rub is not None and promo_bonus_rub > 0:
+                    admin_lines.append(f"Бонус промокодов: {bold(str(promo_bonus_rub))} ₽")
+
                 await notify_admin(
                     settings,
                     title="💳 " + bold("Пополнение баланса"),
-                    lines=[
-                        f"Сумма: {bold(str(amount_rub))} ₽",
-                        f"Провайдер: {bold(provider_name or '—')}",
-                    ],
+                    lines=admin_lines,
                     event_type="topup",
                     topic=AdminLogTopic.PAYMENTS,
                     subject_user=u,

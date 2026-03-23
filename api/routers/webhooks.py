@@ -42,7 +42,7 @@ async def webhook_cryptobot(request: Request) -> Response:
 
     factory = get_session_factory()
     async with factory() as session:
-        status, tg_id, amount, user_id = await apply_topup_from_webhook(
+        status, tg_id, amount, user_id, promo_bonus_rub = await apply_topup_from_webhook(
             session,
             provider_name="cryptobot",
             parsed=parsed,
@@ -54,6 +54,7 @@ async def webhook_cryptobot(request: Request) -> Response:
         await notify_topup_success(
             telegram_id=tg_id,
             amount_rub=amount,
+            promo_bonus_rub=promo_bonus_rub,
             settings=settings,
             user_id=user_id,
             provider_name="cryptobot",
@@ -87,7 +88,7 @@ async def webhook_platega(request: Request) -> Response:
 
     factory = get_session_factory()
     async with factory() as session:
-        status, tg_id, amount, user_id = await apply_topup_from_webhook(
+        status, tg_id, amount, user_id, promo_bonus_rub = await apply_topup_from_webhook(
             session,
             provider_name="platega",
             parsed=parsed,
@@ -99,6 +100,7 @@ async def webhook_platega(request: Request) -> Response:
         await notify_topup_success(
             telegram_id=tg_id,
             amount_rub=amount,
+            promo_bonus_rub=promo_bonus_rub,
             settings=settings,
             user_id=user_id,
             provider_name="platega",

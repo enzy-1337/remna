@@ -23,6 +23,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.handlers.admin import router as admin_router
+from bot.handlers.admin_promo import router as admin_promo_router
 from bot.handlers.balance import router as balance_router
 from bot.handlers.devices import router as devices_router
 from bot.handlers.fallback import router as fallback_router
@@ -42,7 +43,7 @@ from shared.services.autorenew_service import subscription_autorenew_loop
 from shared.services.expiry_notify_service import subscription_expiry_notify_loop
 from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_sync import sync_loop
-from shared.services.schema_patches import ensure_subscription_expiry_notify_columns
+from shared.services.schema_patches import ensure_promo_columns, ensure_subscription_expiry_notify_columns
 
 
 async def main() -> None:
@@ -67,6 +68,7 @@ async def main() -> None:
     async with factory() as s:
         await ensure_default_plans_if_needed(s)
         await ensure_subscription_expiry_notify_columns(s)
+        await ensure_promo_columns(s)
         await s.commit()
 
     bot = Bot(
@@ -82,6 +84,7 @@ async def main() -> None:
     dp.update.middleware(UserContextMiddleware())
 
     dp.include_router(admin_router)
+    dp.include_router(admin_promo_router)
     dp.include_router(subscription_router)
     dp.include_router(devices_router)
     dp.include_router(referrals_router)

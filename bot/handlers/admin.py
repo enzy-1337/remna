@@ -65,6 +65,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="📋 Пользователи", callback_data="admin:users:0"))
     b.row(InlineKeyboardButton(text="🔎 Найти по Telegram ID", callback_data="admin:find"))
     b.row(InlineKeyboardButton(text="📢 Рассылка всем", callback_data="admin:broadcast"))
+    b.row(InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"))
     b.row(InlineKeyboardButton(text="⛔ Полный сброс БД", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
