@@ -253,6 +253,16 @@ class Settings(BaseSettings):
     maintenance_mode: bool = Field(default=False, validation_alias="MAINTENANCE_MODE")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     debug: bool = Field(default=False, validation_alias="DEBUG")
+    web_admin_session_secret: str = Field(
+        default="change-me-in-env",
+        validation_alias="WEB_ADMIN_SESSION_SECRET",
+        description="Секрет cookie-сессии web-admin",
+    )
+    web_admin_github_logins_csv: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_GITHUB_LOGINS",
+        description="Список GitHub login для входа в web-admin через запятую",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")
@@ -341,6 +351,19 @@ class Settings(BaseSettings):
         if self.admin_telegram_id is not None:
             out = list(dict.fromkeys([*out, self.admin_telegram_id]))
         return out
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def web_admin_github_logins(self) -> list[str]:
+        raw = (self.web_admin_github_logins_csv or "").strip()
+        if not raw:
+            return []
+        out: list[str] = []
+        for part in raw.replace(";", ",").split(","):
+            login = part.strip().lstrip("@")
+            if login:
+                out.append(login)
+        return list(dict.fromkeys(out))
 
     def admin_log_thread_for(self, topic: AdminLogTopic) -> int | None:
         m: dict[AdminLogTopic, int | None] = {
