@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
@@ -131,6 +131,7 @@ async def activate_trial(
             sub_url = full.get("subscriptionUrl") or ""
         except RemnaWaveError:
             sub_url = ""
+    sub_url = subscription_url_for_telegram(sub_url or None, settings) or ""
 
     rw_uuid = uuid_lib.UUID(str(uid_str))
     user.remnawave_uuid = rw_uuid

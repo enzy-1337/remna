@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
+from bot.keyboards.instructions_kb import build_instructions_markup
 from bot.ui.subscription_detail import build_subscription_detail_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
@@ -190,31 +191,11 @@ async def cb_sub_instructions(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     settings = get_settings()
-    b = InlineKeyboardBuilder()
-    if settings.instruction_telegraph_phone_url:
-        b.row(
-            InlineKeyboardButton(
-                text="📱 Телефон (Telegra.ph)",
-                url=settings.instruction_telegraph_phone_url,
-            )
-        )
-    if settings.instruction_telegraph_pc_url:
-        b.row(
-            InlineKeyboardButton(
-                text="💻 Компьютер (Telegra.ph)",
-                url=settings.instruction_telegraph_pc_url,
-            )
-        )
-    if not settings.instruction_telegraph_phone_url and not settings.instruction_telegraph_pc_url:
-        if settings.instruction_android_url:
-            b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
-        if settings.instruction_ios_url:
-            b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
-        if settings.instruction_windows_url:
-            b.row(InlineKeyboardButton(text="🪟 Windows", url=settings.instruction_windows_url))
-        if settings.instruction_macos_url:
-            b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
-    b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
+    kb = build_instructions_markup(
+        settings,
+        back_callback="menu:sub_main",
+        back_text="⬅️ Назад к подписке",
+    )
     text = join_lines(
         "📖 " + bold("Инструкции"),
         "",
@@ -240,7 +221,7 @@ async def cb_sub_instructions(
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
-        reply_markup=b.as_markup(),
+        reply_markup=kb,
         settings=settings,
     )
 

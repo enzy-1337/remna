@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from shared.config import Settings
 from shared.md2 import bold, esc, join_lines, link, plain
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
 from shared.integrations.rw_traffic import should_apply_hwid_device_limit_to_panel
 from shared.models.device import Device
 from shared.models.plan import Plan
@@ -313,7 +313,7 @@ async def purchase_plan_with_balance(
     sub_url = ""
     try:
         uinf = await rw.get_user(str(rw_uuid))
-        sub_url = uinf.get("subscriptionUrl") or ""
+        sub_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
     except RemnaWaveError:
         pass
 

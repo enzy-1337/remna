@@ -149,6 +149,15 @@ class Settings(BaseSettings):
         validation_alias="REMNAWAVE_API_PATH_PREFIX",
         description="Префикс API на nginx (часто /api; при 404 попробуйте пусто или /panel/api)",
     )
+    remnawave_public_url: str | None = Field(
+        default=None,
+        validation_alias="REMNAWAVE_PUBLIC_URL",
+        description=(
+            "Публичный origin для ссылок подписки (https://panel.example.com). "
+            "Если бот и панель на одном сервере и REMNAWAVE_API_URL внутренний "
+            "(localhost, docker), укажите домен, который открывают пользователи в клиенте."
+        ),
+    )
     remnawave_api_token: str = Field(default="", validation_alias="REMNAWAVE_API_TOKEN")
     remnawave_default_squad_uuid: str | None = Field(
         default=None,
@@ -311,7 +320,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("bot_section_photo_path", "bot_section_photo_url", mode="before")
+    @field_validator("bot_section_photo_path", "bot_section_photo_url", "remnawave_public_url", mode="before")
     @classmethod
     def _empty_photo_fields(cls, v: object) -> object:
         if v is None or v == "":

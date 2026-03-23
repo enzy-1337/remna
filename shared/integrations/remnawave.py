@@ -15,6 +15,7 @@ import re
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -25,6 +26,41 @@ logger = logging.getLogger(__name__)
 
 class RemnaWaveError(Exception):
     """Ошибка вызова Remnawave API."""
+
+
+def subscription_url_for_telegram(raw: str | None, settings: Settings) -> str | None:
+    """Ссылка подписки для пользователя в Telegram.
+
+    Если задан ``REMNAWAVE_PUBLIC_URL``, подменяет схему и хост из ответа панели,
+    путь и query сохраняются. Нужно, когда ``REMNAWAVE_API_URL`` указывает на
+    localhost или внутренний адрес, а клиентам нужен внешний домен панели.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    pub_raw = (settings.remnawave_public_url or "").strip()
+    if not pub_raw:
+        return s
+    pub_s = pub_raw if "://" in pub_raw else f"https://{pub_raw}"
+    try:
+        parsed = urlparse(s)
+        pub = urlparse(pub_s)
+        if not pub.scheme or not pub.netloc:
+            return s
+        if not parsed.netloc:
+            base = pub.geturl().rstrip("/")
+            path = parsed.path or ""
+            if path and not path.startswith("/"):
+                path = "/" + path
+            q = f"?{parsed.query}" if parsed.query else ""
+            frag = f"#{parsed.fragment}" if parsed.fragment else ""
+            return f"{base}{path}{q}{frag}" if path or q or frag else base
+        new = parsed._replace(scheme=pub.scheme, netloc=pub.netloc)
+        return urlunparse(new)
+    except Exception:
+        return s
 
 
 def is_remnawave_not_found(err: BaseException) -> bool:

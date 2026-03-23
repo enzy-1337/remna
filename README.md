@@ -105,6 +105,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 ## Переменные Remnawave
 
 - `REMNAWAVE_API_URL` — **только origin** панели, например `https://panel.example.com` (без пути к эндпоинтам).
+- `REMNAWAVE_PUBLIC_URL` — опционально: **публичный** origin для ссылок подписки, которые видит пользователь в Telegram. Задавайте, если `REMNAWAVE_API_URL` внутренний (`http://127.0.0.1`, имя docker-сервиса и т.п.), а клиенты подключаются по внешнему домену. Если не задано, в бот уходит ссылка из ответа панели как есть (удобно, когда API уже на том же публичном URL).
 - `REMNAWAVE_API_PATH_PREFIX` — префикс на стороне nginx (по умолчанию **`/api`** → запросы вида `{origin}/api/users`). Если nginx отдаёт **404 HTML** на `POST .../api/users`, проверьте проксирование в панель или задайте другой префикс (например пустой строкой и уточните URL у хостинга).
 - `REMNAWAVE_API_TOKEN` — JWT для `Authorization: Bearer`.
 - `REMNAWAVE_DEFAULT_SQUAD_UUID` — UUID internal squad (массив `activeInternalSquads`).

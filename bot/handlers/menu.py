@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
+from bot.keyboards.instructions_kb import build_instructions_markup
 from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
@@ -155,31 +156,11 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
         return
     assert db_user is not None
     settings = get_settings()
-    b = InlineKeyboardBuilder()
-    if settings.instruction_telegraph_phone_url:
-        b.row(
-            InlineKeyboardButton(
-                text="📱 Телефон (Telegra.ph)",
-                url=settings.instruction_telegraph_phone_url,
-            )
-        )
-    if settings.instruction_telegraph_pc_url:
-        b.row(
-            InlineKeyboardButton(
-                text="💻 Компьютер (Telegra.ph)",
-                url=settings.instruction_telegraph_pc_url,
-            )
-        )
-    if not settings.instruction_telegraph_phone_url and not settings.instruction_telegraph_pc_url:
-        if settings.instruction_android_url:
-            b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
-        if settings.instruction_ios_url:
-            b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
-        if settings.instruction_windows_url:
-            b.row(InlineKeyboardButton(text="🪟 Windows", url=settings.instruction_windows_url))
-        if settings.instruction_macos_url:
-            b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    kb = build_instructions_markup(
+        settings,
+        back_callback="menu:main",
+        back_text="⬅️ В профиль",
+    )
     text = join_lines(
         "📖 " + bold("Инструкции"),
         "",
@@ -205,7 +186,7 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
-        reply_markup=b.as_markup(),
+        reply_markup=kb,
         settings=settings,
     )
 

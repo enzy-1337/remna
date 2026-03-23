@@ -9,7 +9,7 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
 from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
@@ -96,7 +96,7 @@ async def build_subscription_detail_caption(
         rw = RemnaWaveClient(settings)
         try:
             uinf = await rw.get_user(str(user.remnawave_uuid))
-            sub_url = uinf.get("subscriptionUrl") or None
+            sub_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
         except RemnaWaveError:
             logger.warning("RW get_user failed for subscription screen user=%s", user.id)
             uinf = None
