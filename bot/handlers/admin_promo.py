@@ -574,6 +574,22 @@ async def cb_promos_create_active(
 
     await state.clear()
     await cq.answer("Создано.")
+    await notify_admin(
+        get_settings(),
+        title="🎁 " + bold("Промокод создан"),
+        lines=[
+            plain("Код: ") + code(created.code),
+            plain("Тип: ") + code(created.type),
+            plain("Награда: ") + bold(_promo_reward_caption(created)),
+            plain("Срок (до): ") + bold(_format_expires(created)),
+            plain("Лимит: ") + bold("∞" if created.max_uses is None else str(created.max_uses)),
+            plain("Создал: ") + bold(f"#{db_user.id}"),
+        ],
+        event_type="promo_create",
+        topic=AdminLogTopic.PROMO,
+        subject_user=db_user,
+        session=session,
+    )
     await _render_promos_view(cq, session, promo_id=created.id)
 
 
@@ -1002,6 +1018,22 @@ async def cb_promos_edit_active(
 
     await state.clear()
     await cq.answer("Изменено.")
+    await notify_admin(
+        get_settings(),
+        title="✏️ " + bold("Промокод изменён"),
+        lines=[
+            plain("Код: ") + code(promo.code),
+            plain("Тип: ") + code(promo.type),
+            plain("Награда: ") + bold(_promo_reward_caption(promo)),
+            plain("Срок (до): ") + bold(_format_expires(promo)),
+            plain("Лимит: ") + bold("∞" if promo.max_uses is None else str(promo.max_uses)),
+            plain("Изменил: ") + bold(f"#{db_user.id}"),
+        ],
+        event_type="promo_edit",
+        topic=AdminLogTopic.PROMO,
+        subject_user=db_user,
+        session=session,
+    )
     await _render_promos_view(cq, session, promo_id=promo_id)
 
 
