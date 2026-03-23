@@ -171,6 +171,43 @@ def _active_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def _edit_field_select_keyboard(promo_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(
+            text="🎁 Награда",
+            callback_data=f"admin:promos:editfield:{promo_id}:value",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="🏷 Тип награды",
+            callback_data=f"admin:promos:editfield:{promo_id}:type",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="🔢 Лимит активаций",
+            callback_data=f"admin:promos:editfield:{promo_id}:max_uses",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="📅 Срок действия",
+            callback_data=f"admin:promos:editfield:{promo_id}:expires_at",
+        )
+    )
+    b.row(InlineKeyboardButton(text="⬅️ Назад к промокоду", callback_data=f"admin:promos:view:{promo_id}"))
+    return b.as_markup()
+
+
+def _promo_view_back_keyboard(promo_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="↩️ Открыть промокод", callback_data=f"admin:promos:view:{promo_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:promos:page:0"))
+    return b.as_markup()
+
+
 async def _try_delete_by_id(bot, chat_id: int, message_id: int | None) -> None:
     if message_id is None:
         return
@@ -748,7 +785,7 @@ async def cb_promos_view(
     await _render_promos_view(cq, session, promo_id=promo_id)
 
 
-@router.callback_query(F.data.startswith("admin:promos:edit:"))
+@router.callback_query(F.data.regexp(r"^admin:promos:edit:\d+$"))
 async def cb_promos_edit_start(
     cq: CallbackQuery,
     session: AsyncSession,
@@ -775,20 +812,107 @@ async def cb_promos_edit_start(
 
     await state.clear()
     await state.update_data(edit_promo_id=promo_id, edit_type=promo.type)
-    await state.set_state(AdminPromoStates.edit_waiting_type)
+    await state.set_state(AdminPromoStates.edit_choosing_field)
     await cq.answer()
     if cq.message:
+        await delete_message_safe(cq.message)
         await _send_and_track(
             state,
             cq.message,
-            "Выберите новый тип промокода:",
-            reply_markup=_type_select_keyboard("admin:promos:edit"),
+            "Что нужно отредактировать в промокоде?",
+            reply_markup=_edit_field_select_keyboard(promo_id),
         )
 
 
-@router.callback_query(F.data.startswith("admin:promos:edit:type:"))
+@router.callback_query(F.data.startswith("admin:promos:editfield:"))
+async def cb_promos_edit_field(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    parts = cq.data.split(":")
+    if len(parts) < 5:
+        await cq.answer("Неверные данные.", show_alert=True)
+        return
+    try:
+        promo_id = int(parts[3])
+    except Exception:
+        await cq.answer("Неверный id.", show_alert=True)
+        return
+    field = parts[4]
+    promo = await session.get(PromoCode, promo_id)
+    if promo is None:
+        await cq.answer("Промокод не найден.", show_alert=True)
+        return
+
+    await state.update_data(edit_promo_id=promo_id, edit_type=promo.type, edit_mode=field)
+    await cq.answer()
+    if cq.message is None:
+        return
+    await delete_message_safe(cq.message)
+    cancel_kb = _cancel_keyboard("admin:promos")
+    if field == "value":
+        await state.set_state(AdminPromoStates.edit_waiting_value)
+        if promo.type == "subscription_days":
+            await _send_and_track(state, cq.message, "Введите дни подписки (целое число).", reply_markup=cancel_kb)
+        elif promo.type == "balance_rub":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите сумму в ₽ (например 100 или 10.5).",
+                reply_markup=cancel_kb,
+            )
+        else:
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите процент к первому пополнению (например 10).",
+                reply_markup=cancel_kb,
+            )
+        return
+    if field == "type":
+        await state.set_state(AdminPromoStates.edit_waiting_type)
+        await _send_and_track(
+            state,
+            cq.message,
+            "Выберите новый тип награды:",
+            reply_markup=_type_select_keyboard("admin:promos:editsettype"),
+        )
+        return
+    if field == "max_uses":
+        await state.set_state(AdminPromoStates.edit_waiting_max_uses)
+        await _send_and_track(
+            state,
+            cq.message,
+            "Лимит активаций (целое число) или '-' для без лимита.",
+            reply_markup=cancel_kb,
+        )
+        return
+    if field == "expires_at":
+        await state.set_state(AdminPromoStates.edit_waiting_expires_at)
+        await _send_and_track(
+            state,
+            cq.message,
+            "Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.",
+            reply_markup=cancel_kb,
+        )
+        return
+    await state.clear()
+    await _send_and_track(
+        state,
+        cq.message,
+        "Не удалось определить поле для редактирования.",
+        reply_markup=_promo_view_back_keyboard(promo_id),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:promos:editsettype:"))
 async def cb_promos_edit_type(
     cq: CallbackQuery,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     if cq.from_user is None or not _is_admin(cq.from_user.id):
@@ -798,7 +922,19 @@ async def cb_promos_edit_type(
     if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
         await cq.answer("Неверный тип.", show_alert=True)
         return
-    await state.update_data(edit_type=promo_type)
+    data = await state.get_data()
+    promo_id = data.get("edit_promo_id")
+    if not isinstance(promo_id, int):
+        await state.clear()
+        await cq.answer("Сессия редактирования сброшена.", show_alert=True)
+        return
+    promo = await session.get(PromoCode, promo_id)
+    if promo is None:
+        await state.clear()
+        await cq.answer("Промокод не найден.", show_alert=True)
+        return
+
+    await state.update_data(edit_type=promo_type, edit_mode="type")
     await state.set_state(AdminPromoStates.edit_waiting_value)
     await cq.answer()
     if cq.message:
@@ -825,11 +961,13 @@ async def cb_promos_edit_type(
 @router.message(AdminPromoStates.edit_waiting_value, F.text)
 async def msg_promos_edit_value(
     message: Message,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
     promo_type = data.get("edit_type")
     promo_id = data.get("edit_promo_id")
+    edit_mode = data.get("edit_mode")
     if not isinstance(promo_type, str) or not isinstance(promo_id, int):
         await state.clear()
         return
@@ -867,25 +1005,43 @@ async def msg_promos_edit_value(
         await _send_and_track(state, message, "Значение должно быть > 0.")
         return
 
+    promo = await session.get(PromoCode, promo_id)
+    if promo is None:
+        await state.clear()
+        await _send_and_track(state, message, "Промокод не найден.")
+        return
+
     await state.update_data(edit_value=val)
-    await state.set_state(AdminPromoStates.edit_waiting_expires_at)
-    cancel_kb = _cancel_keyboard("admin:promos")
-    await _send_and_track(
-        state,
-        message,
-        "Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.",
-        reply_markup=cancel_kb,
+    promo.type = promo_type if edit_mode == "type" else promo.type
+    promo.value = val
+    if promo.type != "subscription_days":
+        promo.fallback_value_rub = None
+    try:
+        await session.flush()
+    except Exception as e:
+        msg = strip_for_popup_alert(str(e))
+        await _send_and_track(state, message, msg[:200])
+        return
+    await state.clear()
+    await message.answer(
+        esc("Награда обновлена."),
+        reply_markup=_promo_view_back_keyboard(promo_id),
     )
 
 
 @router.message(AdminPromoStates.edit_waiting_fallback, F.text)
 async def msg_promos_edit_fallback(
     message: Message,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
     promo_type = data.get("edit_type")
+    promo_id = data.get("edit_promo_id")
     if promo_type != "subscription_days":
+        await state.clear()
+        return
+    if not isinstance(promo_id, int):
         await state.clear()
         return
     raw = (message.text or "").strip().replace(",", ".")
@@ -901,20 +1057,36 @@ async def msg_promos_edit_fallback(
     if fb <= 0:
         await _send_and_track(state, message, "Фолбэк должен быть > 0.")
         return
-    await state.update_data(edit_fallback=fb)
-    await state.set_state(AdminPromoStates.edit_waiting_expires_at)
-    cancel_kb = _cancel_keyboard("admin:promos")
-    await _send_and_track(
-        state,
-        message,
-        "Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.",
-        reply_markup=cancel_kb,
+    promo = await session.get(PromoCode, promo_id)
+    if promo is None:
+        await state.clear()
+        await _send_and_track(state, message, "Промокод не найден.")
+        return
+    edit_value = data.get("edit_value")
+    if not isinstance(edit_value, Decimal):
+        await state.clear()
+        await _send_and_track(state, message, "Ошибка данных. Повторите редактирование.")
+        return
+    promo.type = "subscription_days"
+    promo.value = edit_value
+    promo.fallback_value_rub = fb
+    try:
+        await session.flush()
+    except Exception as e:
+        msg = strip_for_popup_alert(str(e))
+        await _send_and_track(state, message, msg[:200])
+        return
+    await state.clear()
+    await message.answer(
+        esc("Награда обновлена."),
+        reply_markup=_promo_view_back_keyboard(promo_id),
     )
 
 
 @router.message(AdminPromoStates.edit_waiting_expires_at, F.text)
 async def msg_promos_edit_expires(
     message: Message,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
@@ -929,20 +1101,33 @@ async def msg_promos_edit_expires(
         await _send_and_track(state, message, str(e))
         return
 
-    await state.update_data(edit_expires_at=expires_at)
-    await state.set_state(AdminPromoStates.edit_waiting_max_uses)
-    cancel_kb = _cancel_keyboard("admin:promos")
-    await _send_and_track(
-        state,
-        message,
-        "Лимит активаций (целое число) или '-' для без лимита.",
-        reply_markup=cancel_kb,
+    promo_id = data.get("edit_promo_id")
+    if not isinstance(promo_id, int):
+        await state.clear()
+        return
+    promo = await session.get(PromoCode, promo_id)
+    if promo is None:
+        await state.clear()
+        await _send_and_track(state, message, "Промокод не найден.")
+        return
+    promo.expires_at = expires_at
+    try:
+        await session.flush()
+    except Exception as e:
+        msg = strip_for_popup_alert(str(e))
+        await _send_and_track(state, message, msg[:200])
+        return
+    await state.clear()
+    await message.answer(
+        esc("Срок действия обновлен."),
+        reply_markup=_promo_view_back_keyboard(promo_id),
     )
 
 
 @router.message(AdminPromoStates.edit_waiting_max_uses, F.text)
 async def msg_promos_edit_max_uses(
     message: Message,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
@@ -961,80 +1146,28 @@ async def msg_promos_edit_max_uses(
             await _send_and_track(state, message, "Лимит должен быть > 0.")
             return
 
-    await state.update_data(edit_max_uses=max_uses)
-    await state.set_state(AdminPromoStates.edit_waiting_active)
-    await _send_and_track(
-        state,
-        message,
-        "Промокод: включить или выключить?",
-        reply_markup=_active_select_keyboard("admin:promos:edit"),
-    )
-
-
-@router.callback_query(F.data.startswith("admin:promos:edit:active:"))
-async def cb_promos_edit_active(
-    cq: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-    db_user: User | None,
-) -> None:
-    if cq.from_user is None or db_user is None or not _is_admin(cq.from_user.id):
-        await cq.answer("Нет доступа.", show_alert=True)
-        return
-    data = await state.get_data()
     promo_id = data.get("edit_promo_id")
-    promo_type = data.get("edit_type")
-    promo_value = data.get("edit_value")
-    promo_fallback = data.get("edit_fallback")
-    promo_expires_at = data.get("edit_expires_at")
-    promo_max_uses = data.get("edit_max_uses")
-
-    if not isinstance(promo_id, int) or not isinstance(promo_type, str) or not isinstance(promo_value, Decimal):
+    if not isinstance(promo_id, int):
         await state.clear()
-        await cq.answer("Ошибка данных.", show_alert=True)
         return
-
-    flag_raw = cq.data.split(":")[-1]
-    is_active = flag_raw == "true"
-
     promo = await session.get(PromoCode, promo_id)
     if promo is None:
         await state.clear()
-        await cq.answer("Промокод не найден.", show_alert=True)
+        await _send_and_track(state, message, "Промокод не найден.")
         return
-
-    promo.type = promo_type
-    promo.value = promo_value
-    promo.fallback_value_rub = promo_fallback if promo_type == "subscription_days" else None
-    promo.expires_at = promo_expires_at
-    promo.max_uses = promo_max_uses
-    promo.is_active = is_active
+    promo.max_uses = max_uses
     try:
         await session.flush()
     except Exception as e:
         msg = strip_for_popup_alert(str(e))
-        await cq.answer(msg[:200], show_alert=True)
+        await _send_and_track(state, message, msg[:200])
         return
-
     await state.clear()
-    await cq.answer("Изменено.")
-    await notify_admin(
-        get_settings(),
-        title="✏️ " + bold("Промокод изменён"),
-        lines=[
-            plain("Код: ") + code(promo.code),
-            plain("Тип: ") + code(promo.type),
-            plain("Награда: ") + bold(_promo_reward_caption(promo)),
-            plain("Срок (до): ") + bold(_format_expires(promo)),
-            plain("Лимит: ") + bold("∞" if promo.max_uses is None else str(promo.max_uses)),
-            plain("Изменил: ") + bold(f"#{db_user.id}"),
-        ],
-        event_type="promo_edit",
-        topic=AdminLogTopic.PROMO,
-        subject_user=db_user,
-        session=session,
+    await message.answer(
+        esc("Лимит обновлен."),
+        reply_markup=_promo_view_back_keyboard(promo_id),
     )
-    await _render_promos_view(cq, session, promo_id=promo_id)
+
 
 
 

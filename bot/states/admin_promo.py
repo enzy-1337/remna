@@ -14,10 +14,10 @@ class AdminPromoStates(StatesGroup):
     create_waiting_active = State()
 
     # Edit flow
+    edit_choosing_field = State()
     edit_waiting_type = State()
     edit_waiting_value = State()
     edit_waiting_fallback = State()
     edit_waiting_expires_at = State()
     edit_waiting_max_uses = State()
-    edit_waiting_active = State()
 
