@@ -245,6 +245,8 @@ async def cb_promos_create_start(
     await cq.answer()
     if cq.message is None:
         return
+    # Удаляем экран списка промокодов, чтобы не оставался "висячим" сообщением.
+    await delete_message_safe(cq.message)
     await _send_and_track(
         state,
         cq.message,
@@ -348,6 +350,8 @@ async def cb_promos_create_type(
     await state.set_state(AdminPromoStates.create_waiting_value)
     await cq.answer()
     if cq.message:
+        # Удаляем сообщение "Выберите тип промокода", чтобы шаги были чистыми.
+        await delete_message_safe(cq.message)
         cancel_kb = _cancel_keyboard("admin:promos")
         if promo_type == "subscription_days":
             await _send_and_track(
@@ -570,9 +574,7 @@ async def cb_promos_create_active(
 
     await state.clear()
     await cq.answer("Создано.")
-    if cq.message:
-        await cq.message.answer(esc("Промокод создан. Открываю детали..."))
-        await _render_promos_view(cq, session, promo_id=created.id)
+    await _render_promos_view(cq, session, promo_id=created.id)
 
 
 async def _render_promos_view(
@@ -784,6 +786,7 @@ async def cb_promos_edit_type(
     await state.set_state(AdminPromoStates.edit_waiting_value)
     await cq.answer()
     if cq.message:
+        await delete_message_safe(cq.message)
         cancel_kb = _cancel_keyboard("admin:promos")
         if promo_type == "subscription_days":
             await _send_and_track(state, cq.message, "Введите дни подписки (целое число).", reply_markup=cancel_kb)
@@ -999,9 +1002,7 @@ async def cb_promos_edit_active(
 
     await state.clear()
     await cq.answer("Изменено.")
-    if cq.message:
-        await cq.message.answer(esc("Изменения сохранены. Открываю детали..."))
-        await _render_promos_view(cq, session, promo_id=promo_id)
+    await _render_promos_view(cq, session, promo_id=promo_id)
 
 
 
