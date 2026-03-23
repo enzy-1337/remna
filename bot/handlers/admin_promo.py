@@ -8,14 +8,13 @@ from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import StateFilter
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.states.admin_promo import AdminPromoStates
-from bot.utils.screen_photo import answer_callback_with_photo_screen, delete_message_safe, send_profile_screen
+from bot.utils.screen_photo import answer_callback_with_photo_screen, delete_message_safe
 from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain, strip_for_popup_alert
 from shared.models.promo import PromoCode
@@ -29,6 +28,17 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin_promo")
 
 PAGE_SIZE = 8
+
+
+async def _send_and_track(
+    state: FSMContext,
+    target: Message,
+    text: str,
+    reply_markup=None,
+) -> Message:
+    sent = await target.answer(esc(text), reply_markup=reply_markup)
+    await state.update_data(prompt_mid=sent.message_id)
+    return sent
 
 
 def _is_admin(tg_id: int | None) -> bool:
@@ -235,11 +245,12 @@ async def cb_promos_create_start(
     await cq.answer()
     if cq.message is None:
         return
-    sent = await cq.message.answer(
-        esc("Введите код промокода. Примеры: PROMO10, SUMMER2026. Длина до 64."),
+    await _send_and_track(
+        state,
+        cq.message,
+        "Введите код промокода. Примеры: PROMO10, SUMMER2026. Длина до 64.",
         reply_markup=kb,
     )
-    await state.update_data(prompt_mid=sent.message_id)
 
 
 @router.callback_query(F.data.startswith("admin:promos:page:"))
@@ -298,10 +309,10 @@ async def msg_promos_create_code(
 
     raw_code = (message.text or "").strip().upper()
     if not raw_code:
-        await message.answer("Код пустой. Введите снова.")
+        await _send_and_track(state, message, "Код пустой. Введите снова.")
         return
     if len(raw_code) > 64:
-        await message.answer("Слишком длинный код (до 64).")
+        await _send_and_track(state, message, "Слишком длинный код (до 64).")
         return
 
     data = await state.get_data()
@@ -311,8 +322,10 @@ async def msg_promos_create_code(
 
     await state.update_data(create_code=raw_code)
     await state.set_state(AdminPromoStates.create_waiting_type)
-    await message.answer(
-        join_lines(plain("Выберите тип промокода:")),
+    await _send_and_track(
+        state,
+        message,
+        "Выберите тип промокода:",
         reply_markup=_type_select_keyboard("admin:promos:create"),
     )
 
@@ -337,23 +350,26 @@ async def cb_promos_create_type(
     if cq.message:
         cancel_kb = _cancel_keyboard("admin:promos")
         if promo_type == "subscription_days":
-            sent = await cq.message.answer(
+            await _send_and_track(
+                state,
+                cq.message,
                 "Введите количество дней (целое число, например 5).",
                 reply_markup=cancel_kb,
             )
-            await state.update_data(prompt_mid=sent.message_id)
         elif promo_type == "balance_rub":
-            sent = await cq.message.answer(
+            await _send_and_track(
+                state,
+                cq.message,
                 "Введите сумму в ₽ (например 100 или 10.5).",
                 reply_markup=cancel_kb,
             )
-            await state.update_data(prompt_mid=sent.message_id)
         else:
-            sent = await cq.message.answer(
+            await _send_and_track(
+                state,
+                cq.message,
                 "Введите процент к первому пополнению (например 10 или 15.5).",
                 reply_markup=cancel_kb,
             )
-            await state.update_data(prompt_mid=sent.message_id)
 
 
 @router.message(AdminPromoStates.create_waiting_value, F.text)
@@ -375,39 +391,41 @@ async def msg_promos_create_value(
 
     if promo_type == "subscription_days":
         if not raw.isdigit():
-            await message.answer("Нужно целое число дней.")
+            await _send_and_track(state, message, "Нужно целое число дней.")
             return
         days = int(raw)
         if days <= 0:
-            await message.answer("Дни должны быть > 0.")
+            await _send_and_track(state, message, "Дни должны быть > 0.")
             return
         await state.update_data(create_value=Decimal(days))
         await state.set_state(AdminPromoStates.create_waiting_fallback)
         cancel_kb = _cancel_keyboard("admin:promos")
-        sent = await message.answer(
+        await _send_and_track(
+            state,
+            message,
             "Если подписки не будет: введите фолбэк-сумму на баланс в ₽ (например 100).",
             reply_markup=cancel_kb,
         )
-        await state.update_data(prompt_mid=sent.message_id)
         return
 
     try:
         val = Decimal(raw)
     except InvalidOperation:
-        await message.answer("Введите число (например 100 или 10.5).")
+        await _send_and_track(state, message, "Введите число (например 100 или 10.5).")
         return
     if val <= 0:
-        await message.answer("Значение должно быть > 0.")
+        await _send_and_track(state, message, "Значение должно быть > 0.")
         return
 
     await state.update_data(create_value=val)
     await state.set_state(AdminPromoStates.create_waiting_expires_at)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer(
+    await _send_and_track(
+        state,
+        message,
         "Введите срок действия до (YYYY-MM-DD или DD.MM.YYYY), или '-' чтобы без срока.",
         reply_markup=cancel_kb,
     )
-    await state.update_data(prompt_mid=sent.message_id)
 
 
 @router.message(AdminPromoStates.create_waiting_fallback, F.text)
@@ -430,20 +448,21 @@ async def msg_promos_create_fallback(
     try:
         fb = Decimal(raw)
     except InvalidOperation:
-        await message.answer("Введите число (например 100).")
+        await _send_and_track(state, message, "Введите число (например 100).")
         return
     if fb <= 0:
-        await message.answer("Фолбэк должен быть > 0.")
+        await _send_and_track(state, message, "Фолбэк должен быть > 0.")
         return
 
     await state.update_data(create_fallback=fb)
     await state.set_state(AdminPromoStates.create_waiting_expires_at)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer(
+    await _send_and_track(
+        state,
+        message,
         "Введите срок действия до (YYYY-MM-DD или DD.MM.YYYY), или '-' чтобы без срока.",
         reply_markup=cancel_kb,
     )
-    await state.update_data(prompt_mid=sent.message_id)
 
 
 @router.message(AdminPromoStates.create_waiting_expires_at, F.text)
@@ -460,17 +479,18 @@ async def msg_promos_create_expires(
     try:
         expires_at = _parse_date_any(raw)
     except ValueError as e:
-        await message.answer(str(e))
+        await _send_and_track(state, message, str(e))
         return
 
     await state.update_data(create_expires_at=expires_at)
     await state.set_state(AdminPromoStates.create_waiting_max_uses)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer(
+    await _send_and_track(
+        state,
+        message,
         "Введите лимит активаций (целое число) или '-' чтобы без лимита.",
         reply_markup=cancel_kb,
     )
-    await state.update_data(prompt_mid=sent.message_id)
 
 
 @router.message(AdminPromoStates.create_waiting_max_uses, F.text)
@@ -487,16 +507,21 @@ async def msg_promos_create_max_uses(
     max_uses: int | None = None
     if raw != "-":
         if not raw.isdigit():
-            await message.answer("Нужно целое число или '-' .")
+            await _send_and_track(state, message, "Нужно целое число или '-' .")
             return
         max_uses = int(raw)
         if max_uses <= 0:
-            await message.answer("Лимит должен быть > 0.")
+            await _send_and_track(state, message, "Лимит должен быть > 0.")
             return
 
     await state.update_data(create_max_uses=max_uses)
     await state.set_state(AdminPromoStates.create_waiting_active)
-    await message.answer("Промокод: включить или выключить?", reply_markup=_active_select_keyboard("admin:promos:create"))
+    await _send_and_track(
+        state,
+        message,
+        "Промокод: включить или выключить?",
+        reply_markup=_active_select_keyboard("admin:promos:create"),
+    )
 
 
 @router.callback_query(F.data.startswith("admin:promos:create:active:"))
@@ -546,7 +571,7 @@ async def cb_promos_create_active(
     await state.clear()
     await cq.answer("Создано.")
     if cq.message:
-        await cq.message.answer("Промокод создан. Открываю детали...")
+        await cq.message.answer(esc("Промокод создан. Открываю детали..."))
         await _render_promos_view(cq, session, promo_id=created.id)
 
 
@@ -735,8 +760,10 @@ async def cb_promos_edit_start(
     await state.set_state(AdminPromoStates.edit_waiting_type)
     await cq.answer()
     if cq.message:
-        await cq.message.answer(
-            join_lines(plain("Выберите новый тип промокода:")),
+        await _send_and_track(
+            state,
+            cq.message,
+            "Выберите новый тип промокода:",
             reply_markup=_type_select_keyboard("admin:promos:edit"),
         )
 
@@ -759,14 +786,21 @@ async def cb_promos_edit_type(
     if cq.message:
         cancel_kb = _cancel_keyboard("admin:promos")
         if promo_type == "subscription_days":
-            sent = await cq.message.answer("Введите дни подписки (целое число).", reply_markup=cancel_kb)
-            await state.update_data(prompt_mid=sent.message_id)
+            await _send_and_track(state, cq.message, "Введите дни подписки (целое число).", reply_markup=cancel_kb)
         elif promo_type == "balance_rub":
-            sent = await cq.message.answer("Введите сумму в ₽ (например 100 или 10.5).", reply_markup=cancel_kb)
-            await state.update_data(prompt_mid=sent.message_id)
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите сумму в ₽ (например 100 или 10.5).",
+                reply_markup=cancel_kb,
+            )
         else:
-            sent = await cq.message.answer("Введите процент к первому пополнению (например 10).", reply_markup=cancel_kb)
-            await state.update_data(prompt_mid=sent.message_id)
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите процент к первому пополнению (например 10).",
+                reply_markup=cancel_kb,
+            )
 
 
 @router.message(AdminPromoStates.edit_waiting_value, F.text)
@@ -788,33 +822,41 @@ async def msg_promos_edit_value(
 
     if promo_type == "subscription_days":
         if not raw.isdigit():
-            await message.answer("Нужно целое число дней.")
+            await _send_and_track(state, message, "Нужно целое число дней.")
             return
         days_i = int(raw)
         if days_i <= 0:
-            await message.answer("Дни должны быть > 0.")
+            await _send_and_track(state, message, "Дни должны быть > 0.")
             return
         await state.update_data(edit_value=Decimal(days_i))
         await state.set_state(AdminPromoStates.edit_waiting_fallback)
         cancel_kb = _cancel_keyboard("admin:promos")
-        sent = await message.answer("Фолбэк (деньги при отсутствии подписки): введите сумму ₽.", reply_markup=cancel_kb)
-        await state.update_data(prompt_mid=sent.message_id)
+        await _send_and_track(
+            state,
+            message,
+            "Фолбэк (деньги при отсутствии подписки): введите сумму ₽.",
+            reply_markup=cancel_kb,
+        )
         return
 
     try:
         val = Decimal(raw)
     except InvalidOperation:
-        await message.answer("Введите число (например 100 или 10.5).")
+        await _send_and_track(state, message, "Введите число (например 100 или 10.5).")
         return
     if val <= 0:
-        await message.answer("Значение должно быть > 0.")
+        await _send_and_track(state, message, "Значение должно быть > 0.")
         return
 
     await state.update_data(edit_value=val)
     await state.set_state(AdminPromoStates.edit_waiting_expires_at)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer("Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.", reply_markup=cancel_kb)
-    await state.update_data(prompt_mid=sent.message_id)
+    await _send_and_track(
+        state,
+        message,
+        "Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.",
+        reply_markup=cancel_kb,
+    )
 
 
 @router.message(AdminPromoStates.edit_waiting_fallback, F.text)
@@ -835,16 +877,20 @@ async def msg_promos_edit_fallback(
     try:
         fb = Decimal(raw)
     except InvalidOperation:
-        await message.answer("Введите число (например 100).")
+        await _send_and_track(state, message, "Введите число (например 100).")
         return
     if fb <= 0:
-        await message.answer("Фолбэк должен быть > 0.")
+        await _send_and_track(state, message, "Фолбэк должен быть > 0.")
         return
     await state.update_data(edit_fallback=fb)
     await state.set_state(AdminPromoStates.edit_waiting_expires_at)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer("Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.", reply_markup=cancel_kb)
-    await state.update_data(prompt_mid=sent.message_id)
+    await _send_and_track(
+        state,
+        message,
+        "Срок до (YYYY-MM-DD или DD.MM.YYYY), или '-' для без срока.",
+        reply_markup=cancel_kb,
+    )
 
 
 @router.message(AdminPromoStates.edit_waiting_expires_at, F.text)
@@ -861,14 +907,18 @@ async def msg_promos_edit_expires(
     try:
         expires_at = _parse_date_any(raw)
     except ValueError as e:
-        await message.answer(str(e))
+        await _send_and_track(state, message, str(e))
         return
 
     await state.update_data(edit_expires_at=expires_at)
     await state.set_state(AdminPromoStates.edit_waiting_max_uses)
     cancel_kb = _cancel_keyboard("admin:promos")
-    sent = await message.answer("Лимит активаций (целое число) или '-' для без лимита.", reply_markup=cancel_kb)
-    await state.update_data(prompt_mid=sent.message_id)
+    await _send_and_track(
+        state,
+        message,
+        "Лимит активаций (целое число) или '-' для без лимита.",
+        reply_markup=cancel_kb,
+    )
 
 
 @router.message(AdminPromoStates.edit_waiting_max_uses, F.text)
@@ -885,16 +935,18 @@ async def msg_promos_edit_max_uses(
     max_uses: int | None = None
     if raw != "-":
         if not raw.isdigit():
-            await message.answer("Нужно целое число или '-' .")
+            await _send_and_track(state, message, "Нужно целое число или '-' .")
             return
         max_uses = int(raw)
         if max_uses <= 0:
-            await message.answer("Лимит должен быть > 0.")
+            await _send_and_track(state, message, "Лимит должен быть > 0.")
             return
 
     await state.update_data(edit_max_uses=max_uses)
     await state.set_state(AdminPromoStates.edit_waiting_active)
-    await message.answer(
+    await _send_and_track(
+        state,
+        message,
         "Промокод: включить или выключить?",
         reply_markup=_active_select_keyboard("admin:promos:edit"),
     )
@@ -948,7 +1000,7 @@ async def cb_promos_edit_active(
     await state.clear()
     await cq.answer("Изменено.")
     if cq.message:
-        await cq.message.answer("Изменения сохранены. Открываю детали...")
+        await cq.message.answer(esc("Изменения сохранены. Открываю детали..."))
         await _render_promos_view(cq, session, promo_id=promo_id)
 
 
