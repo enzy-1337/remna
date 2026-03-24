@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import hmac
 import html
+from hashlib import sha256
+from base64 import urlsafe_b64encode
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from secrets import token_urlsafe
+from urllib.parse import quote_plus
 
+import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import and_, desc, func, or_, select
@@ -27,47 +33,116 @@ def _esc(v: object) -> str:
     return html.escape(str(v))
 
 
-def _layout(title: str, body: str, *, user_label: str | None = None) -> HTMLResponse:
+def _auth_data(request: Request) -> dict:
+    auth = request.session.get("wauth")
+    if isinstance(auth, dict):
+        return auth
+    return {}
+
+
+def _auth_label(request: Request) -> str | None:
+    auth = _auth_data(request)
+    return str(auth.get("label") or "") or None
+
+
+def _auth_avatar(request: Request) -> str:
+    auth = _auth_data(request)
+    avatar_url = str(auth.get("avatar_url") or "").strip()
+    if avatar_url:
+        return avatar_url
+    return "https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name=Admin"
+
+
+def _layout(title: str, body: str, *, request: Request | None = None, show_nav: bool = True) -> HTMLResponse:
     nav_auth = ""
-    if user_label:
+    if request is not None and _auth_label(request):
+        user_label = _auth_label(request) or "admin"
         nav_auth = (
-            f"<span class='muted'>Вход: {_esc(user_label)}</span>"
+            "<div class='nav-right'>"
+            f"<img src='{_esc(_auth_avatar(request))}' class='avatar me' alt='me'/>"
+            f"<span class='muted me-label'>{_esc(user_label)}</span>"
             "<form method='post' action='/admin/logout' style='display:inline'>"
-            "<button type='submit'>Выйти</button></form>"
+            "<button type='submit' class='btn ghost'>Выйти</button></form>"
+            "</div>"
         )
+    nav_block = ""
+    if show_nav:
+        nav_block = f"""
+    <header class="topbar">
+      <div class="brand">Remna Web Admin</div>
+      <input type="checkbox" id="menu-toggle" class="menu-toggle" />
+      <label for="menu-toggle" class="menu-btn"><span></span><span></span><span></span></label>
+      <nav class="nav">
+        <a href="/admin/dashboard">Дашборд</a>
+        <a href="/admin/users">Пользователи</a>
+        <a href="/admin/promos">Промокоды</a>
+        <a href="/admin/settings">Настройки</a>
+      </nav>
+      {nav_auth}
+    </header>
+"""
     page = f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{_esc(title)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body {{ font-family: Inter, Segoe UI, Arial, sans-serif; margin:0; background:#0f1115; color:#e6e8eb; }}
-    .wrap {{ max-width:1100px; margin:0 auto; padding:20px; }}
-    .nav {{ display:flex; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }}
-    .nav a {{ color:#90caf9; text-decoration:none; }}
-    .card {{ background:#171a21; border:1px solid #2a2f3a; border-radius:10px; padding:14px; margin-bottom:14px; }}
+    :root {{ --bg:#0b1020; --bg2:#101936; --card:#131c33cc; --stroke:#2a3b66; --txt:#e9edf7; --muted:#a7b4d0; --acc:#7aa2ff; --ok:#60d394; --bad:#ff6b6b; --warn:#ffd166; }}
+    * {{ box-sizing:border-box; }}
+    body {{ font-family: Inter, Segoe UI, Arial, sans-serif; margin:0; color:var(--txt); background: radial-gradient(circle at 20% -20%, #2d4fa222, transparent 40%), linear-gradient(150deg, var(--bg), var(--bg2)); min-height:100vh; }}
+    .wrap {{ max-width:1160px; margin:0 auto; padding:16px; }}
+    .topbar {{ position:sticky; top:0; z-index:10; display:flex; gap:14px; align-items:center; margin-bottom:16px; padding:12px; border:1px solid var(--stroke); border-radius:16px; background:#0d162de6; backdrop-filter: blur(8px); }}
+    .brand {{ font-weight:700; }}
+    .nav {{ display:flex; gap:8px; align-items:center; }}
+    .nav a {{ color:#d7e2ff; text-decoration:none; padding:8px 10px; border-radius:10px; border:1px solid transparent; transition:.2s; }}
+    .nav a:hover {{ border-color:var(--stroke); background:#1a2748; }}
+    .nav-right {{ margin-left:auto; display:flex; align-items:center; gap:8px; }}
+    .menu-toggle, .menu-btn {{ display:none; }}
+    .card {{ background:var(--card); border:1px solid var(--stroke); border-radius:16px; padding:16px; margin-bottom:14px; box-shadow: 0 10px 30px #02061155; }}
     table {{ width:100%; border-collapse:collapse; }}
     th, td {{ text-align:left; padding:8px; border-bottom:1px solid #2a2f3a; vertical-align:top; }}
-    input, select {{ background:#0f1115; border:1px solid #2a2f3a; color:#e6e8eb; padding:7px; border-radius:8px; }}
-    button {{ background:#2d6cdf; border:none; color:white; padding:8px 12px; border-radius:8px; cursor:pointer; }}
-    .muted {{ color:#9aa4b2; }}
+    input, select {{ background:#0f162b; border:1px solid var(--stroke); color:var(--txt); padding:10px; border-radius:10px; }}
+    button, .btn {{ background:linear-gradient(135deg, #5989ff, #6f68ff); border:none; color:white; padding:9px 12px; border-radius:10px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:6px; }}
+    .btn.ghost {{ background:#1a2748; border:1px solid var(--stroke); }}
+    .muted {{ color:var(--muted); }}
     .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-    .ok {{ color:#74d69a; }}
-    .bad {{ color:#ff8a80; }}
-    .warn {{ color:#ffd180; }}
-    code {{ background:#0f1115; padding:2px 6px; border-radius:6px; }}
+    .ok {{ color:var(--ok); }}
+    .bad {{ color:var(--bad); }}
+    .warn {{ color:var(--warn); }}
+    code {{ background:#0f162b; padding:2px 6px; border-radius:6px; }}
+    .avatar {{ border-radius:50%; object-fit:cover; background:#0f162b; }}
+    .avatar.me {{ width:28px; height:28px; border:2px solid #6f8dff; }}
+    .stat-grid {{ display:grid; grid-template-columns:repeat(3, minmax(170px,1fr)); gap:10px; }}
+    .donut {{ --deg:180deg; width:118px; height:118px; border-radius:50%; background:conic-gradient(#86a6ff var(--deg), #1c2b50 0); display:grid; place-items:center; margin:8px 0; }}
+    .donut::after {{ content:""; width:78px; height:78px; border-radius:50%; background:#101936; box-shadow:inset 0 0 0 1px #334a7b; }}
+    .donut-wrap {{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }}
+    .login-wrap {{ min-height:80vh; display:grid; place-items:center; }}
+    .login-card {{ width:min(100%, 460px); }}
+    .me-label {{ font-weight:600; }}
+    .identity {{ display:flex; align-items:center; gap:10px; }}
+    .status-ring {{ padding:2px; border-radius:999px; display:inline-block; }}
+    .status-ring.ok {{ background:var(--ok); }}
+    .status-ring.bad {{ background:var(--bad); }}
+    .user-cell {{ display:flex; gap:10px; align-items:center; }}
+    @media (max-width: 860px) {{
+      .topbar {{ flex-wrap:wrap; }}
+      .menu-btn {{ display:flex; width:38px; height:34px; border:1px solid var(--stroke); border-radius:10px; align-items:center; justify-content:center; flex-direction:column; gap:4px; cursor:pointer; margin-left:auto; }}
+      .menu-btn span {{ display:block; width:16px; height:2px; background:#dce7ff; }}
+      .nav {{ display:none; width:100%; flex-direction:column; align-items:stretch; }}
+      .menu-toggle:checked ~ .nav {{ display:flex; }}
+      .nav-right {{ width:100%; justify-content:flex-end; }}
+      .stat-grid {{ grid-template-columns:1fr; }}
+      th, td {{ font-size:13px; }}
+    }}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="nav">
-      <a href="/admin/dashboard">Дашборд</a>
-      <a href="/admin/users">Пользователи</a>
-      <a href="/admin/promos">Промокоды</a>
-      <a href="/admin/settings">Настройки/сброс</a>
-      {nav_auth}
-    </div>
+    {nav_block}
     {body}
   </div>
 </body>
@@ -78,13 +153,6 @@ def _layout(title: str, body: str, *, user_label: str | None = None) -> HTMLResp
 
 def _is_logged(request: Request) -> bool:
     return bool(request.session.get("wauth"))
-
-
-def _auth_label(request: Request) -> str | None:
-    auth = request.session.get("wauth")
-    if not isinstance(auth, dict):
-        return None
-    return str(auth.get("label") or "admin")
 
 
 def _require_login(request: Request) -> RedirectResponse | None:
@@ -137,48 +205,141 @@ def _admin_allowed_by_gh(login: str) -> bool:
     return login.strip().casefold() in {x.casefold() for x in allowed}
 
 
+def _user_avatar_url(user: User) -> str:
+    if (user.username or "").strip():
+        return f"https://t.me/i/userpic/320/{user.username}.jpg"
+    seed = quote_plus((user.first_name or user.username or f"U{user.id}" or "User"))
+    return f"https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name={seed}"
+
+
+def _verify_telegram_login(payload: dict[str, str], bot_token: str) -> bool:
+    check_hash = payload.get("hash", "")
+    if not check_hash:
+        return False
+    data_check = "\n".join(f"{k}={v}" for k, v in sorted(payload.items()) if k != "hash" and v)
+    secret = sha256(bot_token.encode("utf-8")).digest()
+    calc_hash = hmac.new(secret, data_check.encode("utf-8"), sha256).hexdigest()
+    return hmac.compare_digest(calc_hash, check_hash)
+
+
 @router.get("/login")
 async def admin_login_page(request: Request) -> HTMLResponse:
     if _is_logged(request):
         return RedirectResponse("/admin/dashboard", status_code=303)
-    body = """
-    <div class="card"><h2>Вход в web-admin</h2>
-      <p class="muted">Разрешен только вход через Telegram ID или GitHub login (из allowlist).</p>
-      <div class="row">
-        <form method="post" action="/admin/login/telegram">
-          <input name="telegram_id" placeholder="Telegram ID" />
-          <button type="submit">Войти через Telegram</button>
-        </form>
-      </div>
-      <br />
-      <div class="row">
-        <form method="post" action="/admin/login/github">
-          <input name="github_login" placeholder="GitHub login" />
-          <button type="submit">Войти через GitHub</button>
-        </form>
+    bot_username = (get_settings().bot_username or "").strip()
+    telegram_block = "<p class='muted'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
+    if bot_username:
+        telegram_block = f"""
+      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="/admin/login/telegram/widget" data-request-access="write"></script>
+"""
+    body = f"""
+    <div class="login-wrap">
+      <div class="card login-card">
+        <h2>Вход</h2>
+        <div class="row">{telegram_block}</div>
+        <div style="height:10px"></div>
+        <a class="btn" href="/admin/login/github/start">Войти через GitHub</a>
       </div>
     </div>
     """
-    return _layout("Web-admin login", body)
+    return _layout("Вход", body, request=request, show_nav=False)
 
 
-@router.post("/login/telegram")
-async def admin_login_telegram(request: Request, telegram_id: str = Form("")):
-    if not telegram_id.strip().isdigit():
+@router.get("/login/telegram/widget")
+async def admin_login_telegram_widget(
+    request: Request,
+    id: str = "",
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+    photo_url: str = "",
+    auth_date: str = "",
+    hash: str = "",
+):
+    payload = {
+        "id": id.strip(),
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "username": username.strip(),
+        "photo_url": photo_url.strip(),
+        "auth_date": auth_date.strip(),
+        "hash": hash.strip(),
+    }
+    if not payload["id"].isdigit():
         return RedirectResponse("/admin/login", status_code=303)
-    tid = int(telegram_id.strip())
+    if not _verify_telegram_login(payload, get_settings().bot_token):
+        return RedirectResponse("/admin/login", status_code=303)
+    tid = int(payload["id"])
     if not _admin_allowed_by_tg(tid):
         return RedirectResponse("/admin/login", status_code=303)
-    request.session["wauth"] = {"kind": "telegram", "id": tid, "label": f"tg:{tid}"}
+    label = payload["first_name"] or payload["username"] or f"tg:{tid}"
+    request.session["wauth"] = {
+        "kind": "telegram",
+        "id": tid,
+        "label": label,
+        "avatar_url": payload["photo_url"],
+        "username": payload["username"],
+    }
     return RedirectResponse("/admin/dashboard", status_code=303)
 
 
-@router.post("/login/github")
-async def admin_login_github(request: Request, github_login: str = Form("")):
-    login = github_login.strip()
+@router.get("/login/github/start")
+async def admin_login_github_start(request: Request):
+    settings = get_settings()
+    if not settings.web_admin_github_client_id or not settings.web_admin_github_redirect_uri:
+        return RedirectResponse("/admin/login", status_code=303)
+    state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["gh_oauth_state"] = state
+    url = (
+        "https://github.com/login/oauth/authorize"
+        f"?client_id={quote_plus(settings.web_admin_github_client_id)}"
+        f"&redirect_uri={quote_plus(settings.web_admin_github_redirect_uri)}"
+        f"&scope=read:user&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/login/github/callback")
+async def admin_login_github_callback(request: Request, code: str = "", state: str = ""):
+    settings = get_settings()
+    if state != request.session.get("gh_oauth_state"):
+        return RedirectResponse("/admin/login", status_code=303)
+    if not code or not settings.web_admin_github_client_id or not settings.web_admin_github_client_secret:
+        return RedirectResponse("/admin/login", status_code=303)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.web_admin_github_client_id,
+                    "client_secret": settings.web_admin_github_client_secret,
+                    "code": code,
+                    "redirect_uri": settings.web_admin_github_redirect_uri,
+                },
+            )
+            token_resp.raise_for_status()
+            token = token_resp.json().get("access_token")
+            if not token:
+                return RedirectResponse("/admin/login", status_code=303)
+            me_resp = await client.get(
+                "https://api.github.com/user",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+            me_resp.raise_for_status()
+            me = me_resp.json()
+    except httpx.HTTPError:
+        return RedirectResponse("/admin/login", status_code=303)
+    login = str(me.get("login") or "").strip()
     if not login or not _admin_allowed_by_gh(login):
         return RedirectResponse("/admin/login", status_code=303)
-    request.session["wauth"] = {"kind": "github", "login": login, "label": f"gh:{login}"}
+    request.session["wauth"] = {
+        "kind": "github",
+        "login": login,
+        "label": str(me.get("name") or login),
+        "avatar_url": str(me.get("avatar_url") or f"https://github.com/{login}.png"),
+        "username": login,
+    }
     return RedirectResponse("/admin/dashboard", status_code=303)
 
 
@@ -258,58 +419,97 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         val = by_day[d]
         width = int((val / max_val) * 30) if max_val > 0 else 0
         bars.append(f"{d.strftime('%d.%m')} {'█' * max(1, width) if val > 0 else '·'} {val}")
+    safe_total = float(total_income or 0)
+    safe_month = float(month_income or 0)
+    safe_day = float(day_income or 0)
+    month_pct = int(min(100, round((safe_month / safe_total) * 100))) if safe_total > 0 else 0
+    day_pct = int(min(100, round((safe_day / safe_month) * 100))) if safe_month > 0 else 0
     body = f"""
     <div class="card"><h2>Доход</h2>
       <p>За все время: <b>{_esc(total_income)} ₽</b> · За месяц: <b>{_esc(month_income)} ₽</b> · За день: <b>{_esc(day_income)} ₽</b></p>
+      <div class="stat-grid">
+        <div class="card">
+          <div class="muted">Месяц от всего оборота</div>
+          <div class="donut-wrap"><div class="donut" style="--deg:{month_pct * 3.6}deg"></div><div><b>{month_pct}%</b></div></div>
+        </div>
+        <div class="card">
+          <div class="muted">День от месяца</div>
+          <div class="donut-wrap"><div class="donut" style="--deg:{day_pct * 3.6}deg"></div><div><b>{day_pct}%</b></div></div>
+        </div>
+        <div class="card">
+          <div class="muted">Пользователи / промокоды</div>
+          <p><b>{users_count}</b> / <b>{promos_count}</b></p>
+        </div>
+      </div>
       <p class="muted">Учитываются только платежи ({'<code>type=topup,status=completed</code>'}).</p>
       <pre>{_esc(chr(10).join(bars))}</pre>
     </div>
-    <div class="card"><h2>Сводка</h2>
-      <p>Пользователи: <b>{users_count}</b></p>
-      <p>Промокоды: <b>{promos_count}</b></p>
-      <p class="muted">Разделы: пользователи, детали пользователя, промокоды, настройки/сброс БД.</p>
-    </div>
     """
-    return _layout("Web-admin Dashboard", body, user_label=_auth_label(request))
+    return _layout("Web-admin Dashboard", body, request=request)
 
 
 @router.get("/users")
-async def admin_users(request: Request, q: str = "") -> HTMLResponse:
+async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     needle = q.strip()
+    page = max(1, page)
+    per_page = 10
     async with await _session() as session:
-        query = select(User).order_by(desc(User.id)).limit(200)
+        query = select(User).order_by(desc(User.id))
+        count_query = select(func.count()).select_from(User)
         if needle:
             if needle.isdigit():
                 tid = int(needle)
                 query = query.where(or_(User.telegram_id == tid, User.id == tid))
+                count_query = count_query.where(or_(User.telegram_id == tid, User.id == tid))
             else:
-                query = query.where(
-                    or_(
-                        User.username.ilike(f"%{needle}%"),
-                        User.first_name.ilike(f"%{needle}%"),
-                        User.last_name.ilike(f"%{needle}%"),
-                    )
+                search_filter = or_(
+                    User.username.ilike(f"%{needle}%"),
+                    User.first_name.ilike(f"%{needle}%"),
+                    User.last_name.ilike(f"%{needle}%"),
                 )
-        users = list((await session.execute(query)).scalars().all())
+                query = query.where(search_filter)
+                count_query = count_query.where(search_filter)
+        total_users = int((await session.execute(count_query)).scalar_one() or 0)
+        total_pages = max(1, (total_users + per_page - 1) // per_page)
+        if page > total_pages:
+            page = total_pages
+        users = list(
+            (
+                await session.execute(
+                    query.offset((page - 1) * per_page).limit(per_page)
+                )
+            ).scalars().all()
+        )
     rows = []
     for u in users:
+        ring = "bad" if u.is_blocked else "ok"
+        display = u.first_name or u.username or "-"
+        username = f"@{u.username}" if u.username else "-"
         rows.append(
-            f"<tr><td>{u.id}</td><td><a href='/admin/users/{u.id}'>{_esc(u.first_name or u.username or '-')}</a></td>"
-            f"<td>{_esc(u.username or '-')}</td><td><code>{u.telegram_id}</code></td><td>{_esc(u.balance)}</td>"
-            f"<td>{'🚫' if u.is_blocked else '✅'}</td></tr>"
+            "<tr>"
+            f"<td><div class='user-cell'><span class='status-ring {ring}'><img class='avatar' src='{_esc(_user_avatar_url(u))}' alt='u' width='34' height='34'/></span>"
+            f"<a href='/admin/users/{u.id}'>{_esc(display)}</a></div></td>"
+            f"<td>{_esc(username)}</td><td><code>{u.telegram_id}</code></td><td>{u.id}</td><td>{_esc(u.balance)}</td>"
+            f"<td>{'Заблокирован' if u.is_blocked else 'Активен'}</td></tr>"
         )
+    pages = []
+    if total_pages > 1:
+        for p in range(1, total_pages + 1):
+            cls = "btn ghost" if p != page else "btn"
+            pages.append(f"<a class='{cls}' href='/admin/users?q={_esc(needle)}&page={p}'>{p}</a>")
     body = (
         "<div class='card'><h2>Пользователи</h2>"
         "<form method='get' class='row'>"
         f"<input name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
         "<button type='submit'>Поиск</button></form><br/>"
-        "<table><thead><tr><th>ID</th><th>Профиль</th><th>Username</th><th>Telegram ID</th><th>Баланс</th><th>Статус</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=6 class=muted>Нет данных</td></tr>'}</tbody></table></div>"
+        "<table><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=6 class=muted>Нет данных</td></tr>'}</tbody></table>"
+        f"<div class='row' style='margin-top:10px'><span class='muted'>Страница {page} из {total_pages}</span>{''.join(pages)}</div></div>"
     )
-    return _layout("Web-admin Users", body, user_label=_auth_label(request))
+    return _layout("Web-admin Users", body, request=request)
 
 
 @router.get("/users/{user_id}")
@@ -320,7 +520,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
-            return _layout("User not found", "<div class='card'><h2>Пользователь не найден</h2></div>")
+            return _layout("User not found", "<div class='card'><h2>Пользователь не найден</h2></div>", request=request)
         subs = list(
             (
                 await session.execute(
@@ -352,9 +552,13 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         f"<tr><td>{t.id}</td><td>{_esc(t.type)}</td><td>{_esc(t.amount)}</td><td>{_esc(t.status)}</td><td>{_esc(t.payment_provider or '-')}</td><td>{_esc(t.created_at)}</td></tr>"
         for t in txs
     )
+    ring = "bad" if user.is_blocked else "ok"
     body = f"""
     <div class="card">
-      <h2>Пользователь #{user.id}</h2>
+      <div class="user-cell">
+        <span class='status-ring {ring}'><img class='avatar' src='{_esc(_user_avatar_url(user))}' alt='u' width='68' height='68'/></span>
+        <div><h2>Пользователь #{user.id}</h2><div class="muted">{_esc(user.first_name or user.username or '-')}</div></div>
+      </div>
       <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
       <p>Username: <b>{_esc(user.username or '-')}</b> · Telegram ID: <code>{user.telegram_id}</code></p>
       <p>Баланс: <b>{_esc(user.balance)} ₽</b> · RemnaWave UUID: <code>{_esc(user.remnawave_uuid or '-')}</code></p>
@@ -372,7 +576,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
       <tbody>{tx_rows or '<tr><td colspan=6 class=muted>Нет транзакций</td></tr>'}</tbody></table>
     </div>
     """
-    return _layout(f"User {user_id}", body, user_label=_auth_label(request))
+    return _layout(f"User {user_id}", body, request=request)
 
 
 @router.get("/settings")
@@ -391,7 +595,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
       <p class="muted">Повторяет функцию сброса из Telegram-админки, но с веб-подтверждением.</p>
     </div>
     """
-    return _layout("Web-admin Settings", body, user_label=_auth_label(request))
+    return _layout("Web-admin Settings", body, request=request)
 
 
 @router.post("/settings/factory-reset")
@@ -403,7 +607,7 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
         return _layout(
             "Reset rejected",
             "<div class='card'><h2>Сброс отменен</h2><p>Неверная фраза подтверждения.</p></div>",
-            user_label=_auth_label(request),
+            request=request,
         )
     async with await _session() as session:
         await wipe_all_application_data(session)
@@ -411,7 +615,7 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
     return _layout(
         "Reset done",
         "<div class='card'><h2>База очищена</h2><p>Factory reset выполнен успешно.</p></div>",
-        user_label=_auth_label(request),
+        request=request,
     )
 
 
@@ -447,7 +651,7 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
         "<table><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=6 class=muted>Нет промокодов</td></tr>'}</tbody></table></div>"
     )
-    return _layout("Web-admin Promos", body, user_label=_auth_label(request))
+    return _layout("Web-admin Promos", body, request=request)
 
 
 def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | None = None) -> str:
@@ -487,7 +691,7 @@ async def admin_promos_new(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    return _layout("New Promo", _promo_form(action="/admin/promos/new"), user_label=_auth_label(request))
+    return _layout("New Promo", _promo_form(action="/admin/promos/new"), request=request)
 
 
 @router.post("/promos/new")
@@ -532,7 +736,7 @@ async def admin_promos_new_post(
         return _layout(
             "New Promo Error",
             _promo_form(action="/admin/promos/new", error=str(e)),
-            user_label=_auth_label(request),
+            request=request,
         )
     async with await _session() as session:
         promo = PromoCode(
@@ -557,7 +761,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
         if promo is None:
-            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>")
+            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
         usages = (
             await session.execute(
                 select(PromoUsage, User)
@@ -591,7 +795,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
       <tbody>{usage_rows or '<tr><td colspan=4 class=muted>Нет активаций</td></tr>'}</tbody></table>
     </div>
     """
-    return _layout(f"Promo {promo_id}", body, user_label=_auth_label(request))
+    return _layout(f"Promo {promo_id}", body, request=request)
 
 
 @router.get("/promos/{promo_id}/edit")
@@ -602,11 +806,11 @@ async def admin_promos_edit(request: Request, promo_id: int) -> HTMLResponse:
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
     if promo is None:
-        return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>")
+        return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
     return _layout(
         "Edit Promo",
         _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo),
-        user_label=_auth_label(request),
+        request=request,
     )
 
 
@@ -627,7 +831,7 @@ async def admin_promos_edit_post(
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
         if promo is None:
-            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>")
+            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
         try:
             if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
                 raise ValueError("Неверный тип")
@@ -653,7 +857,7 @@ async def admin_promos_edit_post(
             return _layout(
                 "Edit Promo Error",
                 _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo, error=str(e)),
-                user_label=_auth_label(request),
+                request=request,
             )
         promo.type = promo_type
         promo.value = val

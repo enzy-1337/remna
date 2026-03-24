@@ -263,6 +263,21 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_GITHUB_LOGINS",
         description="Список GitHub login для входа в web-admin через запятую",
     )
+    web_admin_github_client_id: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_GITHUB_CLIENT_ID",
+        description="OAuth App Client ID для входа в web-admin через GitHub",
+    )
+    web_admin_github_client_secret: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_GITHUB_CLIENT_SECRET",
+        description="OAuth App Client Secret для входа в web-admin через GitHub",
+    )
+    web_admin_github_redirect_uri: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_GITHUB_REDIRECT_URI",
+        description="Полный callback URL GitHub OAuth (например https://admin.example.com/admin/login/github/callback)",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")
