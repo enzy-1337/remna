@@ -91,6 +91,46 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 В кабинете Crypto Bot и Platega укажите публичный HTTPS URL этих путей.
 
+## Web-admin
+
+В проекте уже есть web-admin на FastAPI: `api/routers/web_admin.py`.
+
+- URL локально: `http://localhost:8000/admin/login`
+- Разделы: дашборд доходов, пользователи + карточка пользователя, промокоды (CRUD), настройки/сброс БД.
+- Доступ: через Telegram ID (из `ADMIN_TELEGRAM_ID/ADMIN_TELEGRAM_IDS`) или GitHub login из `WEB_ADMIN_GITHUB_LOGINS`.
+
+### Локальный запуск
+
+```bash
+docker compose up -d api
+```
+
+Проверьте:
+
+- `http://localhost:8000/health`
+- `http://localhost:8000/admin/login`
+
+### Домен + SSL (автоматически через Caddy)
+
+1. Заполните в `.env`:
+   - `WEB_ADMIN_DOMAIN=admin.your-domain.com`
+   - `WEB_ADMIN_EMAIL=you@your-domain.com`
+   - `WEB_ADMIN_HTTPS_ONLY=true`
+   - `WEB_ADMIN_SESSION_SECRET=<длинный_случайный_секрет>`
+2. Убедитесь, что DNS `A`/`AAAA` записи домена указывают на ваш сервер.
+3. Откройте порты `80` и `443` на сервере/VPS.
+4. Запустите:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.web-admin.yml up -d
+```
+
+После этого Caddy сам выпустит и обновляет Let's Encrypt сертификат.
+
+Web-admin станет доступен по адресу:
+
+- `https://<WEB_ADMIN_DOMAIN>/admin/login`
+
 ## Реализованные шаги
 
 - **Шаг 5** — middleware обязательной подписки на канал + кэш Redis.

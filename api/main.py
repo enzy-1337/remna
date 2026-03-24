@@ -45,7 +45,7 @@ app.add_middleware(
     secret_key=settings.web_admin_session_secret,
     session_cookie="remna_web_admin_session",
     same_site="lax",
-    https_only=False,
+    https_only=settings.web_admin_https_only,
 )
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")

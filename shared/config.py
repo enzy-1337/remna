@@ -263,6 +263,11 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_GITHUB_LOGINS",
         description="Список GitHub login для входа в web-admin через запятую",
     )
+    web_admin_https_only: bool = Field(
+        default=False,
+        validation_alias="WEB_ADMIN_HTTPS_ONLY",
+        description="Secure-cookie для web-admin (включать за HTTPS/доменом)",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")

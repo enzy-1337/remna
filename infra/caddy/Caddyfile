@@ -1,0 +1,17 @@
+{
+  email {$WEB_ADMIN_EMAIL}
+}
+
+{$WEB_ADMIN_DOMAIN} {
+  encode gzip zstd
+
+  @admin path /admin* /health /webhooks/*
+  handle @admin {
+    reverse_proxy api:8000
+  }
+
+  # Можно сузить только до /admin, если не хотите отдавать вебхуки через домен.
+  handle {
+    respond "Not Found" 404
+  }
+}
