@@ -91,45 +91,48 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 В кабинете Crypto Bot и Platega укажите публичный HTTPS URL этих путей.
 
-## Web-admin
+## Web-admin через Nginx
 
-В проекте уже есть web-admin на FastAPI: `api/routers/web_admin.py`.
+В проекте уже есть web-admin: `api/routers/web_admin.py`.
 
-- URL локально: `http://localhost:8000/admin/login`
-- Разделы: дашборд доходов, пользователи + карточка пользователя, промокоды (CRUD), настройки/сброс БД.
-- Доступ: через Telegram ID (из `ADMIN_TELEGRAM_ID/ADMIN_TELEGRAM_IDS`) или GitHub login из `WEB_ADMIN_GITHUB_LOGINS`.
+- Локально: `http://localhost:8000/admin/login`
+- Вход: Telegram ID из `ADMIN_TELEGRAM_ID/ADMIN_TELEGRAM_IDS` или GitHub login из `WEB_ADMIN_GITHUB_LOGINS`
 
-### Локальный запуск
+### 1) Поднять API
 
 ```bash
 docker compose up -d api
 ```
 
-Проверьте:
-
-- `http://localhost:8000/health`
-- `http://localhost:8000/admin/login`
-
-### Домен + SSL (автоматически через Caddy)
-
-1. Заполните в `.env`:
-   - `WEB_ADMIN_DOMAIN=admin.your-domain.com`
-   - `WEB_ADMIN_EMAIL=you@your-domain.com`
-   - `WEB_ADMIN_HTTPS_ONLY=true`
-   - `WEB_ADMIN_SESSION_SECRET=<длинный_случайный_секрет>`
-2. Убедитесь, что DNS `A`/`AAAA` записи домена указывают на ваш сервер.
-3. Откройте порты `80` и `443` на сервере/VPS.
-4. Запустите:
+Проверка:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.web-admin.yml up -d
+curl http://127.0.0.1:8000/health
 ```
 
-После этого Caddy сам выпустит и обновляет Let's Encrypt сертификат.
+### 2) Настроить Nginx
 
-Web-admin станет доступен по адресу:
+В репозитории есть пример конфига:
 
-- `https://<WEB_ADMIN_DOMAIN>/admin/login`
+- `infra/nginx/web_admin.conf.example`
+
+Скопируйте его в nginx (`sites-available`/`conf.d`), замените домен `admin.example.com` на свой и примените:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 3) Выпустить SSL (Let's Encrypt)
+
+```bash
+sudo certbot --nginx -d admin.your-domain.com
+```
+
+Если certbot ругается на timeout — обычно закрыт порт `80` или DNS не указывает на сервер.
+
+### 4) Открыть web-admin
+
+- `https://admin.your-domain.com/admin/login`
 
 ## Реализованные шаги
 
