@@ -18,7 +18,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from api.routers import web_admin, webhooks
+from api.routers import public_pages, web_admin, webhooks
 from shared.config import get_settings
 
 logging.basicConfig(
@@ -49,6 +49,7 @@ app.add_middleware(
 )
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")
+app.include_router(public_pages.router)
 
 
 @app.get("/health")
