@@ -12,7 +12,7 @@ from shared.md2 import bold, code, esc, join_lines
 from shared.models.notification_log import NotificationLog
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.telegram_notify import send_telegram_message
+from shared.services.telegram_notify import send_telegram_document, send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -140,5 +140,28 @@ async def notify_admin_plain(
         text[:12000],
         message_thread_id=thread,
         parse_mode=None,
+        settings=settings,
+    )
+
+
+async def notify_admin_document(
+    settings: Settings,
+    *,
+    document_path: str,
+    caption: str | None,
+    topic: AdminLogTopic,
+    event_type: str = "document",
+) -> bool:
+    if not _admin_chat_configured(settings):
+        logger.debug("admin document notify skipped: no chat event=%s", event_type)
+        return False
+    chat_id = settings.admin_log_chat_id
+    assert chat_id is not None
+    thread = settings.admin_log_thread_for(topic)
+    return await send_telegram_document(
+        chat_id,
+        document_path,
+        caption=caption,
+        message_thread_id=thread,
         settings=settings,
     )

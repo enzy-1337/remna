@@ -120,8 +120,12 @@ def _layout(title: str, body: str, *, request: Request | None = None, show_nav: 
     .donut {{ --deg:180deg; width:118px; height:118px; border-radius:50%; background:conic-gradient(#86a6ff var(--deg), #1c2b50 0); display:grid; place-items:center; margin:8px 0; }}
     .donut::after {{ content:""; width:78px; height:78px; border-radius:50%; background:#101936; box-shadow:inset 0 0 0 1px #334a7b; }}
     .donut-wrap {{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }}
-    .login-wrap {{ min-height:80vh; display:grid; place-items:center; }}
-    .login-card {{ width:min(100%, 460px); }}
+    .login-wrap {{ min-height:80vh; display:grid; place-items:center; justify-items:center; width:100%; }}
+    .login-card {{ width:min(100%, 460px); margin-left:auto; margin-right:auto; text-align:center; }}
+    .login-card h2 {{ margin-top:0; text-align:center; }}
+    .login-actions {{ display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; }}
+    .login-card .row {{ justify-content:center; width:100%; }}
+    .login-card .btn {{ justify-content:center; }}
     .me-label {{ font-weight:600; }}
     .identity {{ display:flex; align-items:center; gap:10px; }}
     .status-ring {{ padding:2px; border-radius:999px; display:inline-block; }}
@@ -228,17 +232,22 @@ async def admin_login_page(request: Request) -> HTMLResponse:
         return RedirectResponse("/admin/dashboard", status_code=303)
     bot_username = (get_settings().bot_username or "").strip()
     telegram_block = "<p class='muted'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
+    base = (get_settings().public_site_url or "").strip().rstrip("/")
+    auth_url = "/admin/login/telegram/widget"
+    if base:
+        auth_url = f"{base}/admin/login/telegram/widget"
     if bot_username:
         telegram_block = f"""
-      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="/admin/login/telegram/widget" data-request-access="write"></script>
+      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
 """
     body = f"""
     <div class="login-wrap">
       <div class="card login-card">
         <h2>Вход</h2>
-        <div class="row">{telegram_block}</div>
-        <div style="height:10px"></div>
-        <a class="btn" href="/admin/login/github/start">Войти через GitHub</a>
+        <div class="login-actions">
+          <div class="row">{telegram_block}</div>
+          <a class="btn" href="/admin/login/github/start">Войти через GitHub</a>
+        </div>
       </div>
     </div>
     """

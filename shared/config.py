@@ -278,6 +278,34 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_GITHUB_REDIRECT_URI",
         description="Полный callback URL GitHub OAuth (например https://admin.example.com/admin/login/github/callback)",
     )
+    public_site_url: str | None = Field(
+        default=None,
+        validation_alias="PUBLIC_SITE_URL",
+        description=(
+            "Публичный HTTPS-origin сайта (например https://admin.example.com) для Telegram Login Widget "
+            "и абсолютных ссылок; без слэша на конце"
+        ),
+    )
+
+    backup_enabled: bool = Field(
+        default=False,
+        validation_alias="BACKUP_ENABLED",
+        description="Ежедневный pg_dump и отправка в админ-чат (тема BACKUPS), если задан ADMIN_LOG_CHAT_ID",
+    )
+    backup_hour_utc: int = Field(
+        default=6,
+        ge=0,
+        le=23,
+        validation_alias="BACKUP_HOUR_UTC",
+        description="Час UTC для ежедневного бэкапа PostgreSQL",
+    )
+    backup_max_telegram_mb: float = Field(
+        default=45.0,
+        ge=1.0,
+        le=49.0,
+        validation_alias="BACKUP_MAX_TELEGRAM_MB",
+        description="Максимальный размер файла для отправки в Telegram (лимит бота ~50 МБ)",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")
@@ -345,7 +373,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("bot_section_photo_path", "bot_section_photo_url", "remnawave_public_url", mode="before")
+    @field_validator("bot_section_photo_path", "bot_section_photo_url", "remnawave_public_url", "public_site_url", mode="before")
     @classmethod
     def _empty_photo_fields(cls, v: object) -> object:
         if v is None or v == "":
