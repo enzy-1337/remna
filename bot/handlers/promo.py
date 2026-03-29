@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.keyboards.inline import submenu_back_keyboard
 from bot.states.promo import PromoStates
-from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
+from bot.utils.screen_photo import (
+    answer_callback_with_photo_screen,
+    delete_chat_message_safe,
+    delete_message_safe,
+    send_profile_screen,
+)
 from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
@@ -34,7 +39,7 @@ async def cmd_promo(
     await state.set_state(PromoStates.waiting_code)
     settings = get_settings()
     cancel_kb = _promo_cancel_keyboard()
-    await send_profile_screen(
+    sent = await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines("🎁 " + bold("Промокод"), "", plain("Введите код одним сообщением.")),
@@ -42,6 +47,7 @@ async def cmd_promo(
         settings=settings,
         delete_message=None,
     )
+    await state.update_data(promo_prompt_message_id=sent.message_id)
 
 
 def _promo_cancel_keyboard() -> InlineKeyboardBuilder:
@@ -56,12 +62,14 @@ async def cb_promo_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
         return
     await state.set_state(PromoStates.waiting_code)
     settings = get_settings()
-    await answer_callback_with_photo_screen(
+    sent = await answer_callback_with_photo_screen(
         cq,
         caption=join_lines("🎁 " + bold("Промокод"), "", plain("Введите код одним сообщением.")),
         reply_markup=_promo_cancel_keyboard().as_markup(),
         settings=settings,
     )
+    if sent is not None:
+        await state.update_data(promo_prompt_message_id=sent.message_id)
 
 
 @router.callback_query(F.data == "promo:cancel")
@@ -86,6 +94,9 @@ async def msg_promo_code(
         await state.clear()
         return
 
+    data = await state.get_data()
+    prompt_mid = data.get("promo_prompt_message_id")
+
     settings = get_settings()
     ok, text, meta = await apply_promo_code_for_user(
         session,
@@ -94,6 +105,14 @@ async def msg_promo_code(
         raw_code=message.text or "",
     )
     await state.clear()
+
+    await delete_message_safe(message)
+    if prompt_mid is not None:
+        try:
+            await delete_chat_message_safe(message.bot, message.chat.id, int(prompt_mid))
+        except (TypeError, ValueError):
+            pass
+
     if ok:
         if meta:
             mt = (meta.get("type") or "").strip().lower()

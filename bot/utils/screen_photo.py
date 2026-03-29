@@ -72,6 +72,13 @@ async def delete_message_safe(message: Message | None) -> None:
         logger.debug("delete_message failed", exc_info=True)
 
 
+async def delete_chat_message_safe(bot: Bot, chat_id: int, message_id: int) -> None:
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        logger.debug("delete_message by id failed", exc_info=True)
+
+
 async def send_profile_screen(
     bot: Bot,
     *,
