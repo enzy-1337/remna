@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import html
@@ -23,6 +24,7 @@ import redis.asyncio as redis_async
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import desc, distinct, extract, func, or_, select, text
+from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
@@ -67,6 +69,62 @@ def _fmt_dt_msk(dt: datetime | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
+
+
+_AVATAR_CACHE: dict[int, tuple[float, bytes, str]] = {}
+_AVATAR_TTL_SEC = 3600.0
+_avatar_fetch_locks: dict[int, asyncio.Lock] = {}
+
+
+def _avatar_fetch_lock(user_id: int) -> asyncio.Lock:
+    if user_id not in _avatar_fetch_locks:
+        _avatar_fetch_locks[user_id] = asyncio.Lock()
+    return _avatar_fetch_locks[user_id]
+
+
+async def _load_telegram_profile_photo(user: User) -> tuple[bytes, str] | None:
+    """Фото профиля Telegram по user_id через Bot API (без отдачи токена в браузер)."""
+    token = (get_settings().bot_token or "").strip()
+    if not token:
+        return None
+    try:
+        tg = int(user.telegram_id)
+    except (TypeError, ValueError):
+        return None
+    async with httpx.AsyncClient(timeout=22.0) as client:
+        r = await client.get(
+            f"https://api.telegram.org/bot{token}/getUserProfilePhotos",
+            params={"user_id": tg, "limit": 1},
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data.get("ok"):
+            return None
+        photos = data.get("result", {}).get("photos") or []
+        if not photos or not photos[0]:
+            return None
+        sizes = photos[0]
+        file_id = sizes[-1]["file_id"]
+        r2 = await client.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": file_id},
+        )
+        if r2.status_code != 200:
+            return None
+        d2 = r2.json()
+        if not d2.get("ok"):
+            return None
+        path = d2.get("result", {}).get("file_path")
+        if not path:
+            return None
+        r3 = await client.get(f"https://api.telegram.org/file/bot{token}/{path}")
+        if r3.status_code != 200:
+            return None
+        raw_ct = (r3.headers.get("content-type") or "").split(";")[0].strip() or "image/jpeg"
+        if not raw_ct.startswith("image/"):
+            raw_ct = "image/jpeg"
+        return (r3.content, raw_ct)
 
 
 def _humanize_left_ru(exp: datetime, now: datetime) -> str:
@@ -194,6 +252,12 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
     .remna-admin-avatar-ring .rounded-full {{
       aspect-ratio: 1 / 1;
+    }}
+    .remna-admin-avatar-ring.ring-emerald-500 {{
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.45), 0 0 12px rgba(16, 185, 129, 0.35);
+    }}
+    .remna-admin-avatar-ring.ring-red-500 {{
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 0 12px rgba(239, 68, 68, 0.4);
     }}
     @keyframes remna-fade-in {{
       from {{ opacity: 0; transform: translateY(8px); }}
@@ -776,14 +840,9 @@ def _admin_allowed_by_gh(login: str) -> bool:
     return login.strip().casefold() in {x.casefold() for x in allowed}
 
 
-def _user_avatar_url(user: User) -> str:
-    """t.me/i/userpic часто отдаёт 404/1×1 — в админке стабильные аватары через ui-avatars."""
-    name = (user.first_name or user.username or "").strip() or f"user{user.id}"
-    seed = quote_plus(name[:48])
-    return (
-        "https://ui-avatars.com/api/?background=5b21b6&color=f5f3ff&bold=true&font-size=0.42&size=128&name="
-        + seed
-    )
+def _user_avatar_photo_src(user: User) -> str:
+    """Прокси аватара из Telegram Bot API; при ошибке загрузки <img> показывает инициалы."""
+    return f"/admin/users/{user.id}/telegram-photo"
 
 
 def _user_initial_badge(user: User) -> tuple[str, str]:
@@ -798,8 +857,25 @@ def _user_initial_badge(user: User) -> tuple[str, str]:
     return ch, style
 
 
+def _subscription_list_badge(now: datetime, subs: list[Subscription]) -> tuple[str, str]:
+    """Подпись и класс daisyUI badge для колонки «Подписка» в списке пользователей."""
+    if not subs:
+        return "Нет подписки", "badge-ghost"
+    for s in subs:
+        if s.status in ("active", "trial") and s.expires_at > now:
+            if s.status == "trial":
+                return "Триал", "badge-info"
+            return "Активна", "badge-success"
+    latest = max(subs, key=lambda x: x.expires_at)
+    if latest.expires_at <= now or (latest.status or "").lower() == "expired":
+        return "Истекла", "badge-error"
+    if (latest.status or "").lower() == "cancelled":
+        return "Отменена", "badge-warning"
+    return "Неактивна", "badge-ghost"
+
+
 def _avatar_with_fallback(user: User, *, px: int, ring_tw: str, ring_offset: str = "ring-offset-2") -> str:
-    url = _user_avatar_url(user)
+    url = _user_avatar_photo_src(user)
     ch, st = _user_initial_badge(user)
     return (
         f"<span class=\"remna-admin-avatar-ring relative inline-flex shrink-0 items-center justify-center rounded-full p-0.5 ring-2 {ring_offset} ring-offset-base-100 {ring_tw}\">"
@@ -1210,51 +1286,90 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             )
         ).all()
         devices_total = int((await session.execute(select(func.count()).select_from(Device))).scalar_one() or 0)
-        hour_rows = (
+        hour_ht = literal_column(
+            "EXTRACT(hour FROM TIMEZONE('Europe/Moscow', transactions.created_at))::int"
+        )
+        hour_rows_msk = (
             await session.execute(
-                select(extract("hour", Transaction.created_at), func.count())
+                select(hour_ht, func.count())
                 .where(
                     Transaction.type == "topup",
                     Transaction.status == "completed",
                     Transaction.created_at >= now - timedelta(days=7),
                 )
-                .group_by(extract("hour", Transaction.created_at))
+                .group_by(hour_ht)
             )
         ).all()
-    hour_counts = [0] * 24
-    for hr, cnt in hour_rows:
+        hour_hd = literal_column(
+            "EXTRACT(hour FROM TIMEZONE('Europe/Moscow', devices.last_used_at))::int"
+        )
+        hour_dev_rows = (
+            await session.execute(
+                select(hour_hd, func.count())
+                .where(
+                    Device.last_used_at.isnot(None),
+                    Device.last_used_at >= now - timedelta(days=7),
+                )
+                .group_by(hour_hd)
+            )
+        ).all()
+    hour_counts_msk = [0] * 24
+    for hr, cnt in hour_rows_msk:
         try:
             h = int(hr)
         except (TypeError, ValueError):
             continue
         if 0 <= h < 24:
-            hour_counts[h] += int(cnt or 0)
-    max_hc = max(hour_counts) or 1
-    hour_bars: list[str] = []
-    for h in range(24):
-        v = hour_counts[h]
-        w = int((v / max_hc) * 28) if max_hc else 0
-        bar = "█" * max(1, w) if v else "·"
-        hour_bars.append(f"{h:02d}:00 UTC  {bar}  {v}")
+            hour_counts_msk[h] += int(cnt or 0)
+    device_hour_counts = [0] * 24
+    for hr, cnt in hour_dev_rows:
+        try:
+            h = int(hr)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= h < 24:
+            device_hour_counts[h] += int(cnt or 0)
     by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     for created_at, amount in tx_last_14:
         if created_at is None:
             continue
-        by_day[created_at.date()] += Decimal(amount)
-    labels: list[str] = []
+        ca = created_at
+        if ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        by_day[ca.astimezone(_MSK_TZ).date()] += Decimal(amount)
+    today_msk = datetime.now(_MSK_TZ).date()
     max_val = Decimal("1")
     for i in range(13, -1, -1):
-        d = (day_start - timedelta(days=i)).date()
-        val = by_day[d]
+        d = today_msk - timedelta(days=i)
+        val = by_day.get(d, Decimal("0"))
         if val > max_val:
             max_val = val
-        labels.append(f"{d.strftime('%d.%m')}: {val}")
     bars = []
     for i in range(13, -1, -1):
-        d = (day_start - timedelta(days=i)).date()
-        val = by_day[d]
+        d = today_msk - timedelta(days=i)
+        val = by_day.get(d, Decimal("0"))
         width = int((val / max_val) * 30) if max_val > 0 else 0
         bars.append(f"{d.strftime('%d.%m')} {'█' * max(1, width) if val > 0 else '·'} {val}")
+    settings_dash = get_settings()
+    rw_devices_online: int | None = None
+    rw_dash_err = ""
+    if not settings_dash.remnawave_stub:
+        try:
+            rw_c = RemnaWaveClient(settings_dash)
+            users_rw = await rw_c.list_all_users(page_size=200, max_items=3000)
+            rw_devices_online = sum((extract_connected_devices_from_rw_user(u) or 0) for u in users_rw)
+        except Exception as e:
+            rw_dash_err = str(e)[:160]
+    rw_tile = (
+        f'<p class="text-3xl font-bold text-info">{rw_devices_online}</p>'
+        if rw_devices_online is not None
+        else '<p class="text-sm opacity-60">Недоступно</p>'
+    )
+    if rw_dash_err:
+        rw_tile += f'<p class="text-xs text-error mt-1">{_esc(rw_dash_err)}</p>'
+    chart_labels_json = json.dumps([f"{h:02d}:00" for h in range(24)])
+    chart_topup_json = json.dumps(hour_counts_msk)
+    chart_dev_json = json.dumps(device_hour_counts)
     safe_total = float(total_income or 0)
     safe_month = float(month_income or 0)
     safe_day = float(day_income or 0)
@@ -1265,6 +1380,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
+        <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
         <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
         · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
         · За сутки: <span class="font-bold">{_esc(day_income)} ₽</span></p>
@@ -1303,12 +1419,97 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(bars))}</pre>
       </div>
     </div>
+    <div class="grid gap-4 sm:grid-cols-2 mt-4">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+        <div class="card-body items-center text-center gap-2">
+          <p class="text-sm opacity-60">Устройства в базе бота</p>
+          <p class="text-3xl font-bold text-primary">{devices_total}</p>
+          <p class="text-xs opacity-50">Записи таблицы <code class="bg-base-300 px-1 rounded">devices</code></p>
+        </div>
+      </div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+        <div class="card-body items-center text-center gap-2">
+          <p class="text-sm opacity-60">Подключённых клиентов (сумма по API Remnawave)</p>
+          {rw_tile}
+          <p class="text-xs opacity-50">По полю «онлайн» / активных подключений в карточках пользователей панели</p>
+        </div>
+      </div>
+    </div>
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-column text-primary mr-2" aria-hidden="true"></i>Устройства и активность по часам</h2>
-        <p class="text-base-content/80">Записей устройств в базе бота: <span class="font-bold text-primary">{devices_total}</span></p>
-        <p class="text-sm opacity-60">По часу суток (UTC): успешные пополнения за 7 дней — ориентир «когда чаще платят». Отдельного API графиков нагрузки с панели Remnawave здесь нет.</p>
-        <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(hour_bars))}</pre>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-line text-primary mr-2" aria-hidden="true"></i>Активность по часам (МСК)</h2>
+        <p class="text-sm opacity-60">За последние 7 дней: <b>синяя</b> линия — успешные пополнения по часу суток; <b>зелёная</b> — число активностей устройств (по <code class="bg-base-300 px-1 rounded text-xs">last_used_at</code> в БД). Часовой пояс: <b>Europe/Moscow</b>.</p>
+        <div class="relative w-full min-h-[280px] rounded-xl border border-base-content/10 bg-base-200/40 p-4">
+          <canvas id="remnaDashHourChart" aria-label="График по часам"></canvas>
+        </div>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+        <script>
+        (function() {{
+          var labels = {chart_labels_json};
+          var topup = {chart_topup_json};
+          var dev = {chart_dev_json};
+          var el = document.getElementById('remnaDashHourChart');
+          if (!el || typeof Chart === 'undefined') return;
+          var cs = getComputedStyle(document.documentElement);
+          var fg = cs.getPropertyValue('--bc').trim() || '#e5e7eb';
+          new Chart(el, {{
+            type: 'line',
+            data: {{
+              labels: labels,
+              datasets: [
+                {{
+                  label: 'Пополнения (шт.)',
+                  data: topup,
+                  borderColor: 'rgb(59, 130, 246)',
+                  backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                  fill: true,
+                  tension: 0.35,
+                  pointRadius: 2,
+                  yAxisID: 'y1'
+                }},
+                {{
+                  label: 'Активность устройств (событий)',
+                  data: dev,
+                  borderColor: 'rgb(34, 197, 94)',
+                  backgroundColor: 'rgba(34, 197, 94, 0.08)',
+                  fill: true,
+                  tension: 0.35,
+                  pointRadius: 2,
+                  yAxisID: 'y2'
+                }}
+              ]
+            }},
+            options: {{
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: {{ mode: 'index', intersect: false }},
+              plugins: {{
+                legend: {{ labels: {{ color: fg }} }}
+              }},
+              scales: {{
+                x: {{
+                  ticks: {{ color: fg, maxRotation: 0, autoSkip: true }},
+                  grid: {{ color: 'rgba(128,128,128,0.15)' }}
+                }},
+                y1: {{
+                  type: 'linear',
+                  position: 'left',
+                  title: {{ display: true, text: 'Пополнения', color: fg }},
+                  ticks: {{ color: fg }},
+                  grid: {{ color: 'rgba(128,128,128,0.12)' }}
+                }},
+                y2: {{
+                  type: 'linear',
+                  position: 'right',
+                  title: {{ display: true, text: 'Устройства', color: fg }},
+                  ticks: {{ color: fg }},
+                  grid: {{ drawOnChartArea: false }}
+                }}
+              }}
+            }}
+          }});
+        }})();
+        </script>
       </div>
     </div>
     """
@@ -1350,11 +1551,17 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
                 )
             ).scalars().all()
         )
+        user_ids = [u.id for u in users]
+        subs_by_user: dict[int, list[Subscription]] = defaultdict(list)
+        if user_ids:
+            sr = await session.execute(select(Subscription).where(Subscription.user_id.in_(user_ids)))
+            for sub in sr.scalars().all():
+                subs_by_user[sub.user_id].append(sub)
+    now_utc = datetime.now(timezone.utc)
     rows = []
     for u in users:
-        ring = "bad" if u.is_blocked else "ok"
-        ring_tw = "ring-success" if ring == "ok" else "ring-error"
-        badge_tw = "badge-error" if u.is_blocked else "badge-success"
+        ring_tw = "ring-red-500" if u.is_blocked else "ring-emerald-500"
+        sub_lbl, sub_badge = _subscription_list_badge(now_utc, subs_by_user.get(u.id, []))
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
         av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
@@ -1363,7 +1570,7 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
-            f"<td><span class='badge {badge_tw} badge-sm'>{'Заблокирован' if u.is_blocked else 'Активен'}</span></td></tr>"
+            f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td></tr>"
         )
     pager = _pagination_bar(page=page, total_pages=total_pages, base_path="/admin/users", query_extra={"q": needle})
     body = (
@@ -1373,7 +1580,7 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
         f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
         "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
     )
@@ -1430,6 +1637,32 @@ async def admin_subscription_history(request: Request, page: int = 1) -> HTMLRes
         f"{pager}</div></div>"
     )
     return _layout("История подписок", body, request=request)
+
+
+@router.get("/users/{user_id}/telegram-photo")
+async def admin_user_telegram_photo(request: Request, user_id: int) -> Response:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+    if user is None:
+        return Response(status_code=404)
+    now_m = time.monotonic()
+    hit = _AVATAR_CACHE.get(user_id)
+    if hit is not None and now_m - hit[0] < _AVATAR_TTL_SEC:
+        return Response(content=hit[1], media_type=hit[2])
+    async with _avatar_fetch_lock(user_id):
+        now_m = time.monotonic()
+        hit = _AVATAR_CACHE.get(user_id)
+        if hit is not None and now_m - hit[0] < _AVATAR_TTL_SEC:
+            return Response(content=hit[1], media_type=hit[2])
+        loaded = await _load_telegram_profile_photo(user)
+        if loaded is None:
+            return Response(status_code=404)
+        body_b, mime = loaded
+        _AVATAR_CACHE[user_id] = (time.monotonic(), body_b, mime)
+        return Response(content=body_b, media_type=mime)
 
 
 @router.get("/users/{user_id}")
@@ -1640,7 +1873,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         for tid, tt, ta, ts, tp, tc in txs_tuples
     )
     ring = "bad" if ud.is_blocked else "ok"
-    ring_tw = "ring-success" if ring == "ok" else "ring-error"
+    ring_tw = "ring-emerald-500" if ring == "ok" else "ring-red-500"
 
     sub_url_rw: str | None = None
     if uinf:
@@ -2428,7 +2661,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         ).all()
     usage_rows = "".join(
         f"<tr><td>{pu.id}</td><td><a href='/admin/users/{u.id}'>#{u.id}</a></td>"
-        f"<td><code>{u.telegram_id}</code></td><td>{_esc(pu.used_at)}</td></tr>"
+        f"<td><code>{u.telegram_id}</code></td><td class='whitespace-nowrap text-xs'>{_fmt_dt_msk(pu.used_at)}</td></tr>"
         for pu, u in usages
     )
     body = f"""

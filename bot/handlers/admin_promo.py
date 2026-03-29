@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
@@ -26,6 +27,8 @@ from shared.services.admin_notify import notify_admin
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin_promo")
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
 
 PAGE_SIZE = 8
 
@@ -89,7 +92,14 @@ def _promo_details_lines(promo: PromoCode, created_by: User | None) -> list[str]
         plain("Лимит активаций: ")
         + bold("∞" if promo.max_uses is None else str(promo.max_uses)),
         plain("Активирован: ") + bold(str(promo.used_count)),
-        plain("Создан: ") + bold(promo.created_at.strftime("%d.%m.%Y %H:%M UTC")),
+        plain("Создан: ")
+        + bold(
+            (
+                promo.created_at.replace(tzinfo=timezone.utc)
+                if promo.created_at.tzinfo is None
+                else promo.created_at
+            ).astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M МСК")
+        ),
     ]
     if created_by is not None:
         base.append(

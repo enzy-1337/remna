@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timezone
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -30,6 +31,8 @@ from shared.services.topup_service import create_topup_payment
 logger = logging.getLogger(__name__)
 
 router = Router(name="balance")
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _can_cryptobot() -> bool:
@@ -73,7 +76,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
         dt = t.created_at
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        dt_s = dt.strftime("%d.%m.%Y %H:%M")
+        dt_s = dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M")
         if t.type == "promo_topup_bonus":
             promo_code = str(t.payment_id or "—")
             lines.append(
@@ -84,7 +87,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
                 + code(promo_code)
                 + plain(" · ")
                 + esc(dt_s)
-                + plain(" UTC")
+                + plain(" МСК")
             )
         else:
             prov = _ru_payment_provider(t.payment_provider)
@@ -96,7 +99,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
                 + prov
                 + plain(" · ")
                 + esc(dt_s)
-                + plain(" UTC")
+                + plain(" МСК")
             )
     return lines
 

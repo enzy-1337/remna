@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
@@ -33,6 +34,8 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.broadcast_service import (
@@ -156,7 +159,10 @@ def _subscription_caption_lines(sub: Subscription, plan) -> list[str]:
             days, rem = divmod(int(delta.total_seconds()), 86400)
             hours = rem // 3600
             left = plain(f"~{days}д {hours}ч")
-    exp_s = sub.expires_at.strftime("%d.%m.%Y %H:%M UTC")
+    exp_naive = sub.expires_at
+    if exp_naive.tzinfo is None:
+        exp_naive = exp_naive.replace(tzinfo=timezone.utc)
+    exp_s = exp_naive.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M МСК")
     return [
         plain("Тариф: ") + bold(pname) + plain(" · ") + kind + plain(" · ") + st,
         plain("До: ") + bold(exp_s),
