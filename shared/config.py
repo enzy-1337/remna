@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     admin_log_topic_support: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_SUPPORT")
     admin_log_topic_backups: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_BACKUPS")
     admin_log_topic_reports: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_REPORTS")
+    admin_log_topic_boot: int | None = Field(
+        default=None,
+        validation_alias="ADMIN_LOG_TOPIC_BOOT",
+        description="Тема форума для сообщений о запуске бота",
+    )
     admin_report_enabled: bool = Field(default=False, validation_alias="ADMIN_REPORT_ENABLED")
     admin_report_hour_utc: int = Field(
         default=8,
@@ -373,6 +378,7 @@ class Settings(BaseSettings):
         "admin_log_topic_support",
         "admin_log_topic_backups",
         "admin_log_topic_reports",
+        "admin_log_topic_boot",
         mode="before",
     )
     @classmethod
@@ -436,6 +442,7 @@ class Settings(BaseSettings):
             AdminLogTopic.SUPPORT: self.admin_log_topic_support,
             AdminLogTopic.BACKUPS: self.admin_log_topic_backups,
             AdminLogTopic.REPORTS: self.admin_log_topic_reports,
+            AdminLogTopic.BOOT: self.admin_log_topic_boot,
         }
         tid = m.get(topic)
         if tid is not None:

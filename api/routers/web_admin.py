@@ -282,11 +282,14 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
   </style>"""
 
 
-def _brand_logo_mark(settings: Settings) -> str:
+def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
     url = (settings.admin_panel_logo_url or "").strip()
+    box = "max-h-8 max-w-8 h-8 w-8" if compact else "max-h-9 max-w-9 h-9 w-9"
+    w = "32" if compact else "36"
+    icls = "fa-solid fa-shield-halved text-sm" if compact else "fa-solid fa-shield-halved text-base"
     if url.startswith(("http://", "https://")):
-        return f'<img src="{_esc(url)}" alt="" class="max-h-9 max-w-9 h-9 w-9 object-contain" width="36" height="36" loading="lazy" />'
-    return '<i class="fa-solid fa-shield-halved text-base" aria-hidden="true"></i>'
+        return f'<img src="{_esc(url)}" alt="" class="{box} object-contain" width="{w}" height="{w}" loading="lazy" />'
+    return f'<i class="{icls}" aria-hidden="true"></i>'
 
 
 def _nav_link_class(href: str, cur: str) -> str:
@@ -342,7 +345,7 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-5 py-5 pt-[4.75rem] pb-28 md:pb-8 md:pl-[4.5rem] md:pr-8"
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-28 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[4.5rem] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
@@ -380,6 +383,13 @@ def _layout(
         </div>
       </div>
     </aside>"""
+        mobile_brand_bar = f"""
+    <header class="fixed left-0 right-0 top-0 z-40 flex h-12 items-center justify-center gap-2 border-b border-base-content/10 bg-base-300/95 px-14 backdrop-blur-md md:hidden" role="banner" aria-label="Бренд панели">
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/20 text-primary">
+        {_brand_logo_mark(settings, compact=True)}
+      </span>
+      <span class="max-w-[min(14rem,calc(100vw-8.5rem))] truncate text-sm font-bold tracking-tight text-base-content">{_esc(brand_title)}</span>
+    </header>"""
         mobile_nav = f"""
     <nav class="fixed bottom-0 left-0 right-0 z-30 flex h-[4.25rem] items-center justify-between gap-0 border-t border-base-content/10 bg-base-300/95 px-2 py-1.5 backdrop-blur-md md:hidden" aria-label="Мобильное меню">
       <a href="/admin/dashboard" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-base"></i><span>Дашборд</span></a>
@@ -392,8 +402,8 @@ def _layout(
       <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
     </nav>"""
         theme_toggle = """
-    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-5 top-5 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-lg backdrop-blur-md md:right-7 md:top-6" aria-label="Тема"></button>"""
-        nav_blocks = desktop_sidebar + mobile_nav + theme_toggle
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2.5 top-2 z-50 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
+        nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_nav + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
     <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
@@ -445,7 +455,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-4 top-5 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 shadow-lg backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2.5 top-2 z-50 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
@@ -617,7 +627,7 @@ def _layout(
 </head>
 <body class="text-base-content antialiased">
   {nav_blocks}{back_fixed}{remna_chrome}
-  <div class="{main_cls} remna-page max-w-[1400px] mx-auto w-full">
+  <div class="{main_cls} remna-page w-full min-w-0">
     {inner}
   </div>
 {theme_script if show_nav and request is not None else ""}
@@ -1476,7 +1486,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             )
         else:
             plg = ""
-            if plan_traffic is not None and int(plan_traffic) > 0:
+            try:
+                pt_ok = plan_traffic is not None and int(plan_traffic) > 0
+            except (TypeError, ValueError):
+                pt_ok = False
+            if pt_ok:
                 plg = f" · лимит по тарифу в боте: ~{plan_traffic} ГБ"
             traffic_line = f"<span class='opacity-70'>данные панели недоступны</span>{_esc(plg)}"
         slots_line = (
@@ -1601,8 +1615,9 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
 
     invited_rows = "".join(
-        f"<tr><td>{iid}</td><td><a class='link link-primary font-medium' href='/admin/users/{iid}'>{_esc(ifn or iun or '-')}</a></td>"
-        f"<td>{_esc('@' + iun) if iun else '-'}</td><td><code class='bg-base-300 px-1 rounded text-xs'>{itg}</code></td>"
+        f"<tr><td>{iid}</td><td><a class='link link-primary font-medium' href='/admin/users/{iid}'>{_esc(str(ifn or '').strip() or (str(iun).strip() if iun is not None else '') or '-')}</a></td>"
+        f"<td>{_esc('@' + str(iun).strip().lstrip('@')) if iun is not None and str(iun).strip() else '-'}</td>"
+        f"<td><code class='bg-base-300 px-1 rounded text-xs'>{itg}</code></td>"
         f"<td>{_fmt_dt_msk(ica)}</td></tr>"
         for iid, ifn, iun, itg, ica in invited_tuples
     )

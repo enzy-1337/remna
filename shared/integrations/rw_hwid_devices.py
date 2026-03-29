@@ -56,8 +56,8 @@ def normalize_hwid_devices_list(devices: list[dict[str, Any]]) -> list[dict[str,
 
 
 def hwid_device_title(d: dict[str, Any], index_1based: int) -> str:
-    model = (d.get("deviceModel") or "").strip()
-    plat = (d.get("platform") or "").strip()
+    model = str(d.get("deviceModel") or "").strip()
+    plat = str(d.get("platform") or "").strip()
     label = model or plat or "Устройство"
     text = f"#{index_1based} {label}"
     return text if len(text) <= 60 else text[:57] + "…"

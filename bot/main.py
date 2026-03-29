@@ -10,6 +10,7 @@ import contextlib
 import logging
 import sys
 import socket
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Корень проекта в PYTHONPATH (без установки пакета)
@@ -109,6 +110,15 @@ async def main() -> None:
     autorenew_task = asyncio.create_task(subscription_autorenew_loop(settings, stop_event))
     expiry_notify_task = asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event))
     try:
+        boot_ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        sent = await notify_admin_plain(
+            settings,
+            text=f"🚀 Бот запущен\n{boot_ts} UTC",
+            topic=AdminLogTopic.BOOT,
+            event_type="bot_startup",
+        )
+        if sent:
+            logging.getLogger(__name__).info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
         await dp.start_polling(bot)
     finally:
         stop_event.set()

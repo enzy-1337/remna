@@ -7,6 +7,11 @@ from typing import Callable
 
 from shared.config import Settings, get_settings
 
+
+def _env_opt_int(v: int | None) -> str:
+    return "" if v is None else str(v)
+
+
 # (section_id, заголовок вкладки, [(ENV_KEY, короткий заголовок, getter, длинная подсказка как в .env.example)])
 WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Settings], object], str]]]] = [
     (
@@ -210,6 +215,96 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Часовой пояс отчёта",
                 lambda s: s.admin_report_timezone,
                 "Таймзона для границ «вчера» в отчёте (напр. Europe/Moscow).",
+            ),
+        ],
+    ),
+    (
+        "admin_log",
+        "Админ-чат и темы",
+        [
+            (
+                "ADMIN_LOG_CHAT_ID",
+                "ID чата (форум)",
+                lambda s: str(s.admin_log_chat_id) if s.admin_log_chat_id is not None else "",
+                "Супергруппа с включёнными темами: id вида -100… Куда уходят уведомления бота.",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_ID",
+                "Тема по умолчанию",
+                lambda s: _env_opt_int(s.admin_log_topic_id),
+                "Если для типа события не задана своя тема — используется эта (число id темы в Telegram).",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_BOOT",
+                "Тема: запуск бота",
+                lambda s: _env_opt_int(s.admin_log_topic_boot),
+                "Сообщение «бот запущен» при старте процесса. Пусто — как общая тема (GENERAL или TOPIC_ID).",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_GENERAL",
+                "Тема: общее",
+                lambda s: _env_opt_int(s.admin_log_topic_general),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_PAYMENTS",
+                "Тема: платежи",
+                lambda s: _env_opt_int(s.admin_log_topic_payments),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_USERS",
+                "Тема: пользователи",
+                lambda s: _env_opt_int(s.admin_log_topic_users),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_TRIALS",
+                "Тема: триалы",
+                lambda s: _env_opt_int(s.admin_log_topic_trials),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_BONUSES",
+                "Тема: бонусы",
+                lambda s: _env_opt_int(s.admin_log_topic_bonuses),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_SUBSCRIPTIONS",
+                "Тема: подписки",
+                lambda s: _env_opt_int(s.admin_log_topic_subscriptions),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_PROMO",
+                "Тема: промокоды",
+                lambda s: _env_opt_int(s.admin_log_topic_promo),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_DEVICES",
+                "Тема: устройства",
+                lambda s: _env_opt_int(s.admin_log_topic_devices),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_SUPPORT",
+                "Тема: поддержка",
+                lambda s: _env_opt_int(s.admin_log_topic_support),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_BACKUPS",
+                "Тема: бэкапы",
+                lambda s: _env_opt_int(s.admin_log_topic_backups),
+                "",
+            ),
+            (
+                "ADMIN_LOG_TOPIC_REPORTS",
+                "Тема: отчёты",
+                lambda s: _env_opt_int(s.admin_log_topic_reports),
+                "",
             ),
         ],
     ),

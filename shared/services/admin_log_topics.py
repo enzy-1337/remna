@@ -19,3 +19,4 @@ class AdminLogTopic(str, Enum):
     SUPPORT = "support"
     BACKUPS = "backups"
     REPORTS = "reports"
+    BOOT = "boot"
