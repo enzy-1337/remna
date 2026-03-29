@@ -302,6 +302,88 @@ class RemnaWaveClient:
                 continue
         return False, "Нет подходящего GET-эндпоинта — статус нод смотрите в UI панели"
 
+    def _extract_nodes_list(self, data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        if not isinstance(data, dict):
+            return []
+        top = data.get("response")
+        if isinstance(top, list):
+            return [x for x in top if isinstance(x, dict)]
+        root = self._unwrap(data)
+        if isinstance(root, list):
+            return [x for x in root if isinstance(x, dict)]
+        if isinstance(root, dict):
+            for key in ("nodes", "internalNodes", "items", "data", "rows", "result"):
+                val = root.get(key)
+                if isinstance(val, list):
+                    return [x for x in val if isinstance(x, dict)]
+        return []
+
+    async def list_nodes_with_latency(
+        self, *, max_nodes: int = 50
+    ) -> tuple[list[dict[str, Any]], float | None, str | None]:
+        """Список нод из API + замер GET по каждой (мс). Возвращает (строки, мс списка, ошибка)."""
+        if self._s.remnawave_stub:
+            return [
+                {
+                    "name": "stub-node",
+                    "uuid": "00000000-0000-0000-0000-000000000001",
+                    "status": "STUB",
+                    "ping_ms": None,
+                    "ping_note": "REMNAWAVE_STUB",
+                }
+            ], None, None
+
+        sem = asyncio.Semaphore(6)
+
+        async def _ping_uuid(nu: str) -> tuple[float | None, str]:
+            async with sem:
+                t0 = time.perf_counter()
+                for sub in (f"internal-nodes/{nu}", f"nodes/{nu}"):
+                    try:
+                        await self._request("GET", sub)
+                        ms = round((time.perf_counter() - t0) * 1000, 1)
+                        return ms, sub
+                    except RemnaWaveError:
+                        continue
+                return None, ""
+
+        last_list_err: str | None = None
+        for path in ("internal-nodes", "nodes"):
+            t0 = time.perf_counter()
+            try:
+                data = await self._request("GET", path)
+                catalog_ms = round((time.perf_counter() - t0) * 1000, 1)
+                nodes = self._extract_nodes_list(data)
+                if not nodes:
+                    last_list_err = f"«{path}»: пустой список"
+                    continue
+                rows_out: list[dict[str, Any]] = []
+                for n in nodes[:max_nodes]:
+                    nu = str(n.get("uuid") or n.get("id") or n.get("nodeUuid") or "").strip()
+                    name = str(n.get("name") or n.get("tag") or n.get("address") or nu or "—")[:120]
+                    st = str(n.get("status") or n.get("state") or "—")[:80]
+                    if nu:
+                        pms, subp = await _ping_uuid(nu)
+                        note = f"{subp} · {pms} мс" if pms is not None else "детальный GET недоступен"
+                    else:
+                        pms, note = None, "нет uuid в ответе"
+                    rows_out.append(
+                        {
+                            "name": name,
+                            "uuid": nu or "—",
+                            "status": st,
+                            "ping_ms": pms,
+                            "ping_note": note[:160],
+                        }
+                    )
+                return rows_out, catalog_ms, None
+            except RemnaWaveError as e:
+                last_list_err = str(e)[:220]
+                continue
+        return [], None, last_list_err or "не удалось получить список нод"
+
     async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if self._s.remnawave_stub:
             return []

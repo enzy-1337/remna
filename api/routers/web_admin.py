@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from secrets import token_urlsafe
+from types import SimpleNamespace
 from urllib.parse import quote as url_quote
 from urllib.parse import quote_plus
 
@@ -98,6 +99,44 @@ def _esc(v: object) -> str:
 
 def _esc_attr(v: object) -> str:
     return html.escape(str(v), quote=True)
+
+
+def _pagination_bar(*, page: int, total_pages: int, base_path: str, query_extra: dict[str, str]) -> str:
+    """Центр: «1 | ‹ | текущая | › | N»."""
+
+    def _url(p: int) -> str:
+        seg = [f"page={p}"]
+        for k, v in query_extra.items():
+            vs = (v or "").strip()
+            if vs:
+                seg.append(f"{quote_plus(k)}={quote_plus(vs)}")
+        return base_path + "?" + "&".join(seg)
+
+    def _btn(href: str, label: str, *, disabled: bool = False, primary: bool = False) -> str:
+        if disabled:
+            return (
+                f"<span class='btn btn-ghost btn-sm h-9 min-h-9 opacity-40 pointer-events-none' "
+                f"aria-disabled='true'>{_esc(label)}</span>"
+            )
+        tw = "btn btn-primary btn-sm h-9 min-h-9" if primary else "btn btn-ghost btn-sm h-9 min-h-9"
+        return f"<a class='{tw}' href='{_esc(href)}'>{_esc(label)}</a>"
+
+    if total_pages <= 1:
+        return "<div class='flex justify-center py-3'><span class='text-sm opacity-60'>Страница 1 из 1</span></div>"
+    prev_p = max(1, page - 1)
+    next_p = min(total_pages, page + 1)
+    return f"""
+    <div class="flex flex-col items-center gap-2 py-4">
+      <span class="text-sm opacity-60">Страница {_esc(page)} из {_esc(total_pages)}</span>
+      <div class="flex flex-wrap justify-center items-center gap-1">
+        {_btn(_url(1), "1", disabled=page == 1)}
+        {_btn(_url(prev_p), "‹", disabled=page == 1)}
+        <span class="btn btn-primary btn-sm h-9 min-h-9 min-w-[2.5rem] pointer-events-none">{_esc(page)}</span>
+        {_btn(_url(next_p), "›", disabled=page == total_pages)}
+        {_btn(_url(total_pages), str(total_pages), disabled=page == total_pages)}
+      </div>
+    </div>
+    """
 
 
 def _auth_data(request: Request) -> dict:
@@ -916,6 +955,7 @@ async def admin_status(request: Request) -> HTMLResponse:
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
     nodes_ok, nodes_msg = await rw.probe_nodes_api()
+    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency()
     panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
     bot_ok = False
@@ -979,11 +1019,41 @@ async def admin_status(request: Request) -> HTMLResponse:
     except Exception as e:
         redis_msg = str(e)[:240]
 
+    nodes_table_html = ""
+    if nodes_list_err:
+        nodes_table_html = f"<div class='alert alert-warning text-sm mt-4'>{_esc(nodes_list_err)}</div>"
+    elif node_rows:
+        cat_note = f"загрузка списка: {nodes_catalog_ms} мс · " if nodes_catalog_ms is not None else ""
+        trs = []
+        for n in node_rows:
+            pms = n.get("ping_ms")
+            ms_s = f"{pms} мс" if pms is not None else "—"
+            trs.append(
+                f"<tr><td class='max-w-[14rem] truncate' title='{_esc_attr(n.get('name'))}'>{_esc(n.get('name'))}</td>"
+                f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(n.get('uuid'))}</code></td>"
+                f"<td>{_esc(n.get('status'))}</td><td class='font-mono text-sm'>{_esc(ms_s)}</td>"
+                f"<td class='text-xs opacity-80 max-w-xs'>{_esc(n.get('ping_note'))}</td></tr>"
+            )
+        nodes_table_html = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="card-title text-lg"><i class="fa-solid fa-network-wired text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
+        <p class="text-sm opacity-60">{_esc(cat_note)}по каждой ноде — отдельный GET и время ответа в миллисекундах.</p>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10">
+          <table class="table table-zebra table-sm">
+            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th><th>Запрос</th></tr></thead>
+            <tbody>{''.join(trs)}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    """
+
     body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
       <div class="card-body gap-2">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
-        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, типичные пути нод, Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
+        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод с замером мс, Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
       </div>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -993,6 +1063,7 @@ async def admin_status(request: Request) -> HTMLResponse:
       {_status_service_card(title="База данных", icon="fa-solid fa-database", ok=db_ok, detail=db_msg, latency=db_lat)}
       {_status_service_card(title="Redis", icon="fa-solid fa-bolt", ok=redis_ok, detail=redis_msg, latency=redis_lat)}
     </div>
+    {nodes_table_html}
     """
     return _layout("Статус сервисов", body, request=request)
 
@@ -1150,7 +1221,7 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
         return denied
     needle = q.strip()
     page = max(1, page)
-    per_page = 10
+    per_page = 15
     async with await _session() as session:
         query = select(User).order_by(desc(User.id))
         count_query = select(func.count()).select_from(User)
@@ -1193,11 +1264,7 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {badge_tw} badge-sm'>{'Заблокирован' if u.is_blocked else 'Активен'}</span></td></tr>"
         )
-    pages = []
-    if total_pages > 1:
-        for p in range(1, total_pages + 1):
-            cls = "btn btn-ghost btn-sm h-9 min-h-9" if p != page else "btn btn-primary btn-sm h-9 min-h-9"
-            pages.append(f"<a class='{cls}' href='/admin/users?q={_esc(needle)}&page={p}'>{p}</a>")
+    pager = _pagination_bar(page=page, total_pages=total_pages, base_path="/admin/users", query_extra={"q": needle})
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
@@ -1207,23 +1274,33 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
-        f"<div class='flex flex-wrap items-center gap-2'><span class='text-sm opacity-60'>Страница {page} из {total_pages}</span>{''.join(pages)}</div></div></div>"
+        f"{pager}</div></div>"
     )
     return _layout("Web-admin Users", body, request=request)
 
 
 @router.get("/subscriptions")
-async def admin_subscription_history(request: Request) -> HTMLResponse:
+async def admin_subscription_history(request: Request, page: int = 1) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    page = max(1, page)
+    per_page = 15
     async with await _session() as session:
+        total_subs = int(
+            (await session.execute(select(func.count()).select_from(Subscription))).scalar_one() or 0
+        )
+        total_pages = max(1, (total_subs + per_page - 1) // per_page)
+        if page > total_pages:
+            page = total_pages
+        offset = (page - 1) * per_page
         r = await session.execute(
             select(Subscription, User, Plan)
             .join(User, User.id == Subscription.user_id)
             .join(Plan, Plan.id == Subscription.plan_id)
             .order_by(desc(Subscription.created_at))
-            .limit(500)
+            .offset(offset)
+            .limit(per_page)
         )
         rows = r.all()
     tr: list[str] = []
@@ -1240,6 +1317,7 @@ async def admin_subscription_history(request: Request) -> HTMLResponse:
             f"<td class='text-xs whitespace-nowrap'>{_fmt_dt_msk(sub.expires_at)}</td>"
             f"<td>{sub.devices_count}</td></tr>"
         )
+    pager = _pagination_bar(page=page, total_pages=total_pages, base_path="/admin/subscriptions", query_extra={})
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-clock-rotate-left text-primary mr-2' aria-hidden='true'></i>История подписок</h2>"
@@ -1248,7 +1326,7 @@ async def admin_subscription_history(request: Request) -> HTMLResponse:
         "<table class='table table-zebra table-sm'><thead><tr>"
         "<th>Создана</th><th>Пользователь</th><th>ID</th><th>Тариф</th><th>Статус</th><th>Старт</th><th>Истекает</th><th>Слотов</th></tr></thead>"
         f"<tbody>{''.join(tr) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет записей</td></tr>'}</tbody></table></div>"
-        "</div></div>"
+        f"{pager}</div></div>"
     )
     return _layout("История подписок", body, request=request)
 
@@ -1310,20 +1388,61 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             )
         ).scalar_one_or_none()
 
+        ud = SimpleNamespace(
+            id=user.id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            username=user.username,
+            telegram_id=user.telegram_id,
+            balance=user.balance,
+            referral_code=user.referral_code,
+            remnawave_uuid=user.remnawave_uuid,
+            is_blocked=user.is_blocked,
+            created_at=user.created_at,
+        )
+        referrer_sn = (
+            SimpleNamespace(id=referrer.id, first_name=referrer.first_name, username=referrer.username)
+            if referrer
+            else None
+        )
+        subs_tuples = [(s.id, s.status, s.started_at, s.expires_at, s.devices_count) for s in subs]
+        txs_tuples = [
+            (t.id, t.type, t.amount, t.status, t.payment_provider, t.created_at) for t in txs
+        ]
+        invited_tuples = [
+            (u.id, u.first_name, u.username, u.telegram_id, u.created_at) for u in invited_list
+        ]
+        dev_tuples = [
+            (d.id, d.name, d.remnawave_client_id, d.created_at, d.last_used_at) for d in db_devices
+        ]
+        active_snap: dict | None = None
+        if active_sub:
+            pl = active_sub.plan
+            active_snap = {
+                "id": active_sub.id,
+                "status": active_sub.status,
+                "expires_at": active_sub.expires_at,
+                "devices_count": active_sub.devices_count,
+                "auto_renew": active_sub.auto_renew,
+                "plan_name": pl.name if pl else None,
+                "plan_traffic_limit_gb": pl.traffic_limit_gb if pl else None,
+            }
+        last_cancelled_id = last_cancelled_sub.id if last_cancelled_sub else None
+
     uinf: dict | None = None
     hwid_list_ok = False
-    if user.remnawave_uuid:
+    if ud.remnawave_uuid:
         try:
             rw = RemnaWaveClient(settings)
-            uinf = await rw.get_user(str(user.remnawave_uuid))
-            raw = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
+            uinf = await rw.get_user(str(ud.remnawave_uuid))
+            raw = await rw.get_user_hwid_devices(str(ud.remnawave_uuid))
             hwid_devices = normalize_hwid_devices_list(raw if isinstance(raw, list) else [])
             hwid_list_ok = True
         except RemnaWaveError as e:
             hwid_err = str(e)
 
     n_occ = 0
-    if active_sub:
+    if active_snap:
         if uinf:
             if hwid_list_ok:
                 n_occ = len(hwid_devices)
@@ -1335,9 +1454,10 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
 
     now_utc = datetime.now(UTC)
     sub_summary_html = ""
-    if active_sub:
-        plan = active_sub.plan
-        exp = active_sub.expires_at
+    if active_snap:
+        plan_name = active_snap["plan_name"]
+        plan_traffic = active_snap["plan_traffic_limit_gb"]
+        exp = active_snap["expires_at"]
         if exp is not None and exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
         left_phr = _humanize_left_ru(exp, now_utc) if exp else "—"
@@ -1356,14 +1476,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             )
         else:
             plg = ""
-            if plan and plan.traffic_limit_gb is not None and int(plan.traffic_limit_gb) > 0:
-                plg = f" · лимит по тарифу в боте: ~{plan.traffic_limit_gb} ГБ"
+            if plan_traffic is not None and int(plan_traffic) > 0:
+                plg = f" · лимит по тарифу в боте: ~{plan_traffic} ГБ"
             traffic_line = f"<span class='opacity-70'>данные панели недоступны</span>{_esc(plg)}"
         slots_line = (
-            f"<span class='font-mono'><b>{n_occ}</b> / <b>{active_sub.devices_count}</b></span>"
+            f"<span class='font-mono'><b>{n_occ}</b> / <b>{active_snap['devices_count']}</b></span>"
             "<span class='text-xs opacity-60'> (занято / слотов в боте)</span>"
         )
-        st_badge = "success" if active_sub.status in ("active", "trial") else "warning"
+        st_badge = "success" if active_snap["status"] in ("active", "trial") else "warning"
         conn_extra = ""
         if uinf:
             oa = rw_user_online_at(uinf)
@@ -1376,7 +1496,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     <div class="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-base-200/90 to-base-100 p-4 shadow-md backdrop-blur-sm">
       <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">Активная подписка</h3>
       <div class="grid gap-3 text-sm sm:grid-cols-2">
-        <p>Тариф: <b>{_esc(plan.name if plan else '—')}</b> · <span class="badge badge-{st_badge} badge-sm">{_esc(active_sub.status)}</span></p>
+        <p>Тариф: <b>{_esc(plan_name or '—')}</b> · <span class="badge badge-{st_badge} badge-sm">{_esc(active_snap['status'])}</span></p>
         <p>Трафик: {traffic_line}</p>
         <p>Устройства: {slots_line}</p>
         <p class="sm:col-span-2">Окончание: <b>{_esc(exp_msk)}</b> <span class="opacity-70">(осталось: {_esc(left_phr)})</span></p>
@@ -1405,16 +1525,16 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         )
 
     subs_rows = "".join(
-        f"<tr><td>{s.id}</td><td>{_esc(s.status)}</td><td>{_fmt_dt_msk(s.started_at)}</td>"
-        f"<td>{_fmt_dt_msk(s.expires_at)}</td><td>{s.devices_count}</td></tr>"
-        for s in subs
+        f"<tr><td>{sid}</td><td>{_esc(st)}</td><td>{_fmt_dt_msk(sa)}</td>"
+        f"<td>{_fmt_dt_msk(se)}</td><td>{dc}</td></tr>"
+        for sid, st, sa, se, dc in subs_tuples
     )
     tx_rows = "".join(
-        f"<tr><td>{t.id}</td><td>{_esc(t.type)}</td><td>{_esc(t.amount)}</td><td>{_esc(t.status)}</td>"
-        f"<td>{_esc(t.payment_provider or '-')}</td><td>{_fmt_dt_msk(t.created_at)}</td></tr>"
-        for t in txs
+        f"<tr><td>{tid}</td><td>{_esc(tt)}</td><td>{_esc(ta)}</td><td>{_esc(ts)}</td>"
+        f"<td>{_esc(tp or '-')}</td><td>{_fmt_dt_msk(tc)}</td></tr>"
+        for tid, tt, ta, ts, tp, tc in txs_tuples
     )
-    ring = "bad" if user.is_blocked else "ok"
+    ring = "bad" if ud.is_blocked else "ok"
     ring_tw = "ring-success" if ring == "ok" else "ring-error"
 
     sub_url_rw: str | None = None
@@ -1437,12 +1557,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
 
     now_check = datetime.now(UTC)
     mgmt_html = ""
-    if active_sub and active_sub.status in ("active", "trial"):
-        exp_chk = active_sub.expires_at
+    if active_snap and active_snap["status"] in ("active", "trial"):
+        exp_chk = active_snap["expires_at"]
         if exp_chk is not None and exp_chk.tzinfo is None:
             exp_chk = exp_chk.replace(tzinfo=UTC)
         if exp_chk is not None and exp_chk > now_check:
-            ar_on = active_sub.auto_renew
+            ar_on = active_snap["auto_renew"]
             nxt = "0" if ar_on else "1"
             lbl = "Выключить авто-продление" if ar_on else "Включить авто-продление"
             tip = "После срока списание не произойдёт." if ar_on else "За ~1 ч до конца — попытка продлить с баланса."
@@ -1457,34 +1577,34 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         </form>
         <div class="divider my-0"></div>
         <p class="text-sm opacity-80">Полное отключение (как в Telegram-админке): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> в БД и <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> в панели.</p>
-        <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_sub.id}">Отключить подписку</button>
+        <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_snap['id']}">Отключить подписку</button>
       </div>
     </div>"""
-    elif last_cancelled_sub is not None:
+    elif last_cancelled_id is not None:
         mgmt_html = f"""
     <div class="card bg-base-100 border border-success/35 shadow-lg">
       <div class="card-body gap-4">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-plug-circle-check text-success mr-2" aria-hidden="true"></i>Включить подписку</h3>
-        <p class="text-sm opacity-80">Последняя отключённая запись: <b>#{last_cancelled_sub.id}</b>.</p>
+        <p class="text-sm opacity-80">Последняя отключённая запись: <b>#{last_cancelled_id}</b>.</p>
         <form method="post" action="/admin/users/{user_id}/subscription/enable" class="flex flex-wrap gap-2">
-          <input type="hidden" name="subscription_id" value="{last_cancelled_sub.id}"/>
+          <input type="hidden" name="subscription_id" value="{last_cancelled_id}"/>
           <button type="submit" class="btn btn-success btn-sm h-9 min-h-9">Включить снова</button>
         </form>
       </div>
     </div>"""
 
     ref_by_block = ""
-    if referrer is not None:
-        r_disp = referrer.first_name or referrer.username or f"#{referrer.id}"
-        ref_by_block = f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer.id})</span></p>"
+    if referrer_sn is not None:
+        r_disp = referrer_sn.first_name or referrer_sn.username or f"#{referrer_sn.id}"
+        ref_by_block = f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer_sn.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer_sn.id})</span></p>"
     else:
         ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
 
     invited_rows = "".join(
-        f"<tr><td>{u.id}</td><td><a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(u.first_name or u.username or '-')}</a></td>"
-        f"<td>{_esc('@' + u.username) if u.username else '-'}</td><td><code class='bg-base-300 px-1 rounded text-xs'>{u.telegram_id}</code></td>"
-        f"<td>{_fmt_dt_msk(u.created_at)}</td></tr>"
-        for u in invited_list
+        f"<tr><td>{iid}</td><td><a class='link link-primary font-medium' href='/admin/users/{iid}'>{_esc(ifn or iun or '-')}</a></td>"
+        f"<td>{_esc('@' + iun) if iun else '-'}</td><td><code class='bg-base-300 px-1 rounded text-xs'>{itg}</code></td>"
+        f"<td>{_fmt_dt_msk(ica)}</td></tr>"
+        for iid, ifn, iun, itg, ica in invited_tuples
     )
     ref_block = f"""
     <div class="divider my-0"></div>
@@ -1513,17 +1633,17 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     hwid_alert = ""
     if hwid_err:
         hwid_alert = f"<div class='alert alert-warning text-sm'>{_esc(hwid_err)}</div>"
-    elif not user.remnawave_uuid:
+    elif not ud.remnawave_uuid:
         hwid_alert = "<p class='text-sm opacity-60'>Нет RemnaWave UUID — список HWID с панели недоступен.</p>"
 
     dev_db_rows = []
-    for dev in db_devices:
+    for did, dname, dcid, dca, dla in dev_tuples:
         dev_db_rows.append(
-            f"<tr><td>{dev.id}</td><td>{_esc(dev.name)}</td><td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(dev.remnawave_client_id or '—')}</code></td>"
-            f"<td>{_fmt_dt_msk(dev.created_at)}</td><td>{_fmt_dt_msk(dev.last_used_at) if dev.last_used_at else '—'}</td>"
+            f"<tr><td>{did}</td><td>{_esc(dname)}</td><td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(dcid or '—')}</code></td>"
+            f"<td>{_fmt_dt_msk(dca)}</td><td>{_fmt_dt_msk(dla) if dla else '—'}</td>"
             "<td class='text-right'>"
             f"<button type='button' class='btn btn-warning btn-outline btn-sm h-9 min-h-9' data-remna-open-slot data-no-row-nav "
-            f'data-user-id="{user_id}" data-device-id="{dev.id}">Снять слот</button></td></tr>'
+            f'data-user-id="{user_id}" data-device-id="{did}">Снять слот</button></td></tr>'
         )
 
     devices_block = f"""
@@ -1550,11 +1670,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
       <div class="card bg-base-100 border border-base-content/10 shadow-lg xl:col-span-2">
         <div class="card-body gap-4">
           <div class="flex flex-wrap items-start gap-4">
-            {_avatar_with_fallback(user, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
+            {_avatar_with_fallback(ud, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
             <div class="min-w-0 flex-1">
-              <h2 class="text-2xl font-bold">Пользователь #{user.id}</h2>
-              <p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p>
-              {_telegram_profile_actions(user)}
+              <h2 class="text-2xl font-bold">Пользователь #{ud.id}</h2>
+              <p class="text-sm opacity-60">{_esc(ud.first_name or ud.username or '-')}</p>
+              {_telegram_profile_actions(ud)}
             </div>
           </div>
           <div class="divider my-0"></div>
@@ -1562,15 +1682,15 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="divider my-0"></div>
           <h3 class="text-sm font-bold uppercase tracking-wide text-base-content/50">Данные аккаунта</h3>
           <div class="grid gap-2 text-sm sm:grid-cols-2">
-            <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
-            <p>Username: <b>{_esc(user.username or '-')}</b></p>
+            <p>Имя: <b>{_esc((ud.first_name or '') + ' ' + (ud.last_name or ''))}</b></p>
+            <p>Username: <b>{_esc(ud.username or '-')}</b></p>
           </div>
-          {_copy_line(label="ID в боте", value=str(user.id))}
-          {_copy_line(label="Telegram ID", value=str(user.telegram_id))}
-          {_copy_line(label="UUID в панели Remnawave", value=str(user.remnawave_uuid) if user.remnawave_uuid else "—")}
-          {_copy_line(label="Реф. код", value=str(user.referral_code))}
-          <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b></p>
-          <p>Регистрация: <b>{_fmt_dt_msk(user.created_at)}</b></p>
+          {_copy_line(label="ID в боте", value=str(ud.id))}
+          {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
+          {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
+          {_copy_line(label="Реф. код", value=str(ud.referral_code))}
+          <p>Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
+          <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
           {ref_block}
         </div>
@@ -1583,14 +1703,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     {devices_block}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>История подписок ({len(subs)})</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>История подписок ({len(subs_tuples)})</h3>
         <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>До</th><th>Устройства</th></tr></thead>
         <tbody>{subs_rows or '<tr><td colspan="5" class="opacity-50">Нет подписок</td></tr>'}</tbody></table></div>
       </div>
     </div>
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>История транзакций ({len(txs)})</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>История транзакций ({len(txs_tuples)})</h3>
         <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th></tr></thead>
         <tbody>{tx_rows or '<tr><td colspan="6" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
       </div>
