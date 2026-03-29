@@ -15,10 +15,10 @@ from urllib.parse import quote_plus
 import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.admin_dotenv import ALLOWED_ENV_KEYS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
+from shared.admin_dotenv import WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
 from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
@@ -30,12 +30,7 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
-from shared.services.subscription_service import (
-    get_active_subscription,
-    list_user_devices,
-    remove_hwid_device_from_panel,
-    remove_device_slot,
-)
+from shared.services.subscription_service import remove_hwid_device_from_panel, remove_device_slot
 
 router = APIRouter(tags=["web-admin"])
 
@@ -607,14 +602,14 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
     pages = []
     if total_pages > 1:
         for p in range(1, total_pages + 1):
-            cls = "btn btn-ghost btn-sm" if p != page else "btn btn-primary btn-sm"
+            cls = "btn btn-ghost btn-md min-h-11" if p != page else "btn btn-primary btn-md min-h-11"
             pages.append(f"<a class='{cls}' href='/admin/users?q={_esc(needle)}&page={p}'>{p}</a>")
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered w-full max-w-md' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
-        "<button class='btn btn-primary btn-sm gap-1' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
+        f"<input class='input input-bordered input-lg min-h-12 w-full max-w-md' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
+        "<button class='btn btn-primary btn-lg min-h-12 gap-2' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
@@ -628,6 +623,9 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    settings = get_settings()
+    hwid_devices: list[dict] = []
+    hwid_err: str | None = None
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
@@ -635,7 +633,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 "User not found",
                 "<div class='alert alert-warning shadow-lg'><i class='fa-solid fa-user-slash mr-2' aria-hidden='true'></i><span>Пользователь не найден</span></div>",
                 request=request,
+                back_href="/admin/users",
             )
+        referrer = await session.get(User, user.referred_by) if user.referred_by else None
+        invited_count = await count_invited_users(session, user.id)
+        invited_list = await list_invited_users(session, user.id, limit=50)
         subs = list(
             (
                 await session.execute(
@@ -659,6 +661,18 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 )
             )
         ).scalar_one()
+        db_devices = list(
+            (await session.execute(select(Device).where(Device.user_id == user_id).order_by(Device.id))).scalars().all()
+        )
+
+    if user.remnawave_uuid:
+        try:
+            rw = RemnaWaveClient(settings)
+            raw = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
+            hwid_devices = normalize_hwid_devices_list(raw if isinstance(raw, list) else [])
+        except RemnaWaveError as e:
+            hwid_err = str(e)
+
     subs_rows = "".join(
         f"<tr><td>{s.id}</td><td>{_esc(s.status)}</td><td>{_esc(s.started_at)}</td><td>{_esc(s.expires_at)}</td><td>{s.devices_count}</td></tr>"
         for s in subs
@@ -669,7 +683,90 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     )
     ring = "bad" if user.is_blocked else "ok"
     ring_tw = "ring-success" if ring == "ok" else "ring-error"
+
+    flash = ""
+    if request.query_params.get("unlinked") == "1":
+        flash += "<div class='alert alert-success shadow-sm'>Устройство отвязано.</div>"
+    if request.query_params.get("dev_removed") == "1":
+        flash += "<div class='alert alert-success shadow-sm'>Запись устройства в БД удалена (слот уменьшен).</div>"
+    err_q = (request.query_params.get("err") or "").strip()
+    if err_q:
+        flash += f"<div class='alert alert-error shadow-sm'>{_esc(err_q)}</div>"
+
+    ref_by_block = ""
+    if referrer is not None:
+        r_disp = referrer.first_name or referrer.username or f"#{referrer.id}"
+        ref_by_block = f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer.id})</span></p>"
+    else:
+        ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
+
+    invited_rows = "".join(
+        f"<tr><td>{u.id}</td><td><a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(u.first_name or u.username or '-')}</a></td>"
+        f"<td>{_esc('@' + u.username) if u.username else '-'}</td><td><code class='bg-base-300 px-1 rounded text-xs'>{u.telegram_id}</code></td>"
+        f"<td>{_esc(u.created_at)}</td></tr>"
+        for u in invited_list
+    )
+    ref_block = f"""
+    <div class="divider my-0"></div>
+    <h3 class="text-lg font-semibold"><i class="fa-solid fa-user-group text-primary mr-2" aria-hidden="true"></i>Рефералы</h3>
+    {ref_by_block}
+    <p>Привели по реф-ссылке: <b class="text-primary">{invited_count}</b></p>
+    <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Имя</th><th>Username</th><th>Telegram</th><th>Регистрация</th></tr></thead>
+    <tbody>{invited_rows or '<tr><td colspan="5" class="opacity-50">Пока никого</td></tr>'}</tbody></table></div>
+    """
+
+    hwid_rows = []
+    for i, d in enumerate(hwid_devices):
+        hwid = str(d.get("hwid") or "")
+        title = hwid_device_title(d, i + 1)
+        dt = format_rw_device_datetime_local(str(d.get("createdAt") or ""))
+        plat = _esc(str(d.get("platform") or "—"))
+        hwid_rows.append(
+            "<tr>"
+            f"<td class='font-medium'>{_esc(title)}</td><td>{plat}</td><td class='text-sm opacity-80'>{_esc(dt)}</td>"
+            "<td class='text-right'>"
+            f"<form method='post' action='/admin/users/{user_id}/unlink-hwid' class='inline' onsubmit=\"return confirm('Отвязать устройство в панели и уменьшить слот?');\">"
+            f"<input type='hidden' name='hwid' value=\"{_esc(hwid)}\"/>"
+            "<button class='btn btn-error btn-outline btn-md min-h-10' type='submit'>Отвязать</button></form></td></tr>"
+        )
+    hwid_alert = ""
+    if hwid_err:
+        hwid_alert = f"<div class='alert alert-warning text-sm'>{_esc(hwid_err)}</div>"
+    elif not user.remnawave_uuid:
+        hwid_alert = "<p class='text-sm opacity-60'>Нет RemnaWave UUID — список HWID с панели недоступен.</p>"
+
+    dev_db_rows = []
+    for dev in db_devices:
+        dev_db_rows.append(
+            f"<tr><td>{dev.id}</td><td>{_esc(dev.name)}</td><td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(dev.remnawave_client_id or '—')}</code></td>"
+            f"<td>{_esc(dev.created_at)}</td><td>{_esc(dev.last_used_at or '—')}</td>"
+            "<td class='text-right'>"
+            f"<form method='post' action='/admin/users/{user_id}/unlink-device' class='inline' onsubmit=\"return confirm('Удалить слот устройства в БД и в панели?');\">"
+            f"<input type='hidden' name='device_id' value='{dev.id}'/>"
+            "<button class='btn btn-warning btn-outline btn-md min-h-10' type='submit'>Снять слот</button></form></td></tr>"
+        )
+
+    devices_block = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-mobile-screen-button text-accent mr-2" aria-hidden="true"></i>Устройства панели (HWID)</h3>
+        {hwid_alert}
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th></th></tr></thead>
+        <tbody>{''.join(hwid_rows) or '<tr><td colspan="4" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
+        <p class="text-xs opacity-60">«Отвязать» вызывает API панели и уменьшает оплаченные слоты активной подписки (как в боте).</p>
+      </div>
+    </div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Устройства в БД</h3>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Имя</th><th>client_id</th><th>Создано</th><th>Последняя активность</th><th></th></tr></thead>
+        <tbody>{''.join(dev_db_rows) or '<tr><td colspan="6" class="opacity-50">Нет записей</td></tr>'}</tbody></table></div>
+      </div>
+    </div>
+    """
+
     body = f"""
+    {flash}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <div class="flex flex-wrap items-start gap-4">
@@ -679,11 +776,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <div class="divider my-0"></div>
         <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
         <p>Username: <b>{_esc(user.username or '-')}</b> · Telegram ID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{user.telegram_id}</code></p>
+        <p>Реф. код: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{_esc(user.referral_code)}</code></p>
         <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b> · RemnaWave UUID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">{_esc(user.remnawave_uuid or '-')}</code></p>
         <p>Регистрация: <b>{_esc(user.created_at)}</b></p>
         <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
+        {ref_block}
       </div>
     </div>
+    {devices_block}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>История подписок ({len(subs)})</h3>
@@ -699,7 +799,45 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
       </div>
     </div>
     """
-    return _layout(f"User {user_id}", body, request=request)
+    return _layout(f"User {user_id}", body, request=request, back_href="/admin/users")
+
+
+@router.post("/users/{user_id}/unlink-hwid")
+async def admin_user_unlink_hwid(request: Request, user_id: int, hwid: str = Form("")) -> RedirectResponse | HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        ok, msg = await remove_hwid_device_from_panel(session, user=user, hwid=hwid, settings=settings)
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/users/{user_id}?unlinked=1", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/users/{user_id}/unlink-device")
+async def admin_user_unlink_device(request: Request, user_id: int, device_id: int = Form(...)) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        ok, msg = await remove_device_slot(session, user=user, device_id=device_id, settings=settings)
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/users/{user_id}?dev_removed=1", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
 
 
 @router.get("/settings")
@@ -707,20 +845,66 @@ async def admin_settings(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    body = """
+    vals = read_whitelist_values()
+    env_fields = []
+    for key, label, _fn in WEB_ADMIN_ENV_WHITELIST:
+        v = vals.get(key, "")
+        env_fields.append(
+            f"<label class=\"form-control w-full\"><span class=\"label-text\"><span class=\"font-medium\">{_esc(label)}</span> "
+            f"<span class=\"text-xs opacity-50\">({_esc(key)})</span></span>"
+            f"<input class=\"input input-bordered input-lg min-h-12 w-full font-mono text-sm\" name=\"{key}\" "
+            f'value="{_esc(v)}" autocomplete="off" /></label>'
+        )
+    saved_note = ""
+    if request.query_params.get("env_saved") == "1":
+        saved_note = (
+            "<div class='alert alert-success shadow-sm'><span>Значения записаны в файл <code class=\"bg-base-300 px-1 rounded\">.env</code>. "
+            "Часть параметров подхватится без перезапуска; для секретов и подключений перезапустите контейнеры API и бота.</span></div>"
+        )
+    body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-gear text-primary mr-2" aria-hidden="true"></i>Админские настройки / сброс БД</h2>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Переменные .env (безопасный список)</h2>
+        <p class="text-sm opacity-70">Можно менять только перечисленные ключи (токены, <code class="bg-base-300 px-1 rounded text-xs">DATABASE_URL</code>, пароли — только вручную в .env на сервере).</p>
+        {saved_note}
+        <form method="post" action="/admin/settings/env" class="flex flex-col gap-3">
+          {''.join(env_fields)}
+          <button class="btn btn-primary btn-lg min-h-12 w-fit gap-2" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
+        </form>
+      </div>
+    </div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-gear text-primary mr-2" aria-hidden="true"></i>Сброс БД</h2>
         <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Внимание: полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
         <form method="post" action="/admin/settings/factory-reset" class="flex flex-wrap items-end gap-2">
-          <input class="input input-bordered w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
-          <button class="btn btn-error btn-sm gap-1" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
+          <input class="input input-bordered input-lg min-h-12 w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
+          <button class="btn btn-error btn-lg min-h-12 gap-2" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
         </form>
         <p class="text-sm opacity-60">Повторяет функцию сброса из Telegram-админки, но с веб-подтверждением.</p>
       </div>
     </div>
     """
     return _layout("Web-admin Settings", body, request=request)
+
+
+@router.post("/settings/env")
+async def admin_settings_env_post(request: Request) -> RedirectResponse | HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    form = await request.form()
+    allowed = {entry[0] for entry in WEB_ADMIN_ENV_WHITELIST}
+    updates = {k: str(form.get(k) or "") for k in allowed if k in form}
+    try:
+        patch_dotenv(updates)
+    except OSError as e:
+        return _layout(
+            "Ошибка .env",
+            f"<div class='alert alert-error'>Не удалось записать .env: {_esc(e)}</div>",
+            request=request,
+        )
+    return RedirectResponse("/admin/settings?env_saved=1", status_code=303)
 
 
 @router.post("/settings/factory-reset")
@@ -770,10 +954,10 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Промокоды</h2>"
-        "<a class='btn btn-primary btn-sm gap-1' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
+        "<a class='btn btn-primary btn-lg min-h-12 gap-2' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered w-full max-w-md font-mono uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
-        "<button class='btn btn-primary btn-sm gap-1' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
+        f"<input class='input input-bordered input-lg min-h-12 w-full max-w-md font-mono uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
+        "<button class='btn btn-primary btn-lg min-h-12 gap-2' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет промокодов</td></tr>'}</tbody></table></div></div></div>"
     )
@@ -785,35 +969,37 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
     e = f"<div class='alert alert-error text-sm'>{_esc(error)}</div>" if error else ""
     ro = "readonly" if p else ""
     return f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg max-w-2xl">
+    <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-2xl">
       <div class="card-body gap-4">
         <h2 class="card-title text-xl"><i class="fa-solid fa-pen-to-square text-primary mr-2" aria-hidden="true"></i>{'Редактирование промокода' if p else 'Создание промокода'}</h2>
         {e}
         <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
           <label class="form-control w-full"><span class="label-text font-medium">Код</span>
-            <input class="input input-bordered font-mono uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
+            <input class="input input-bordered input-lg min-h-12 font-mono uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
-            <select class="select select-bordered" name="promo_type">
+            <select class="select select-bordered select-lg min-h-12" name="promo_type">
             <option value="subscription_days" {'selected' if p and p.type == 'subscription_days' else ''}>subscription_days</option>
             <option value="balance_rub" {'selected' if p and p.type == 'balance_rub' else ''}>balance_rub</option>
             <option value="topup_bonus_percent" {'selected' if p and p.type == 'topup_bonus_percent' else ''}>topup_bonus_percent</option>
           </select></label>
           <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
-            <input class="input input-bordered" name="value" value="{_esc(p.value if p else '')}" /></label>
+            <input class="input input-bordered input-lg min-h-12" name="value" value="{_esc(p.value if p else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (для subscription_days)</span>
-            <input class="input input-bordered" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
+            <input class="input input-bordered input-lg min-h-12" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
-            <input class="input input-bordered" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
+            <input class="input input-bordered input-lg min-h-12" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')</span>
-            <input class="input input-bordered" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
+            <input class="input input-bordered input-lg min-h-12" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
-            <select class="select select-bordered" name="is_active">
+            <select class="select select-bordered select-lg min-h-12" name="is_active">
             <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
             <option value="false" {'selected' if p is not None and not p.is_active else ''}>нет</option>
           </select></label>
-          <button class="btn btn-primary gap-2 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
+          <button class="btn btn-primary btn-lg min-h-12 gap-2 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
         </form>
       </div>
+    </div>
     </div>
     """
 
@@ -823,7 +1009,7 @@ async def admin_promos_new(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    return _layout("New Promo", _promo_form(action="/admin/promos/new"), request=request)
+    return _layout("New Promo", _promo_form(action="/admin/promos/new"), request=request, back_href="/admin/promos")
 
 
 @router.post("/promos/new")
@@ -869,6 +1055,7 @@ async def admin_promos_new_post(
             "New Promo Error",
             _promo_form(action="/admin/promos/new", error=str(e)),
             request=request,
+            back_href="/admin/promos",
         )
     async with await _session() as session:
         promo = PromoCode(
@@ -897,6 +1084,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
                 "Promo not found",
                 "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
                 request=request,
+                back_href="/admin/promos",
             )
         usages = (
             await session.execute(
@@ -920,9 +1108,9 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
         <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
         <div class="flex flex-wrap gap-2">
-          <a class="btn btn-primary btn-sm gap-1" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
+          <a class="btn btn-primary btn-lg min-h-12 gap-2" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
           <form method="post" action="/admin/promos/{promo.id}/delete" onsubmit="return confirm('Удалить промокод?');">
-            <button class="btn btn-error btn-outline btn-sm gap-1" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
+            <button class="btn btn-error btn-outline btn-lg min-h-12 gap-2" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
           </form>
         </div>
       </div>
@@ -935,7 +1123,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
       </div>
     </div>
     """
-    return _layout(f"Promo {promo_id}", body, request=request)
+    return _layout(f"Promo {promo_id}", body, request=request, back_href="/admin/promos")
 
 
 @router.get("/promos/{promo_id}/edit")
@@ -950,11 +1138,13 @@ async def admin_promos_edit(request: Request, promo_id: int) -> HTMLResponse:
             "Promo not found",
             "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
             request=request,
+            back_href="/admin/promos",
         )
     return _layout(
         "Edit Promo",
         _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo),
         request=request,
+        back_href=f"/admin/promos/{promo_id}",
     )
 
 
@@ -979,6 +1169,7 @@ async def admin_promos_edit_post(
                 "Promo not found",
                 "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
                 request=request,
+                back_href="/admin/promos",
             )
         try:
             if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
@@ -1006,6 +1197,7 @@ async def admin_promos_edit_post(
                 "Edit Promo Error",
                 _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo, error=str(e)),
                 request=request,
+                back_href=f"/admin/promos/{promo_id}",
             )
         promo.type = promo_type
         promo.value = val
