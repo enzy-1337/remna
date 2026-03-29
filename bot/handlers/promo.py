@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
@@ -77,10 +78,12 @@ async def cb_promo_cancel(cq: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await cq.answer()
     if cq.message:
-        await cq.message.edit_text(
-            esc("Операция отменена."),
-            reply_markup=submenu_back_keyboard(),
-        )
+        cap = esc("Операция отменена.")
+        kb = submenu_back_keyboard()
+        if cq.message.photo:
+            await cq.message.edit_caption(caption=cap, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            await cq.message.edit_text(cap, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 @router.message(PromoStates.waiting_code, F.text)
