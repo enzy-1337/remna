@@ -39,6 +39,8 @@ from bot.middlewares.maintenance import MaintenanceMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
 from shared.config import get_settings
 from shared.database import get_session_factory
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin_plain
 from shared.services.admin_report_loop import admin_report_loop
 from shared.services.backup_loop import backup_loop
 from shared.services.autorenew_service import subscription_autorenew_loop
