@@ -286,6 +286,16 @@ class Settings(BaseSettings):
             "и абсолютных ссылок; без слэша на конце"
         ),
     )
+    admin_panel_title: str = Field(
+        default="Remna",
+        validation_alias="ADMIN_PANEL_TITLE",
+        description="Название в шапке web-admin (боковое меню)",
+    )
+    admin_panel_logo_url: str | None = Field(
+        default=None,
+        validation_alias="ADMIN_PANEL_LOGO_URL",
+        description="URL картинки-логотипа в шапке web-admin и favicon страниц",
+    )
 
     backup_enabled: bool = Field(
         default=False,

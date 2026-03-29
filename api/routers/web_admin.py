@@ -1,4 +1,4 @@
-﻿"""Web-admin: аналитика, пользователи и управление промокодами."""
+"""Web-admin: аналитика, пользователи и управление промокодами."""
 
 from __future__ import annotations
 
@@ -18,13 +18,24 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.config import get_settings
+from shared.admin_dotenv import ALLOWED_ENV_KEYS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
+from shared.config import Settings, get_settings
 from shared.database import get_session_factory
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.rw_hwid_devices import format_rw_device_datetime_local, hwid_device_title, normalize_hwid_devices_list
+from shared.models.device import Device
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
+from shared.services.referral_service import count_invited_users, list_invited_users
+from shared.services.subscription_service import (
+    get_active_subscription,
+    list_user_devices,
+    remove_hwid_device_from_panel,
+    remove_device_slot,
+)
 
 router = APIRouter(tags=["web-admin"])
 
@@ -53,11 +64,16 @@ def _auth_avatar(request: Request) -> str:
     return "https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name=Admin"
 
 
-def _head_common(title: str) -> str:
+def _head_common(title: str, *, favicon_url: str | None = None) -> str:
+    fav = ""
+    u = (favicon_url or "").strip()
+    if u.startswith(("http://", "https://")):
+        fav = f'  <link rel="icon" href="{_esc(u)}" />\n'
     return f"""  <meta charset="utf-8" />
+  <script>try{{var t=localStorage.getItem('remna-admin-theme');if(t==='light'||t==='night')document.documentElement.setAttribute('data-theme',t);}}catch(e){{}}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{_esc(title)}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
+{fav}  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -73,8 +89,15 @@ def _head_common(title: str) -> str:
   </style>"""
 
 
+def _brand_logo_mark(settings: Settings) -> str:
+    url = (settings.admin_panel_logo_url or "").strip()
+    if url.startswith(("http://", "https://")):
+        return f'<img src="{_esc(url)}" alt="" class="max-h-9 max-w-9 h-9 w-9 object-contain" width="36" height="36" loading="lazy" />'
+    return '<i class="fa-solid fa-shield-halved text-base" aria-hidden="true"></i>'
+
+
 def _nav_link_class(href: str, cur: str) -> str:
-    base = "flex items-center gap-0 rounded-xl px-2.5 py-2.5 text-sm font-medium transition-colors no-underline"
+    base = "flex items-center gap-0 rounded-xl px-1.5 py-2 text-sm font-medium transition-colors no-underline"
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
     active = False
@@ -90,7 +113,7 @@ def _nav_link_class(href: str, cur: str) -> str:
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
     return f"""<a href="{href}" class="{cls}">
-      <i class="{icon_class} fa-fw w-7 shrink-0 text-center text-base opacity-90" aria-hidden="true"></i>
+      <i class="{icon_class} fa-fw w-6 shrink-0 text-center text-[15px] opacity-90" aria-hidden="true"></i>
       <span class="nav-label ml-1 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a>"""
 
@@ -104,38 +127,52 @@ def _mob_nav_cls(href: str, cur: str) -> str:
     return "text-primary font-semibold" if act else "text-base-content/55"
 
 
-def _layout(title: str, body: str, *, request: Request | None = None, show_nav: bool = True) -> HTMLResponse:
+def _layout(
+    title: str,
+    body: str,
+    *,
+    request: Request | None = None,
+    show_nav: bool = True,
+    back_href: str | None = None,
+) -> HTMLResponse:
     cur = ""
     if request is not None:
         cur = request.url.path.rstrip("/") or "/"
 
+    settings = get_settings()
+    brand_title = (settings.admin_panel_title or "Remna").strip() or "Remna"
+    fav = (settings.admin_panel_logo_url or "").strip()
+    favicon_for_head = fav if fav.startswith(("http://", "https://")) else None
+
     nav_blocks = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 p-4 pb-24 md:pb-8 md:pl-[4.75rem]"
+    theme_toggle = ""
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 p-4 pt-16 pb-24 md:pb-8 md:pl-14"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
         avatar = _esc(_auth_avatar(request))
+        logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-0 top-0 z-40 hidden h-screen w-[4.75rem] flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-60 md:flex">
-      <div class="flex shrink-0 items-center gap-0 px-2 pb-4 pt-3">
-        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/20 text-primary">
-          <i class="fa-solid fa-shield-halved text-lg" aria-hidden="true"></i>
+    <aside class="group/sidebar fixed left-0 top-0 z-40 hidden h-screen w-14 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-56 md:flex">
+      <div class="flex shrink-0 items-center gap-0 px-1.5 pb-3 pt-2.5">
+        <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
+          {logo_inner}
         </span>
-        <span class="nav-label ml-2 max-w-0 overflow-hidden whitespace-nowrap text-base font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">Remna</span>
+        <span class="nav-label ml-2 max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-2">
+      <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden px-1">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
         {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto border-t border-base-content/10 p-2">
+      <div class="mt-auto border-t border-base-content/10 p-1.5">
         <div class="flex items-center gap-0">
-          <img src="{avatar}" alt="" class="h-10 w-10 shrink-0 rounded-full border-2 border-primary/40 object-cover ring-2 ring-base-100" width="40" height="40" />
+          <img src="{avatar}" alt="" class="h-9 w-9 shrink-0 rounded-full border-2 border-primary/40 object-cover ring-2 ring-base-100" width="36" height="36" />
           <div class="nav-label flex min-w-0 flex-1 flex-col gap-1 pl-2 max-w-0 overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100">
             <span class="truncate text-sm font-semibold text-base-content">{_esc(user_label)}</span>
             <form method="post" action="/admin/logout">
-              <button type="submit" class="btn btn-ghost btn-xs gap-1 px-0 normal-case text-error hover:bg-error/10">
+              <button type="submit" class="btn btn-ghost btn-sm min-h-9 h-9 gap-1 px-1 normal-case text-error hover:bg-error/10">
                 <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Выйти
               </button>
             </form>
@@ -151,20 +188,49 @@ def _layout(title: str, body: str, *, request: Request | None = None, show_nav: 
       <a href="/admin/settings" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-lg"></i><span>Настр.</span></a>
       <form method="post" action="/admin/logout" class="flex flex-col items-center justify-center p-2"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-lg"></i></button></form>
     </nav>"""
-        nav_blocks = desktop_sidebar + mobile_nav
+        theme_toggle = """
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-3 top-3 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-lg backdrop-blur-md md:right-4 md:top-4" aria-label="Тема"></button>"""
+        nav_blocks = desktop_sidebar + mobile_nav + theme_toggle
     elif not show_nav:
         main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
+
+    back_row = ""
+    if back_href:
+        back_row = f"<div class=\"mb-4 w-full\"><a href=\"{_esc(back_href)}\" class=\"btn btn-ghost btn-lg min-h-12 gap-2 border border-base-content/10 px-4\"><i class=\"fa-solid fa-arrow-left\" aria-hidden=\"true\"></i>Назад</a></div>"
+    inner = f"{back_row}{body}"
+
+    theme_script = """
+  <script>
+  (function(){
+    var root=document.documentElement;
+    function syncIcon(){
+      var b=document.getElementById('remna-theme-toggle');
+      if(!b)return;
+      var night=root.getAttribute('data-theme')==='night';
+      b.innerHTML=night?'<i class="fa-solid fa-sun text-base" aria-hidden="true"></i>':'<i class="fa-solid fa-moon text-base" aria-hidden="true"></i>';
+      b.setAttribute('aria-label',night?'Светлая тема':'Тёмная тема');
+    }
+    window.remnaToggleTheme=function(){
+      var next=root.getAttribute('data-theme')==='night'?'light':'night';
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem('remna-admin-theme',next);}catch(e){}
+      syncIcon();
+    };
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncIcon);else syncIcon();
+  })();
+  </script>"""
 
     page = f"""<!DOCTYPE html>
 <html lang="ru" data-theme="night">
 <head>
-{_head_common(title)}
+{_head_common(title, favicon_url=favicon_for_head)}
 </head>
 <body class="text-base-content antialiased">
   {nav_blocks}
   <div class="{main_cls} max-w-[1400px] mx-auto w-full">
-    {body}
+    {inner}
   </div>
+{theme_script if show_nav and request is not None else ""}
 </body>
 </html>"""
     return HTMLResponse(page)
