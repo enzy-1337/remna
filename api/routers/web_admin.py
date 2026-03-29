@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hmac
 import html
 import json
@@ -21,7 +22,7 @@ import httpx
 import redis.asyncio as redis_async
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import desc, distinct, func, or_, select, text
+from sqlalchemy import desc, distinct, extract, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
@@ -156,7 +157,7 @@ def _auth_avatar(request: Request) -> str:
     avatar_url = str(auth.get("avatar_url") or "").strip()
     if avatar_url:
         return avatar_url
-    return "https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name=Admin"
+    return "https://ui-avatars.com/api/?background=5b21b6&color=f5f3ff&bold=true&name=Admin"
 
 
 def _head_common(title: str, *, favicon_url: str | None = None) -> str:
@@ -180,7 +181,20 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     }};
   </script>
   <style>
+    :root {{
+      --remna-primary: oklch(0.52 0.22 300);
+      --remna-primary-focus: oklch(0.45 0.22 300);
+      --remna-primary-content: oklch(0.985 0.01 300);
+    }}
+    [data-theme="night"], [data-theme="light"] {{
+      --p: var(--remna-primary);
+      --pf: var(--remna-primary-focus);
+      --pc: var(--remna-primary-content);
+    }}
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+    .remna-admin-avatar-ring .rounded-full {{
+      aspect-ratio: 1 / 1;
+    }}
     @keyframes remna-fade-in {{
       from {{ opacity: 0; transform: translateY(8px); }}
       to {{ opacity: 1; transform: none; }}
@@ -352,7 +366,7 @@ def _layout(
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-0 top-0 z-40 hidden h-screen w-14 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-56 md:flex">
+    <aside class="group/sidebar fixed left-0 top-0 z-[60] hidden h-screen w-14 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-56 md:flex">
       <div class="flex shrink-0 items-center gap-0 px-1.5 pb-3 pt-2.5">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
@@ -368,18 +382,16 @@ def _layout(
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
       <div class="mt-auto border-t border-base-content/10 p-1.5">
-        <div class="flex items-center gap-0">
+        <div class="flex w-full min-h-10 items-center gap-1">
           <a href="/admin/profile" class="shrink-0 rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover" width="36" height="36" />
           </a>
-          <div class="nav-label flex min-w-0 flex-1 flex-col gap-1 pl-2 max-w-0 overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100">
-            <a href="/admin/profile" class="truncate text-sm font-semibold text-base-content no-underline hover:text-primary">{_esc(user_label)}</a>
-            <form method="post" action="/admin/logout">
-              <button type="submit" class="btn btn-ghost btn-sm min-h-9 h-9 gap-1 px-1 normal-case text-error hover:bg-error/10">
-                <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Выйти
-              </button>
-            </form>
-          </div>
+          <a href="/admin/profile" class="nav-label min-w-0 flex-1 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
+          <form method="post" action="/admin/logout" class="nav-label shrink-0 opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
+            <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
+              <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+            </button>
+          </form>
         </div>
       </div>
     </aside>"""
@@ -402,7 +414,7 @@ def _layout(
       <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
     </nav>"""
         theme_toggle = """
-    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2.5 top-2 z-50 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2.5 top-2 z-[52] h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
         nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_nav + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
@@ -448,6 +460,13 @@ def _layout(
           <button type="submit" class="btn btn-error">Отключить</button>
         </form>
       </div>
+    </div>
+    <div id="remna-hwid-json-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-json-title">
+      <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col p-6 relative">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10" data-remna-close="hwidjson" aria-label="Закрыть">✕</button>
+        <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">Данные устройства (JSON)</h3>
+        <pre id="remna-hwid-json-pre" class="flex-1 overflow-auto rounded-lg border border-base-content/10 bg-base-300 p-3 text-[11px] leading-relaxed whitespace-pre-wrap font-mono"></pre>
+      </div>
     </div>"""
     elif not show_nav:
         main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
@@ -455,7 +474,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2.5 top-2 z-50 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2.5 top-2 z-40 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
@@ -534,18 +553,27 @@ def _layout(
       var o=document.getElementById('remna-subdis-overlay');
       if(o){o.classList.add('hidden');o.classList.remove('flex');}
     }
-    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();};
+    function remnaCloseHwidJson(){
+      var o=document.getElementById('remna-hwid-json-overlay');
+      if(o){o.classList.add('hidden');o.classList.remove('flex');}
+      var p=document.getElementById('remna-hwid-json-pre');
+      if(p)p.textContent='';
+    }
+    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();remnaCloseHwidJson();};
     document.addEventListener('click',function(e){
       var t=e.target;
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='hwid'){e.preventDefault();remnaCloseHwid();}
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='slot'){e.preventDefault();remnaCloseSlot();}
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='subdis'){e.preventDefault();remnaCloseSubdis();}
+      if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='hwidjson'){e.preventDefault();remnaCloseHwidJson();}
       var hw=t&&t.closest&&t.closest('#remna-hwid-overlay');
       if(hw&&t===hw)remnaCloseHwid();
       var sl=t&&t.closest&&t.closest('#remna-slot-overlay');
       if(sl&&t===sl)remnaCloseSlot();
       var sd=t&&t.closest&&t.closest('#remna-subdis-overlay');
       if(sd&&t===sd)remnaCloseSubdis();
+      var jn=t&&t.closest&&t.closest('#remna-hwid-json-overlay');
+      if(jn&&t===jn)remnaCloseHwidJson();
       var openH=t&&t.closest&&t.closest('[data-remna-open-hwid]');
       if(openH){
         e.preventDefault();
@@ -584,6 +612,24 @@ def _layout(
         if(si)si.value=sid;
         var ov3=document.getElementById('remna-subdis-overlay');
         if(ov3){ov3.classList.remove('hidden');ov3.classList.add('flex');}
+      }
+      var openJ=t&&t.closest&&t.closest('[data-remna-open-hwid-json]');
+      if(openJ){
+        e.preventDefault();
+        var b64=openJ.getAttribute('data-json-b64')||'';
+        var txt='';
+        try{
+          if(b64){
+            var bin=atob(b64);
+            var bytes=new Uint8Array(bin.length);
+            for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+            txt=new TextDecoder('utf-8').decode(bytes);
+          }
+        }catch(x){txt='(ошибка декодирования)';}
+        var pre=document.getElementById('remna-hwid-json-pre');
+        if(pre)pre.textContent=txt;
+        var ovj=document.getElementById('remna-hwid-json-overlay');
+        if(ovj){ovj.classList.remove('hidden');ovj.classList.add('flex');}
       }
     });
     document.addEventListener('submit',function(e){
@@ -731,10 +777,13 @@ def _admin_allowed_by_gh(login: str) -> bool:
 
 
 def _user_avatar_url(user: User) -> str:
-    if (user.username or "").strip():
-        return f"https://t.me/i/userpic/320/{user.username}.jpg"
-    seed = quote_plus((user.first_name or user.username or f"U{user.id}" or "User"))
-    return f"https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name={seed}"
+    """t.me/i/userpic часто отдаёт 404/1×1 — в админке стабильные аватары через ui-avatars."""
+    name = (user.first_name or user.username or "").strip() or f"user{user.id}"
+    seed = quote_plus(name[:48])
+    return (
+        "https://ui-avatars.com/api/?background=5b21b6&color=f5f3ff&bold=true&font-size=0.42&size=128&name="
+        + seed
+    )
 
 
 def _user_initial_badge(user: User) -> tuple[str, str]:
@@ -753,8 +802,9 @@ def _avatar_with_fallback(user: User, *, px: int, ring_tw: str, ring_offset: str
     url = _user_avatar_url(user)
     ch, st = _user_initial_badge(user)
     return (
-        f"<span class='relative inline-flex rounded-full p-0.5 ring-2 {ring_offset} ring-offset-base-100 {ring_tw}'>"
-        f"<span class='relative inline-block overflow-hidden rounded-full bg-base-300' style='width:{px}px;height:{px}px'>"
+        f"<span class=\"remna-admin-avatar-ring relative inline-flex shrink-0 items-center justify-center rounded-full p-0.5 ring-2 {ring_offset} ring-offset-base-100 {ring_tw}\">"
+        f"<span class=\"relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-base-300\" "
+        f"style=\"width:{px}px;height:{px}px;min-width:{px}px;min-height:{px}px\">"
         f"<img src=\"{_esc(url)}\" alt=\"\" width=\"{px}\" height=\"{px}\" class=\"h-full w-full object-cover\" "
         "onerror=\"this.classList.add('hidden');this.nextElementSibling.classList.remove('hidden')\" />"
         f"<span class=\"hidden absolute inset-0 flex items-center justify-center text-sm font-bold leading-none\" "
@@ -801,10 +851,11 @@ def _hwid_device_json_block(d: dict) -> str:
         raw = json.dumps(d, ensure_ascii=False, indent=2, default=str)
     except (TypeError, ValueError):
         raw = str(d)
+    b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
     return (
-        f"<details class=\"hwid-details max-w-md\"><summary class=\"btn btn-ghost btn-xs h-8 min-h-8 px-2 font-normal\">Подробнее</summary>"
-        f"<pre class=\"mt-2 max-h-64 overflow-auto rounded-lg border border-base-content/10 bg-base-300 p-2 text-[11px] leading-relaxed whitespace-pre-wrap\">"
-        f"{_esc(raw)}</pre></details>"
+        "<button type=\"button\" class=\"btn btn-ghost btn-xs h-8 min-h-8 px-2 font-normal\" "
+        "data-remna-open-hwid-json data-no-row-nav "
+        f"data-json-b64=\"{_esc_attr(b64)}\">Подробнее</button>"
     )
 
 
@@ -1158,6 +1209,33 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
                 )
             )
         ).all()
+        devices_total = int((await session.execute(select(func.count()).select_from(Device))).scalar_one() or 0)
+        hour_rows = (
+            await session.execute(
+                select(extract("hour", Transaction.created_at), func.count())
+                .where(
+                    Transaction.type == "topup",
+                    Transaction.status == "completed",
+                    Transaction.created_at >= now - timedelta(days=7),
+                )
+                .group_by(extract("hour", Transaction.created_at))
+            )
+        ).all()
+    hour_counts = [0] * 24
+    for hr, cnt in hour_rows:
+        try:
+            h = int(hr)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= h < 24:
+            hour_counts[h] += int(cnt or 0)
+    max_hc = max(hour_counts) or 1
+    hour_bars: list[str] = []
+    for h in range(24):
+        v = hour_counts[h]
+        w = int((v / max_hc) * 28) if max_hc else 0
+        bar = "█" * max(1, w) if v else "·"
+        hour_bars.append(f"{h:02d}:00 UTC  {bar}  {v}")
     by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
     for created_at, amount in tx_last_14:
         if created_at is None:
@@ -1223,6 +1301,14 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         </div>
         <p class="text-sm opacity-60">Учитываются только платежи (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
         <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(bars))}</pre>
+      </div>
+    </div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-column text-primary mr-2" aria-hidden="true"></i>Устройства и активность по часам</h2>
+        <p class="text-base-content/80">Записей устройств в базе бота: <span class="font-bold text-primary">{devices_total}</span></p>
+        <p class="text-sm opacity-60">По часу суток (UTC): успешные пополнения за 7 дней — ориентир «когда чаще платят». Отдельного API графиков нагрузки с панели Remnawave здесь нет.</p>
+        <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(hour_bars))}</pre>
       </div>
     </div>
     """

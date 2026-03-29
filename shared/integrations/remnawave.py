@@ -307,7 +307,7 @@ class RemnaWaveClient:
         """Пробуем типичные пути списка нод (зависит от версии Remnawave)."""
         if self._s.remnawave_stub:
             return True, "Заглушка (без сети)"
-        for path in ("internal-nodes", "nodes", "system/health"):
+        for path in ("nodes", "internal-nodes", "system/health"):
             try:
                 await self._request("GET", path)
                 return True, f"ответ по «{path}»"
@@ -353,7 +353,7 @@ class RemnaWaveClient:
         async def _ping_uuid(nu: str) -> tuple[float | None, str]:
             async with sem:
                 t0 = time.perf_counter()
-                for sub in (f"internal-nodes/{nu}", f"nodes/{nu}"):
+                for sub in (f"nodes/{nu}", f"internal-nodes/{nu}"):
                     try:
                         await self._request("GET", sub)
                         ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -363,7 +363,7 @@ class RemnaWaveClient:
                 return None, ""
 
         last_list_err: str | None = None
-        for path in ("internal-nodes", "nodes"):
+        for path in ("nodes", "internal-nodes"):
             t0 = time.perf_counter()
             try:
                 data = await self._request("GET", path)
