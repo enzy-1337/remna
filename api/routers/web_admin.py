@@ -1566,7 +1566,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     <div class="card bg-base-100 border border-accent/25 shadow-lg bg-gradient-to-br from-accent/8 via-base-100 to-base-100">
       <div class="card-body gap-4">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-qrcode text-accent mr-2" aria-hidden="true"></i>Подключение VPN</h3>
-        {_copy_line("Ссылка подписки", sub_url_rw)}
+        {_copy_line(label="Ссылка подписки", value=sub_url_rw)}
         <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/40 p-4">
           <p class="text-xs opacity-60">QR для импорта в клиент</p>
           <img src="/admin/users/{user_id}/subscription-qr.png" alt="QR" class="max-w-[240px] rounded-lg border border-base-content/15 bg-base-100 p-2 shadow-inner" width="240" height="240" loading="lazy" />
@@ -1988,7 +1988,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
       <div class="card-body gap-4">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-link text-success mr-2" aria-hidden="true"></i>Моя VPN-подписка</h3>
         <p class="text-xs opacity-70">Данные вашего аккаунта в боте (совпадающий Telegram ID).</p>
-        {_copy_line("Ссылка подписки", sub_url_p)}
+        {_copy_line(label="Ссылка подписки", value=sub_url_p)}
         {conn_lines}
         <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/50 p-4">
           <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">QR-код</span>
