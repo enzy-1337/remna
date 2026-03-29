@@ -1,4 +1,4 @@
-"""Web-admin: аналитика, пользователи и управление промокодами."""
+﻿"""Web-admin: аналитика, пользователи и управление промокодами."""
 
 from __future__ import annotations
 
@@ -168,8 +168,6 @@ def _layout(title: str, body: str, *, request: Request | None = None, show_nav: 
 </body>
 </html>"""
     return HTMLResponse(page)
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-Read
 
 
 def _is_logged(request: Request) -> bool:
