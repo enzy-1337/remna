@@ -168,9 +168,6 @@ def _layout(title: str, body: str, *, request: Request | None = None, show_nav: 
 </body>
 </html>"""
     return HTMLResponse(page)
-</think>
-Проверяю файл после правки — исправляю дублирование и структуру сайдбара.
-
 <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
 Read
 
