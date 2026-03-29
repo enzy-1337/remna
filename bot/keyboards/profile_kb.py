@@ -29,6 +29,7 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
         InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
     )
+    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     if is_admin:
         b.row(
             InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"),

@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.keyboards.instructions_kb import build_instructions_markup
 from bot.ui.subscription_detail import build_subscription_detail_caption
-from bot.utils.screen_photo import answer_callback_with_photo_screen
+from bot.utils.screen_photo import (
+    answer_callback_with_photo_screen,
+    delete_message_safe,
+    safe_callback_answer,
+)
 from shared.config import get_settings
 from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
@@ -45,6 +49,7 @@ def _sub_main_keyboard(
         b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
         ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
+    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
@@ -93,16 +98,19 @@ async def cb_sub_qr(
         return
     if cq.message is None or cq.bot is None:
         return
+    chat_id = cq.message.chat.id
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="⬅️ Назад в подписку", callback_data="menu:sub_main"))
     cap = join_lines("🔳 " + bold("QR для подключения"), "", plain("Отсканируйте в приложении VPN."))
-    await cq.message.answer_photo(
+    await safe_callback_answer(cq)
+    await delete_message_safe(cq.message)
+    await cq.bot.send_photo(
+        chat_id,
         BufferedInputFile(png, filename="subscription.png"),
         caption=cap,
         parse_mode="MarkdownV2",
         reply_markup=kb.as_markup(),
     )
-    await cq.answer()
 
 
 @router.callback_query(F.data.in_(("menu:sub_main", "menu:subscription")))
@@ -151,6 +159,7 @@ async def cb_plans_or_extend(
             )
         )
     back_cb = "menu:sub_main" if has_act else "menu:main"
+    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
     await answer_callback_with_photo_screen(
         cq,
