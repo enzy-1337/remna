@@ -803,7 +803,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
 
 
 @router.post("/users/{user_id}/unlink-hwid")
-async def admin_user_unlink_hwid(request: Request, user_id: int, hwid: str = Form("")) -> RedirectResponse | HTMLResponse:
+async def admin_user_unlink_hwid(request: Request, user_id: int, hwid: str = Form("")) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
@@ -888,8 +888,8 @@ async def admin_settings(request: Request) -> HTMLResponse:
     return _layout("Web-admin Settings", body, request=request)
 
 
-@router.post("/settings/env")
-async def admin_settings_env_post(request: Request) -> RedirectResponse | HTMLResponse:
+@router.post("/settings/env", response_model=None)
+async def admin_settings_env_post(request: Request):
     denied = _require_login(request)
     if denied is not None:
         return denied
