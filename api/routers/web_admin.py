@@ -20,6 +20,7 @@ from urllib.parse import quote as url_quote
 from urllib.parse import quote_plus
 
 import httpx
+import re
 import redis.asyncio as redis_async
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -127,6 +128,35 @@ async def _load_telegram_profile_photo(user: User) -> tuple[bytes, str] | None:
         return (r3.content, raw_ct)
 
 
+async def _fetch_telegram_public_userpic(username: str) -> tuple[bytes, str] | None:
+    """Публичная картинка t.me/i/userpic (по @username), если не 1×1-пустышка."""
+    un = (username or "").strip().lstrip("@")
+    if not un or not re.match(r"^[A-Za-z0-9_]{3,64}$", un):
+        return None
+    url = f"https://t.me/i/userpic/320/{un}.jpg"
+    async with httpx.AsyncClient(timeout=18.0, follow_redirects=True) as client:
+        r = await client.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; RemnaBot/1.0; +https://telegram.org)",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            },
+        )
+        if r.status_code != 200:
+            return None
+        body = r.content
+        if len(body) < 400:
+            return None
+        ct = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if "text" in ct or "html" in ct:
+            return None
+        if not ct.startswith("image/"):
+            if body[:2] not in (b"\xff\xd8", b"\x89P", b"GIF", b"RIFF"):
+                return None
+            ct = "image/jpeg"
+        return (body, ct)
+
+
 def _humanize_left_ru(exp: datetime, now: datetime) -> str:
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
@@ -215,7 +245,7 @@ def _auth_avatar(request: Request) -> str:
     avatar_url = str(auth.get("avatar_url") or "").strip()
     if avatar_url:
         return avatar_url
-    return "https://ui-avatars.com/api/?background=5b21b6&color=f5f3ff&bold=true&name=Admin"
+    return "https://ui-avatars.com/api/?background=2563eb&color=f0f9ff&bold=true&name=Admin"
 
 
 def _head_common(title: str, *, favicon_url: str | None = None) -> str:
@@ -239,16 +269,6 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     }};
   </script>
   <style>
-    :root {{
-      --remna-primary: oklch(0.52 0.22 300);
-      --remna-primary-focus: oklch(0.45 0.22 300);
-      --remna-primary-content: oklch(0.985 0.01 300);
-    }}
-    [data-theme="night"], [data-theme="light"] {{
-      --p: var(--remna-primary);
-      --pf: var(--remna-primary-focus);
-      --pc: var(--remna-primary-content);
-    }}
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
     .remna-admin-avatar-ring .rounded-full {{
       aspect-ratio: 1 / 1;
@@ -460,7 +480,7 @@ def _layout(
       </div>
     </aside>"""
         mobile_brand_bar = f"""
-    <header class="fixed left-0 right-0 top-0 z-40 flex h-12 items-center justify-center gap-2 border-b border-base-content/10 bg-base-300/95 px-14 backdrop-blur-md md:hidden" role="banner" aria-label="Бренд панели">
+    <header class="fixed left-0 right-0 top-0 z-40 flex h-12 items-center justify-center gap-2 border-b border-base-content/10 bg-base-300/95 px-12 backdrop-blur-md md:hidden" role="banner" aria-label="Бренд панели">
       <span class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/20 text-primary">
         {_brand_logo_mark(settings, compact=True)}
       </span>
@@ -478,7 +498,7 @@ def _layout(
       <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
     </nav>"""
         theme_toggle = """
-    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2.5 top-2 z-[52] h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2 top-2 z-[52] h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
         nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_nav + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
@@ -538,7 +558,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2.5 top-2 z-40 h-9 w-9 min-h-9 min-w-9 shrink-0 border border-base-content/15 bg-base-300/90 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
@@ -549,7 +569,7 @@ def _layout(
       var b=document.getElementById('remna-theme-toggle');
       if(!b)return;
       var night=root.getAttribute('data-theme')==='night';
-      b.innerHTML=night?'<i class="fa-solid fa-sun text-base" aria-hidden="true"></i>':'<i class="fa-solid fa-moon text-base" aria-hidden="true"></i>';
+      b.innerHTML=night?'<i class="fa-solid fa-sun text-sm md:text-base" aria-hidden="true"></i>':'<i class="fa-solid fa-moon text-sm md:text-base" aria-hidden="true"></i>';
       b.setAttribute('aria-label',night?'Светлая тема':'Тёмная тема');
     }
     window.remnaToggleTheme=function(){
@@ -1658,6 +1678,8 @@ async def admin_user_telegram_photo(request: Request, user_id: int) -> Response:
         if hit is not None and now_m - hit[0] < _AVATAR_TTL_SEC:
             return Response(content=hit[1], media_type=hit[2])
         loaded = await _load_telegram_profile_photo(user)
+        if loaded is None and user.username:
+            loaded = await _fetch_telegram_public_userpic(user.username)
         if loaded is None:
             return Response(status_code=404)
         body_b, mime = loaded
