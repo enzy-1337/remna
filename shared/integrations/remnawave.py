@@ -249,7 +249,20 @@ class RemnaWaveClient:
                 "status": "ACTIVE",
             }
         data = await self._request("GET", f"users/{user_uuid}")
-        return self._unwrap(data)
+        raw = self._unwrap(data)
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict):
+                    return item
+            return {}
+        logger.warning(
+            "Remnawave get_user %s: неожиданный тип ответа %s",
+            user_uuid,
+            type(raw).__name__,
+        )
+        return {}
 
     async def delete_panel_user(self, user_uuid: str) -> None:
         """Удаление пользователя в панели: DELETE /api/users/{uuid} (см. OpenAPI DeleteUser)."""

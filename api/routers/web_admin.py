@@ -791,6 +791,11 @@ def _telegram_profile_actions(user: User) -> str:
     return f"<div class=\"flex flex-wrap gap-2\">{''.join(parts)}</div>"
 
 
+def _as_rw_user_profile(raw: object) -> dict | None:
+    """GET users/{{uuid}} в разных версиях панели может вернуть не объект — иначе .get() даёт 500."""
+    return raw if isinstance(raw, dict) else None
+
+
 def _hwid_device_json_block(d: dict) -> str:
     try:
         raw = json.dumps(d, ensure_ascii=False, indent=2, default=str)
@@ -1444,7 +1449,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     if ud.remnawave_uuid:
         try:
             rw = RemnaWaveClient(settings)
-            uinf = await rw.get_user(str(ud.remnawave_uuid))
+            uinf = _as_rw_user_profile(await rw.get_user(str(ud.remnawave_uuid)))
             raw = await rw.get_user_hwid_devices(str(ud.remnawave_uuid))
             hwid_devices = normalize_hwid_devices_list(raw if isinstance(raw, list) else [])
             hwid_list_ok = True
@@ -1748,7 +1753,9 @@ async def admin_user_subscription_qr(request: Request, user_id: int) -> Response
         return Response(status_code=404)
     try:
         rw = RemnaWaveClient(settings)
-        uinf = await rw.get_user(str(rw_uuid))
+        uinf = _as_rw_user_profile(await rw.get_user(str(rw_uuid)))
+        if not uinf:
+            return Response(status_code=502)
         url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
         if not url:
             return Response(status_code=404)
