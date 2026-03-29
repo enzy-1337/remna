@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -276,6 +277,30 @@ class RemnaWaveClient:
                 raise
         if last_err is not None:
             raise last_err
+
+    async def ping_api(self) -> tuple[bool, str, float | None]:
+        """Проверка доступности API: GET users с минимальной выборкой."""
+        if self._s.remnawave_stub:
+            return True, "REMNAWAVE_STUB (запросы к панели отключены)", None
+        t0 = time.perf_counter()
+        try:
+            await self._request("GET", "users", params={"start": 0, "size": 1})
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            return True, f"HTTP OK · {ms} мс", ms
+        except RemnaWaveError as e:
+            return False, str(e)[:240], None
+
+    async def probe_nodes_api(self) -> tuple[bool, str]:
+        """Пробуем типичные пути списка нод (зависит от версии Remnawave)."""
+        if self._s.remnawave_stub:
+            return True, "Заглушка (без сети)"
+        for path in ("internal-nodes", "nodes", "system/health"):
+            try:
+                await self._request("GET", path)
+                return True, f"ответ по «{path}»"
+            except RemnaWaveError:
+                continue
+        return False, "Нет подходящего GET-эндпоинта — статус нод смотрите в UI панели"
 
     async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if self._s.remnawave_stub:

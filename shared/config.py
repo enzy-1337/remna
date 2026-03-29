@@ -296,6 +296,11 @@ class Settings(BaseSettings):
         validation_alias="ADMIN_PANEL_LOGO_URL",
         description="URL картинки-логотипа в шапке web-admin и favicon страниц",
     )
+    web_admin_profile_display_name: str | None = Field(
+        default=None,
+        validation_alias="WEB_ADMIN_PROFILE_DISPLAY_NAME",
+        description="Подпись на карточке «Мой профиль» в web-admin (если пусто — имя из Telegram/GitHub)",
+    )
 
     backup_enabled: bool = Field(
         default=False,

@@ -26,6 +26,7 @@ from shared.services.subscription_service import (
     add_paid_device_slot,
     get_active_subscription,
     remove_hwid_device_from_panel,
+    unlink_hwid_device_keep_slots,
 )
 
 router = Router(name="devices")
@@ -307,9 +308,10 @@ async def cb_dev_rw_pick(
 
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="✅ Отвязать", callback_data=f"dev:unl:{idx}:{ctx}"),
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=_list_callback(ctx)),
+        InlineKeyboardButton(text="📤 Только панель", callback_data=f"dev:unlk:{idx}:{ctx}"),
+        InlineKeyboardButton(text="📤 Панель − слот", callback_data=f"dev:unls:{idx}:{ctx}"),
     )
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_list_callback(ctx)))
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
@@ -318,8 +320,43 @@ async def cb_dev_rw_pick(
     )
 
 
-@router.callback_query(F.data.startswith("dev:unl:"))
-async def cb_dev_rw_unlink(
+async def _cb_dev_rw_unlink_impl(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    *,
+    ctx: str,
+    idx: int,
+    is_bot_admin: bool,
+    decrease_slot: bool,
+) -> None:
+    settings = get_settings()
+    _uinf, devices, err = await _fetch_panel_hwid_context(db_user, settings)
+    if err or idx < 0 or idx >= len(devices):
+        await cq.answer("Устройство не найдено", show_alert=True)
+        return
+    hwid = str(devices[idx].get("hwid") or "")
+
+    if decrease_slot:
+        ok, msg = await remove_hwid_device_from_panel(session, user=db_user, hwid=hwid, settings=settings)
+    else:
+        ok, msg = await unlink_hwid_device_keep_slots(session, user=db_user, hwid=hwid, settings=settings)
+    if not ok:
+        await cq.answer(strip_for_popup_alert(msg)[:200], show_alert=True)
+        return
+
+    text, kb = await _render_devices(session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
+    cap = join_lines(text, "", msg)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("dev:unlk:"))
+async def cb_dev_rw_unlink_keep_slots(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
@@ -335,24 +372,28 @@ async def cb_dev_rw_unlink(
     except (IndexError, ValueError):
         await cq.answer("Ошибка", show_alert=True)
         return
+    await _cb_dev_rw_unlink_impl(
+        cq, session, db_user, ctx=ctx, idx=idx, is_bot_admin=is_bot_admin, decrease_slot=False
+    )
 
-    settings = get_settings()
-    _uinf, devices, err = await _fetch_panel_hwid_context(db_user, settings)
-    if err or idx < 0 or idx >= len(devices):
-        await cq.answer("Устройство не найдено", show_alert=True)
+
+@router.callback_query(F.data.startswith("dev:unls:"))
+async def cb_dev_rw_unlink_and_slot(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
-    hwid = str(devices[idx].get("hwid") or "")
-
-    ok, msg = await remove_hwid_device_from_panel(session, user=db_user, hwid=hwid, settings=settings)
-    if not ok:
-        await cq.answer(strip_for_popup_alert(msg)[:200], show_alert=True)
+    assert db_user is not None
+    parts = cq.data.split(":")
+    try:
+        idx = int(parts[2])
+        ctx = parts[3] if len(parts) > 3 else CTX_MAIN
+    except (IndexError, ValueError):
+        await cq.answer("Ошибка", show_alert=True)
         return
-
-    text, kb = await _render_devices(session, db_user, ctx=ctx, is_bot_admin=is_bot_admin)
-    cap = join_lines(text, "", msg)
-    await answer_callback_with_photo_screen(
-        cq,
-        caption=cap,
-        reply_markup=kb,
-        settings=settings,
+    await _cb_dev_rw_unlink_impl(
+        cq, session, db_user, ctx=ctx, idx=idx, is_bot_admin=is_bot_admin, decrease_slot=True
     )

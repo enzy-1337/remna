@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,8 @@ from shared.models.user import User
 from shared.services.subscription_service import count_devices, get_active_subscription, get_base_subscription_plan
 
 logger = logging.getLogger(__name__)
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _ru_days_phrase(n: int) -> str:
@@ -153,20 +156,28 @@ async def build_subscription_detail_caption(
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
     left_phrase = _humanize_left(exp, now)
+    exp_msk = exp.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
 
     header = "🔑 " + bold("Подписка:")
     quote_lines = [
         status_human,
+        plain("🆔 ID в боте: ") + code(str(user.id)),
+    ]
+    if user.remnawave_uuid:
+        quote_lines.append(plain("🖥️ UUID в панели: ") + code(str(user.remnawave_uuid)))
+    quote_lines.extend(
+        [
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
         traffic_line,
         devices_slots_line,
         plain("🗓️ До: ")
-        + bold(exp.strftime("%d.%m.%Y %H:%M"))
+        + bold(exp_msk)
         + plain(" (")
         + esc(left_phrase)
         + plain(")"),
         plain("💸 Стоимость: ") + _monthly_price_line(plan),
-    ]
+        ]
+    )
     if sub.auto_renew and sub.status == "active":
         bp = await get_base_subscription_plan(session)
         if bp is not None and bp.price_rub > 0:

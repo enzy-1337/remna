@@ -4,39 +4,95 @@ from __future__ import annotations
 
 import hmac
 import html
+import json
+import time
 from hashlib import sha256
 from base64 import urlsafe_b64encode
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from secrets import token_urlsafe
+from urllib.parse import quote as url_quote
 from urllib.parse import quote_plus
 
 import httpx
+import redis.asyncio as redis_async
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, distinct, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from shared.admin_dotenv import WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
+from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
 from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.rw_traffic import (
+    extract_connected_devices_from_rw_user,
+    extract_traffic_gb_from_rw_user,
+    is_rw_traffic_unlimited,
+    traffic_limit_gb_for_display,
+)
 from shared.integrations.rw_hwid_devices import format_rw_device_datetime_local, hwid_device_title, normalize_hwid_devices_list
 from shared.models.device import Device
+from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
-from shared.services.subscription_service import remove_hwid_device_from_panel, remove_device_slot
+from shared.services.subscription_service import (
+    count_devices,
+    get_active_subscription,
+    remove_hwid_device_from_panel,
+    remove_device_slot,
+    unlink_hwid_device_keep_slots,
+)
 
 router = APIRouter(tags=["web-admin"])
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _fmt_dt_msk(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
+
+
+def _humanize_left_ru(exp: datetime, now: datetime) -> str:
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    left = exp - now
+    if left.total_seconds() <= 0:
+        return "истекла"
+    d = left.days
+    h = left.seconds // 3600
+    if d >= 1:
+        n = abs(int(d))
+        if n % 10 == 1 and n % 100 != 11:
+            return f"{n} день"
+        if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
+            return f"{n} дня"
+        return f"{n} дней"
+    if h >= 1:
+        return f"{h} ч."
+    m = left.seconds // 60
+    if m >= 1:
+        return f"{m} мин."
+    return "меньше минуты"
 
 
 def _esc(v: object) -> str:
     return html.escape(str(v))
+
+
+def _esc_attr(v: object) -> str:
+    return html.escape(str(v), quote=True)
 
 
 def _auth_data(request: Request) -> dict:
@@ -81,6 +137,104 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
   </script>
   <style>
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+    @keyframes remna-fade-in {{
+      from {{ opacity: 0; transform: translateY(8px); }}
+      to {{ opacity: 1; transform: none; }}
+    }}
+    .remna-page .card {{
+      animation: remna-fade-in 0.42s ease-out both;
+      transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+    }}
+    .remna-page .card:hover {{
+      box-shadow: 0 18px 40px -18px color-mix(in oklab, var(--bc) 25%, transparent);
+    }}
+    tr.remna-row-link {{
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }}
+    tr.remna-row-link:hover {{
+      background-color: color-mix(in oklab, var(--p) 10%, transparent);
+    }}
+    #remna-toast-host {{
+      position: fixed;
+      top: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      width: min(28rem, calc(100vw - 2rem));
+      pointer-events: none;
+    }}
+    .remna-toast {{
+      pointer-events: auto;
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      border-radius: 0.85rem;
+      box-shadow: 0 14px 44px -12px color-mix(in oklab, var(--bc) 35%, transparent);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.85rem 1rem 0.95rem;
+      animation: remna-toast-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }}
+    .remna-toast.remna-toast--out {{ animation: remna-toast-out 0.32s ease-in forwards; }}
+    .remna-toast--success {{
+      background: color-mix(in oklab, #22c55e 14%, var(--b1));
+      border: 1px solid color-mix(in oklab, #22c55e 42%, transparent);
+    }}
+    .remna-toast--error {{
+      background: color-mix(in oklab, #ef4444 14%, var(--b1));
+      border: 1px solid color-mix(in oklab, #ef4444 38%, transparent);
+    }}
+    .remna-toast--warning {{
+      background: color-mix(in oklab, #eab308 16%, var(--b1));
+      border: 1px solid color-mix(in oklab, #ca8a04 35%, transparent);
+    }}
+    .remna-toast--info {{
+      background: color-mix(in oklab, var(--p) 12%, var(--b1));
+      border: 1px solid color-mix(in oklab, var(--p) 35%, transparent);
+    }}
+    .remna-toast__icon {{
+      flex-shrink: 0;
+      width: 2.35rem;
+      height: 2.35rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9999px;
+      font-size: 1.05rem;
+      background: color-mix(in oklab, var(--bc) 8%, transparent);
+    }}
+    .remna-toast__text {{
+      flex: 1;
+      text-align: center;
+      font-size: 0.9rem;
+      font-weight: 500;
+      line-height: 1.4;
+    }}
+    .remna-toast__bar {{
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      border-radius: 0 2px 2px 0;
+      animation: remna-toast-progress linear forwards;
+    }}
+    @keyframes remna-toast-in {{
+      from {{ opacity: 0; transform: translateY(-120%); }}
+      to {{ opacity: 1; transform: translateY(0); }}
+    }}
+    @keyframes remna-toast-out {{
+      to {{ opacity: 0; transform: translateY(-130%); }}
+    }}
+    @keyframes remna-toast-progress {{
+      from {{ width: 100%; }}
+      to {{ width: 0%; }}
+    }}
   </style>"""
 
 
@@ -92,7 +246,7 @@ def _brand_logo_mark(settings: Settings) -> str:
 
 
 def _nav_link_class(href: str, cur: str) -> str:
-    base = "flex items-center gap-0 rounded-xl px-1.5 py-2 text-sm font-medium transition-colors no-underline"
+    base = "flex w-full items-center gap-0 rounded-xl px-1.5 py-2 text-sm font-medium transition-colors no-underline"
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
     active = False
@@ -107,18 +261,20 @@ def _nav_link_class(href: str, cur: str) -> str:
 
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
-    return f"""<a href="{href}" class="{cls}">
+    return f"""<div class="shrink-0 px-1.5">
+    <a href="{href}" class="{cls}">
       <i class="{icon_class} fa-fw w-6 shrink-0 text-center text-[15px] opacity-90" aria-hidden="true"></i>
       <span class="nav-label ml-1 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
-    </a>"""
+    </a></div>"""
 
 
 def _mob_nav_cls(href: str, cur: str) -> str:
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
-    act = (h == "/admin/dashboard" and c in ("/admin/dashboard", "/admin")) or (
-        h != "/admin/dashboard" and (c == h or c.startswith(h + "/"))
-    )
+    if h == "/admin/dashboard":
+        act = c in ("/admin/dashboard", "/admin")
+    else:
+        act = c == h or c.startswith(h + "/")
     return "text-primary font-semibold" if act else "text-base-content/55"
 
 
@@ -141,7 +297,8 @@ def _layout(
 
     nav_blocks = ""
     theme_toggle = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 p-4 pt-16 pb-24 md:pb-8 md:pl-14"
+    remna_chrome = ""
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-5 py-5 pt-[4.75rem] pb-28 md:pb-8 md:pl-[4.5rem] md:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
@@ -155,17 +312,21 @@ def _layout(
         </span>
         <span class="nav-label ml-2 max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden px-1">
+      <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden px-0">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
+        {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
+        {_sidebar_nav_item("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
         {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
       <div class="mt-auto border-t border-base-content/10 p-1.5">
         <div class="flex items-center gap-0">
-          <img src="{avatar}" alt="" class="h-9 w-9 shrink-0 rounded-full border-2 border-primary/40 object-cover ring-2 ring-base-100" width="36" height="36" />
+          <a href="/admin/profile" class="shrink-0 rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
+            <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover" width="36" height="36" />
+          </a>
           <div class="nav-label flex min-w-0 flex-1 flex-col gap-1 pl-2 max-w-0 overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100">
-            <span class="truncate text-sm font-semibold text-base-content">{_esc(user_label)}</span>
+            <a href="/admin/profile" class="truncate text-sm font-semibold text-base-content no-underline hover:text-primary">{_esc(user_label)}</a>
             <form method="post" action="/admin/logout">
               <button type="submit" class="btn btn-ghost btn-sm min-h-9 h-9 gap-1 px-1 normal-case text-error hover:bg-error/10">
                 <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Выйти
@@ -176,23 +337,60 @@ def _layout(
       </div>
     </aside>"""
         mobile_nav = f"""
-    <nav class="fixed bottom-0 left-0 right-0 z-30 flex h-16 items-center justify-around border-t border-base-content/10 bg-base-300/95 px-1 py-2 backdrop-blur-md md:hidden" aria-label="Мобильное меню">
-      <a href="/admin/dashboard" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-lg"></i><span>Дашборд</span></a>
-      <a href="/admin/users" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-lg"></i><span>Юзеры</span></a>
-      <a href="/admin/promos" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-lg"></i><span>Промо</span></a>
-      <a href="/admin/settings" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-lg"></i><span>Настр.</span></a>
-      <form method="post" action="/admin/logout" class="flex flex-col items-center justify-center p-2"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-lg"></i></button></form>
+    <nav class="fixed bottom-0 left-0 right-0 z-30 flex h-[4.25rem] items-center justify-between gap-0 border-t border-base-content/10 bg-base-300/95 px-2 py-1.5 backdrop-blur-md md:hidden" aria-label="Мобильное меню">
+      <a href="/admin/dashboard" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-base"></i><span>Дашборд</span></a>
+      <a href="/admin/status" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/status', cur)}"><i class="fa-solid fa-heart-pulse text-base"></i><span>Статус</span></a>
+      <a href="/admin/users" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-base"></i><span>Юзеры</span></a>
+      <a href="/admin/subscriptions" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/subscriptions', cur)}"><i class="fa-solid fa-clock-rotate-left text-base"></i><span>Подписки</span></a>
+      <a href="/admin/promos" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-base"></i><span>Промо</span></a>
+      <a href="/admin/settings" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-base"></i><span>Настр.</span></a>
+      <a href="/admin/profile" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/profile', cur)}"><i class="fa-solid fa-user text-base"></i><span>Профиль</span></a>
+      <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
     </nav>"""
         theme_toggle = """
-    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-3 top-3 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-lg backdrop-blur-md md:right-4 md:top-4" aria-label="Тема"></button>"""
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-5 top-5 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-lg backdrop-blur-md md:right-7 md:top-6" aria-label="Тема"></button>"""
         nav_blocks = desktop_sidebar + mobile_nav + theme_toggle
+        remna_chrome = """
+    <div id="remna-toast-host" aria-live="polite"></div>
+    <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
+      <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative overflow-hidden">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="hwid" aria-label="Закрыть">✕</button>
+        <h3 id="remna-hwid-title" class="font-bold text-lg mb-2 pr-10">Отвязать устройство</h3>
+        <p id="remna-hwid-desc" class="text-sm opacity-80 mb-4"></p>
+        <form id="remna-hwid-form" method="post" class="flex flex-col gap-3">
+          <input type="hidden" name="hwid" id="remna-hwid-field" value="" />
+          <input type="hidden" name="mode" id="remna-hwid-mode" value="keep_slots" />
+          <div>
+            <button type="submit" class="btn btn-outline btn-primary w-full" data-remna-hwid-mode="keep_slots">Только с панели</button>
+            <p class="text-xs opacity-60 mt-1">Снимет HWID с Remnawave; оплаченные слоты не меняются.</p>
+          </div>
+          <div>
+            <button type="submit" class="btn btn-error w-full" data-remna-hwid-mode="decrease_slot">Отвязать и убрать слот</button>
+            <p class="text-xs opacity-60 mt-1">Минус один оплаченный слот и обновление лимита в панели.</p>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div id="remna-slot-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-slot-title">
+      <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="slot" aria-label="Закрыть">✕</button>
+        <h3 id="remna-slot-title" class="font-bold text-lg mb-2 pr-10">Снять слот</h3>
+        <p class="text-sm opacity-80 mb-4">Удалить запись устройства в БД, уменьшить оплаченные слоты и лимит HWID в панели (если применимо).</p>
+        <form id="remna-slot-form" method="post" class="flex flex-wrap gap-2 justify-end">
+          <input type="hidden" name="device_id" id="remna-slot-device" value="" />
+          <button type="button" class="btn btn-ghost" data-remna-close="slot">Отмена</button>
+          <button type="submit" class="btn btn-warning">Снять слот</button>
+        </form>
+      </div>
+    </div>"""
     elif not show_nav:
         main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
 
-    back_row = ""
-    if back_href:
-        back_row = f"<div class=\"mb-4 w-full\"><a href=\"{_esc(back_href)}\" class=\"btn btn-ghost btn-lg min-h-12 gap-2 border border-base-content/10 px-4\"><i class=\"fa-solid fa-arrow-left\" aria-hidden=\"true\"></i>Назад</a></div>"
-    inner = f"{back_row}{body}"
+    back_fixed = ""
+    if back_href and show_nav and request is not None:
+        back_fixed = f"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-4 top-5 z-50 h-10 w-10 min-h-10 min-w-10 shrink-0 border border-base-content/15 bg-base-300/90 shadow-lg backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-base" aria-hidden="true"></i></a>"""
+    inner = body
 
     theme_script = """
   <script>
@@ -213,6 +411,128 @@ def _layout(
     };
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncIcon);else syncIcon();
   })();
+  document.addEventListener('click',function(e){
+    var el=e.target&&e.target.closest&&e.target.closest('[data-copy]');
+    if(!el)return;
+    var t=el.getAttribute('data-copy');
+    if(t===null)return;
+    e.preventDefault();
+    navigator.clipboard.writeText(t).then(function(){
+      var ic=el.querySelector('i');if(ic){var c=ic.className;ic.className='fa-solid fa-check text-xs';setTimeout(function(){ic.className=c;},850);}
+    });
+  });
+  document.addEventListener('click',function(e){
+    var tr=e.target&&e.target.closest&&e.target.closest('tr.remna-row-link');
+    if(!tr)return;
+    if(e.target.closest('a,button,input,textarea,select,label,[data-no-row-nav]'))return;
+    var h=tr.getAttribute('data-row-href');
+    if(h)window.location.href=h;
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Enter')return;
+    var tr=e.target&&e.target.closest&&e.target.closest('tr.remna-row-link');
+    if(!tr||document.activeElement!==tr)return;
+    var h=tr.getAttribute('data-row-href');
+    if(h)window.location.href=h;
+  });
+  (function(){
+    var ICONS={success:'fa-circle-check',error:'fa-circle-xmark',warning:'fa-triangle-exclamation',info:'fa-circle-info'};
+    var BAR={success:'#22c55e',error:'#ef4444',warning:'#ca8a04',info:'oklch(0.65 0.2 280)'};
+    window.remnaToast=function(kind,message,duration){
+      kind=kind||'info';
+      duration=duration||4800;
+      var host=document.getElementById('remna-toast-host');
+      if(!host)return;
+      var el=document.createElement('div');
+      el.className='remna-toast remna-toast--'+kind;
+      el.setAttribute('role','status');
+      var ic=ICONS[kind]||ICONS.info;
+      var bc=BAR[kind]||BAR.info;
+      el.innerHTML='<i class="fa-solid '+ic+' remna-toast__icon" aria-hidden="true"></i><div class="remna-toast__text"></div><div class="remna-toast__bar" style="animation-duration:'+duration+'ms;background:'+bc+'"></div>';
+      el.querySelector('.remna-toast__text').textContent=message||'';
+      host.appendChild(el);
+      setTimeout(function(){
+        el.classList.add('remna-toast--out');
+        setTimeout(function(){try{el.remove();}catch(x){}},320);
+      },duration);
+    };
+    function remnaCloseHwid(){
+      var o=document.getElementById('remna-hwid-overlay');
+      if(o){o.classList.add('hidden');o.classList.remove('flex');}
+    }
+    function remnaCloseSlot(){
+      var o=document.getElementById('remna-slot-overlay');
+      if(o){o.classList.add('hidden');o.classList.remove('flex');}
+    }
+    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();};
+    document.addEventListener('click',function(e){
+      var t=e.target;
+      if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='hwid'){e.preventDefault();remnaCloseHwid();}
+      if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='slot'){e.preventDefault();remnaCloseSlot();}
+      var hw=t&&t.closest&&t.closest('#remna-hwid-overlay');
+      if(hw&&t===hw)remnaCloseHwid();
+      var sl=t&&t.closest&&t.closest('#remna-slot-overlay');
+      if(sl&&t===sl)remnaCloseSlot();
+      var openH=t&&t.closest&&t.closest('[data-remna-open-hwid]');
+      if(openH){
+        e.preventDefault();
+        var uid=openH.getAttribute('data-user-id')||'';
+        var hwid=openH.getAttribute('data-hwid')||'';
+        var title=openH.getAttribute('data-title')||'';
+        var form=document.getElementById('remna-hwid-form');
+        if(form){form.action='/admin/users/'+uid+'/unlink-hwid';}
+        var hf=document.getElementById('remna-hwid-field');
+        if(hf)hf.value=hwid;
+        var hd=document.getElementById('remna-hwid-desc');
+        if(hd)hd.textContent=title;
+        var ov=document.getElementById('remna-hwid-overlay');
+        if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
+      }
+      var openS=t&&t.closest&&t.closest('[data-remna-open-slot]');
+      if(openS){
+        e.preventDefault();
+        var uid2=openS.getAttribute('data-user-id')||'';
+        var did=openS.getAttribute('data-device-id')||'';
+        var sf=document.getElementById('remna-slot-form');
+        if(sf){sf.action='/admin/users/'+uid2+'/unlink-device';}
+        var di=document.getElementById('remna-slot-device');
+        if(di)di.value=did;
+        var ov2=document.getElementById('remna-slot-overlay');
+        if(ov2){ov2.classList.remove('hidden');ov2.classList.add('flex');}
+      }
+    });
+    document.addEventListener('submit',function(e){
+      var f=e.target;
+      if(!f||f.id!=='remna-hwid-form')return;
+      var btn=e.submitter;
+      var m=btn&&btn.getAttribute&&btn.getAttribute('data-remna-hwid-mode');
+      if(m){
+        var im=document.getElementById('remna-hwid-mode');
+        if(im)im.value=m;
+      }
+    },true);
+    document.addEventListener('keydown',function(e){
+      if(e.key==='Escape')window.remnaCloseAllModals();
+    });
+    function remnaConsumeUrlNotify(){
+      try{
+        var u=new URL(window.location.href);
+        var n=u.searchParams.get('n');
+        var err=u.searchParams.get('err');
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.'};
+        if(n&&map[n])window.remnaToast('success',map[n]);
+        if(err)window.remnaToast('error',err);
+        if(n||err){
+          u.searchParams.delete('n');
+          u.searchParams.delete('err');
+          var qs=u.searchParams.toString();
+          window.history.replaceState({},'',u.pathname+(qs?'?'+qs:''));
+        }
+      }catch(x){}
+    }
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',remnaConsumeUrlNotify);
+    else remnaConsumeUrlNotify();
+  })();
   </script>"""
 
     page = f"""<!DOCTYPE html>
@@ -221,8 +541,8 @@ def _layout(
 {_head_common(title, favicon_url=favicon_for_head)}
 </head>
 <body class="text-base-content antialiased">
-  {nav_blocks}
-  <div class="{main_cls} max-w-[1400px] mx-auto w-full">
+  {nav_blocks}{back_fixed}{remna_chrome}
+  <div class="{main_cls} remna-page max-w-[1400px] mx-auto w-full">
     {inner}
   </div>
 {theme_script if show_nav and request is not None else ""}
@@ -255,6 +575,30 @@ def _promo_reward_caption(promo: PromoCode) -> str:
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
     return f"+{v}"
+
+
+def _status_service_card(
+    *,
+    title: str,
+    icon: str,
+    ok: bool,
+    detail: str,
+    latency: str | None = None,
+) -> str:
+    badge = "badge-success" if ok else "badge-error"
+    st = "Онлайн" if ok else "Ошибка"
+    lat = f"<p class='text-xs opacity-60 mt-1'>{_esc(latency)}</p>" if latency else ""
+    return f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25">
+      <div class="card-body gap-2">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="card-title text-base"><i class="{icon} text-primary mr-2" aria-hidden="true"></i>{_esc(title)}</h3>
+          <span class="badge {badge} badge-sm">{st}</span>
+        </div>
+        <p class="text-sm opacity-90 break-words">{_esc(detail)}</p>
+        {lat}
+      </div>
+    </div>"""
 
 
 def _parse_date_any(raw: str) -> datetime | None:
@@ -290,6 +634,72 @@ def _user_avatar_url(user: User) -> str:
         return f"https://t.me/i/userpic/320/{user.username}.jpg"
     seed = quote_plus((user.first_name or user.username or f"U{user.id}" or "User"))
     return f"https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name={seed}"
+
+
+def _user_initial_badge(user: User) -> tuple[str, str]:
+    raw = (user.first_name or user.username or str(user.telegram_id) or "?").strip()
+    ch = raw[0] if raw else "?"
+    if ch.isalpha():
+        ch = ch.upper()
+    elif not ch.isdigit():
+        ch = "?"
+    hue = (user.id * 47) % 360
+    style = f"background:hsl({hue},42%,34%);color:#f0f2f8"
+    return ch, style
+
+
+def _avatar_with_fallback(user: User, *, px: int, ring_tw: str, ring_offset: str = "ring-offset-2") -> str:
+    url = _user_avatar_url(user)
+    ch, st = _user_initial_badge(user)
+    return (
+        f"<span class='relative inline-flex rounded-full p-0.5 ring-2 {ring_offset} ring-offset-base-100 {ring_tw}'>"
+        f"<span class='relative inline-block overflow-hidden rounded-full bg-base-300' style='width:{px}px;height:{px}px'>"
+        f"<img src=\"{_esc(url)}\" alt=\"\" width=\"{px}\" height=\"{px}\" class=\"h-full w-full object-cover\" "
+        "onerror=\"this.classList.add('hidden');this.nextElementSibling.classList.remove('hidden')\" />"
+        f"<span class=\"hidden absolute inset-0 flex items-center justify-center text-sm font-bold leading-none\" "
+        f'style="{st}">{_esc(ch)}</span></span></span>'
+    )
+
+
+def _copy_line(*, label: str, value: str, mono: bool = True) -> str:
+    mcls = "font-mono text-xs sm:text-sm" if mono else "text-sm"
+    dc = html.escape(value, quote=True)
+    return (
+        f"<div class='flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5'>"
+        f"<span class='text-sm opacity-70'>{_esc(label)}</span>"
+        f"<span class='inline-flex max-w-full items-center gap-1 rounded-lg bg-base-300 px-2 py-1 {mcls}'>"
+        f"<span class='break-all'>{_esc(value)}</span>"
+        f"<button type='button' class='btn btn-ghost btn-xs h-7 min-h-7 w-7 min-w-7 shrink-0 p-0' data-copy=\"{dc}\" "
+        f"title='Копировать' aria-label='Копировать'><i class='fa-regular fa-copy text-xs'></i></button></span></div>"
+    )
+
+
+def _telegram_profile_actions(user: User) -> str:
+    parts: list[str] = []
+    un = (user.username or "").strip().lstrip("@")
+    if un:
+        href = "https://t.me/" + url_quote(un, safe="")
+        parts.append(
+            f'<a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case" href="{_esc(href)}" target="_blank" rel="noopener noreferrer">'
+            '<i class="fa-brands fa-telegram" aria-hidden="true"></i> Профиль t.me</a>'
+        )
+    parts.append(
+        f'<a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case" href="tg://user?id={int(user.telegram_id)}">'
+        '<i class="fa-brands fa-telegram" aria-hidden="true"></i> Открыть в приложении</a>'
+    )
+    return f"<div class=\"flex flex-wrap gap-2\">{''.join(parts)}</div>"
+
+
+def _hwid_device_json_block(d: dict) -> str:
+    try:
+        raw = json.dumps(d, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError):
+        raw = str(d)
+    return (
+        f"<details class=\"hwid-details max-w-md\"><summary class=\"btn btn-ghost btn-xs h-8 min-h-8 px-2 font-normal\">Подробнее</summary>"
+        f"<pre class=\"mt-2 max-h-64 overflow-auto rounded-lg border border-base-content/10 bg-base-300 p-2 text-[11px] leading-relaxed whitespace-pre-wrap\">"
+        f"{_esc(raw)}</pre></details>"
+    )
 
 
 def _verify_telegram_login(payload: dict[str, str], bot_token: str) -> bool:
@@ -445,6 +855,96 @@ async def admin_root():
     return RedirectResponse("/admin/dashboard", status_code=303)
 
 
+@router.get("/status")
+async def admin_status(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    rw = RemnaWaveClient(settings)
+    panel_ok, panel_msg, panel_ms = await rw.ping_api()
+    nodes_ok, nodes_msg = await rw.probe_nodes_api()
+    panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
+
+    bot_ok = False
+    bot_msg = "—"
+    bot_lat: str | None = None
+    tok = (settings.bot_token or "").strip()
+    if not tok:
+        bot_msg = "BOT_TOKEN не задан в окружении"
+    else:
+        t0 = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.get(f"https://api.telegram.org/bot{tok}/getMe")
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            bot_lat = f"Задержка: {ms} мс"
+            if r.status_code == 200:
+                try:
+                    j = r.json()
+                except Exception:
+                    j = {}
+                res = j.get("result") if isinstance(j, dict) else None
+                if j.get("ok") and isinstance(res, dict):
+                    bot_ok = True
+                    un = str(res.get("username") or "")
+                    bot_msg = f"@{un}" if un else "бот отвечает (getMe OK)"
+                else:
+                    bot_msg = str(j)[:220]
+            else:
+                bot_msg = f"HTTP {r.status_code}"
+        except Exception as e:
+            bot_msg = str(e)[:220]
+
+    db_ok = False
+    db_msg = "—"
+    db_lat: str | None = None
+    t0 = time.perf_counter()
+    try:
+        async with await _session() as session:
+            await session.execute(text("SELECT 1"))
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        db_ok = True
+        db_msg = "PostgreSQL отвечает"
+        db_lat = f"Задержка: {ms} мс"
+    except Exception as e:
+        db_msg = str(e)[:240]
+
+    redis_ok = False
+    redis_msg = "—"
+    redis_lat: str | None = None
+    try:
+        rcli = redis_async.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+        try:
+            t0 = time.perf_counter()
+            await rcli.ping()
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            redis_ok = True
+            redis_msg = "PONG"
+            redis_lat = f"Задержка: {ms} мс"
+        finally:
+            await rcli.aclose()
+    except Exception as e:
+        redis_msg = str(e)[:240]
+
+    body = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
+      <div class="card-body gap-2">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
+        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, типичные пути нод, Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
+      </div>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {_status_service_card(title="Панель Remnawave (API)", icon="fa-solid fa-server", ok=panel_ok, detail=panel_msg, latency=panel_lat)}
+      {_status_service_card(title="Ноды (проба API)", icon="fa-solid fa-network-wired", ok=nodes_ok, detail=nodes_msg)}
+      {_status_service_card(title="Telegram-бот", icon="fa-brands fa-telegram", ok=bot_ok, detail=bot_msg, latency=bot_lat)}
+      {_status_service_card(title="База данных", icon="fa-solid fa-database", ok=db_ok, detail=db_msg, latency=db_lat)}
+      {_status_service_card(title="Redis", icon="fa-solid fa-bolt", ok=redis_ok, detail=redis_msg, latency=redis_lat)}
+    </div>
+    """
+    return _layout("Статус сервисов", body, request=request)
+
+
 @router.get("/dashboard")
 async def admin_dashboard(request: Request) -> HTMLResponse:
     denied = _require_login(request)
@@ -453,6 +953,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_ago = now - timedelta(days=1)
     async with await _session() as session:
         total_income = (
             await session.execute(
@@ -480,8 +981,36 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
                 )
             )
         ).scalar_one()
-        users_count = (await session.execute(select(func.count()).select_from(User))).scalar_one()
+        users_count = int((await session.execute(select(func.count()).select_from(User))).scalar_one() or 0)
         promos_count = (await session.execute(select(func.count()).select_from(PromoCode))).scalar_one()
+        active_sub_users = int(
+            (
+                await session.execute(
+                    select(func.count(distinct(Subscription.user_id))).where(
+                        Subscription.status.in_(("active", "trial")),
+                        Subscription.expires_at > now,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        subs_rows_total = int((await session.execute(select(func.count()).select_from(Subscription))).scalar_one() or 0)
+        users_blocked = int(
+            (await session.execute(select(func.count()).select_from(User).where(User.is_blocked.is_(True)))).scalar_one()
+            or 0
+        )
+        topups_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(Transaction).where(
+                        Transaction.type == "topup",
+                        Transaction.status == "completed",
+                        Transaction.created_at >= day_ago,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
         tx_last_14 = (
             await session.execute(
                 select(Transaction.created_at, Transaction.amount).where(
@@ -515,14 +1044,18 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     safe_day = float(day_income or 0)
     month_pct = int(min(100, round((safe_month / safe_total) * 100))) if safe_total > 0 else 0
     day_pct = int(min(100, round((safe_day / safe_month) * 100))) if safe_month > 0 else 0
+    sub_pct = int(min(100, round((active_sub_users / users_count) * 100))) if users_count > 0 else 0
     body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
         <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
         · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
-        · За день: <span class="font-bold">{_esc(day_income)} ₽</span></p>
-        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        · За сутки: <span class="font-bold">{_esc(day_income)} ₽</span></p>
+        <p class="text-sm opacity-75">Записей подписок в БД: <b>{subs_rows_total}</b>
+        · Заблокированных пользователей: <b>{users_blocked}</b>
+        · Успешных пополнений за 24 ч: <b>{topups_24h}</b></p>
+        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body items-center text-center gap-2">
               <p class="text-sm opacity-60">Месяц от всего оборота</p>
@@ -535,10 +1068,18 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
               <div class="radial-progress text-secondary" style="--value:{day_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{day_pct}">{day_pct}%</div>
             </div>
           </div>
-          <div class="card bg-base-200/50 border border-base-content/5 shadow-md sm:col-span-2 xl:col-span-1">
-            <div class="card-body justify-center">
-              <p class="text-sm opacity-60 mb-2">Пользователи / промокоды</p>
-              <p class="text-2xl font-bold"><span class="text-primary">{users_count}</span> <span class="opacity-40">/</span> <span>{promos_count}</span></p>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body items-center text-center gap-2">
+              <p class="text-sm opacity-60">С подпиской / всего пользователей</p>
+              <p class="text-2xl font-bold"><span class="text-success">{active_sub_users}</span> <span class="opacity-40">/</span> <span>{users_count}</span></p>
+              <p class="text-xs opacity-50">Активная или триал, срок не истёк</p>
+              <div class="radial-progress text-success" style="--value:{sub_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{sub_pct}">{sub_pct}%</div>
+            </div>
+          </div>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body justify-center text-center">
+              <p class="text-sm opacity-60 mb-2">Промокодов в базе</p>
+              <p class="text-2xl font-bold text-accent">{promos_count}</p>
             </div>
           </div>
         </div>
@@ -592,30 +1133,72 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
         badge_tw = "badge-error" if u.is_blocked else "badge-success"
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
+        av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
         rows.append(
-            "<tr>"
-            f"<td><div class='flex items-center gap-3'><span class='rounded-full p-0.5 ring-2 ring-offset-2 ring-offset-base-100 {ring_tw}'><img class='rounded-full object-cover w-9 h-9' src='{_esc(_user_avatar_url(u))}' alt='' width='36' height='36'/></span>"
-            f"<a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(display)}</a></div></td>"
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
+            f"<td><div class='flex items-center gap-3'>{av}"
+            f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {badge_tw} badge-sm'>{'Заблокирован' if u.is_blocked else 'Активен'}</span></td></tr>"
         )
     pages = []
     if total_pages > 1:
         for p in range(1, total_pages + 1):
-            cls = "btn btn-ghost btn-md min-h-11" if p != page else "btn btn-primary btn-md min-h-11"
+            cls = "btn btn-ghost btn-sm h-9 min-h-9" if p != page else "btn btn-primary btn-sm h-9 min-h-9"
             pages.append(f"<a class='{cls}' href='/admin/users?q={_esc(needle)}&page={p}'>{p}</a>")
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered input-lg min-h-12 w-full max-w-md' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
-        "<button class='btn btn-primary btn-lg min-h-12 gap-2' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
+        f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
+        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"<div class='flex flex-wrap items-center gap-2'><span class='text-sm opacity-60'>Страница {page} из {total_pages}</span>{''.join(pages)}</div></div></div>"
     )
     return _layout("Web-admin Users", body, request=request)
+
+
+@router.get("/subscriptions")
+async def admin_subscription_history(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        r = await session.execute(
+            select(Subscription, User, Plan)
+            .join(User, User.id == Subscription.user_id)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .order_by(desc(Subscription.created_at))
+            .limit(500)
+        )
+        rows = r.all()
+    tr: list[str] = []
+    for sub, u, pl in rows:
+        disp = u.first_name or u.username or f"#{u.id}"
+        tr.append(
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Карточка пользователя'>"
+            f"<td class='whitespace-nowrap text-xs opacity-80'>{_fmt_dt_msk(sub.created_at)}</td>"
+            f"<td><span class='link link-primary font-medium'>{_esc(disp)}</span></td>"
+            f"<td class='font-mono text-xs'>{u.id}</td>"
+            f"<td>{_esc(pl.name)}</td>"
+            f"<td><span class='badge badge-ghost badge-sm'>{_esc(sub.status)}</span></td>"
+            f"<td class='text-xs whitespace-nowrap'>{_fmt_dt_msk(sub.started_at)}</td>"
+            f"<td class='text-xs whitespace-nowrap'>{_fmt_dt_msk(sub.expires_at)}</td>"
+            f"<td>{sub.devices_count}</td></tr>"
+        )
+    body = (
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
+        "<h2 class='card-title text-2xl'><i class='fa-solid fa-clock-rotate-left text-primary mr-2' aria-hidden='true'></i>История подписок</h2>"
+        "<p class='text-sm opacity-60'>Все записи подписок из базы, от новых к старым (по дате создания записи). Одному пользователю соответствуют несколько строк при продлениях и сменах тарифа.</p>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
+        "<table class='table table-zebra table-sm'><thead><tr>"
+        "<th>Создана</th><th>Пользователь</th><th>ID</th><th>Тариф</th><th>Статус</th><th>Старт</th><th>Истекает</th><th>Слотов</th></tr></thead>"
+        f"<tbody>{''.join(tr) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет записей</td></tr>'}</tbody></table></div>"
+        "</div></div>"
+    )
+    return _layout("История подписок", body, request=request)
 
 
 @router.get("/users/{user_id}")
@@ -664,34 +1247,90 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         db_devices = list(
             (await session.execute(select(Device).where(Device.user_id == user_id).order_by(Device.id))).scalars().all()
         )
+        active_sub = await get_active_subscription(session, user.id)
+        n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
 
+    uinf: dict | None = None
+    hwid_list_ok = False
     if user.remnawave_uuid:
         try:
             rw = RemnaWaveClient(settings)
+            uinf = await rw.get_user(str(user.remnawave_uuid))
             raw = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
             hwid_devices = normalize_hwid_devices_list(raw if isinstance(raw, list) else [])
+            hwid_list_ok = True
         except RemnaWaveError as e:
             hwid_err = str(e)
 
+    n_occ = 0
+    if active_sub:
+        if uinf:
+            if hwid_list_ok:
+                n_occ = len(hwid_devices)
+            else:
+                ext = extract_connected_devices_from_rw_user(uinf)
+                n_occ = ext if ext is not None else n_db_dev_active
+        else:
+            n_occ = n_db_dev_active
+
+    now_utc = datetime.now(UTC)
+    sub_summary_html = ""
+    if active_sub:
+        plan = active_sub.plan
+        exp = active_sub.expires_at
+        if exp is not None and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        left_phr = _humanize_left_ru(exp, now_utc) if exp else "—"
+        exp_msk = _fmt_dt_msk(exp)
+        if uinf:
+            used_gb, _lim_u = extract_traffic_gb_from_rw_user(uinf)
+            used_s = f"{used_gb:.2f}" if used_gb is not None else "—"
+            if is_rw_traffic_unlimited(uinf):
+                lim_s = "∞"
+            else:
+                lg = traffic_limit_gb_for_display(uinf)
+                lim_s = f"{lg:.1f}" if lg is not None else "—"
+            traffic_line = (
+                f"<span class='font-mono'><b>{used_s}</b> / <b>{lim_s}</b> ГБ</span>"
+                "<span class='text-xs opacity-60'> (панель Remnawave)</span>"
+            )
+        else:
+            plg = ""
+            if plan and plan.traffic_limit_gb is not None and int(plan.traffic_limit_gb) > 0:
+                plg = f" · лимит по тарифу в боте: ~{plan.traffic_limit_gb} ГБ"
+            traffic_line = f"<span class='opacity-70'>данные панели недоступны</span>{_esc(plg)}"
+        slots_line = (
+            f"<span class='font-mono'><b>{n_occ}</b> / <b>{active_sub.devices_count}</b></span>"
+            "<span class='text-xs opacity-60'> (занято / слотов в боте)</span>"
+        )
+        st_badge = "success" if active_sub.status in ("active", "trial") else "warning"
+        sub_summary_html = f"""
+    <div class="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-base-200/90 to-base-100 p-4 shadow-md backdrop-blur-sm">
+      <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">Активная подписка</h3>
+      <div class="grid gap-3 text-sm sm:grid-cols-2">
+        <p>Тариф: <b>{_esc(plan.name if plan else '—')}</b> · <span class="badge badge-{st_badge} badge-sm">{_esc(active_sub.status)}</span></p>
+        <p>Трафик: {traffic_line}</p>
+        <p>Устройства: {slots_line}</p>
+        <p class="sm:col-span-2">Окончание: <b>{_esc(exp_msk)}</b> <span class="opacity-70">(осталось: {_esc(left_phr)})</span></p>
+      </div>
+    </div>"""
+    else:
+        sub_summary_html = (
+            "<div class='alert alert-info text-sm shadow-sm'>Нет активной подписки (статусы active/trial с неистёкшим сроком).</div>"
+        )
+
     subs_rows = "".join(
-        f"<tr><td>{s.id}</td><td>{_esc(s.status)}</td><td>{_esc(s.started_at)}</td><td>{_esc(s.expires_at)}</td><td>{s.devices_count}</td></tr>"
+        f"<tr><td>{s.id}</td><td>{_esc(s.status)}</td><td>{_fmt_dt_msk(s.started_at)}</td>"
+        f"<td>{_fmt_dt_msk(s.expires_at)}</td><td>{s.devices_count}</td></tr>"
         for s in subs
     )
     tx_rows = "".join(
-        f"<tr><td>{t.id}</td><td>{_esc(t.type)}</td><td>{_esc(t.amount)}</td><td>{_esc(t.status)}</td><td>{_esc(t.payment_provider or '-')}</td><td>{_esc(t.created_at)}</td></tr>"
+        f"<tr><td>{t.id}</td><td>{_esc(t.type)}</td><td>{_esc(t.amount)}</td><td>{_esc(t.status)}</td>"
+        f"<td>{_esc(t.payment_provider or '-')}</td><td>{_fmt_dt_msk(t.created_at)}</td></tr>"
         for t in txs
     )
     ring = "bad" if user.is_blocked else "ok"
     ring_tw = "ring-success" if ring == "ok" else "ring-error"
-
-    flash = ""
-    if request.query_params.get("unlinked") == "1":
-        flash += "<div class='alert alert-success shadow-sm'>Устройство отвязано.</div>"
-    if request.query_params.get("dev_removed") == "1":
-        flash += "<div class='alert alert-success shadow-sm'>Запись устройства в БД удалена (слот уменьшен).</div>"
-    err_q = (request.query_params.get("err") or "").strip()
-    if err_q:
-        flash += f"<div class='alert alert-error shadow-sm'>{_esc(err_q)}</div>"
 
     ref_by_block = ""
     if referrer is not None:
@@ -703,7 +1342,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     invited_rows = "".join(
         f"<tr><td>{u.id}</td><td><a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(u.first_name or u.username or '-')}</a></td>"
         f"<td>{_esc('@' + u.username) if u.username else '-'}</td><td><code class='bg-base-300 px-1 rounded text-xs'>{u.telegram_id}</code></td>"
-        f"<td>{_esc(u.created_at)}</td></tr>"
+        f"<td>{_fmt_dt_msk(u.created_at)}</td></tr>"
         for u in invited_list
     )
     ref_block = f"""
@@ -721,13 +1360,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         title = hwid_device_title(d, i + 1)
         dt = format_rw_device_datetime_local(str(d.get("createdAt") or ""))
         plat = _esc(str(d.get("platform") or "—"))
+        detail = _hwid_device_json_block(d)
         hwid_rows.append(
             "<tr>"
             f"<td class='font-medium'>{_esc(title)}</td><td>{plat}</td><td class='text-sm opacity-80'>{_esc(dt)}</td>"
-            "<td class='text-right'>"
-            f"<form method='post' action='/admin/users/{user_id}/unlink-hwid' class='inline' onsubmit=\"return confirm('Отвязать устройство в панели и уменьшить слот?');\">"
-            f"<input type='hidden' name='hwid' value=\"{_esc(hwid)}\"/>"
-            "<button class='btn btn-error btn-outline btn-md min-h-10' type='submit'>Отвязать</button></form></td></tr>"
+            f"<td class='align-top'>{detail}</td>"
+            "<td class='text-right align-top'>"
+            f"<button type='button' class='btn btn-error btn-outline btn-sm h-9 min-h-9' data-remna-open-hwid data-no-row-nav "
+            f'data-user-id="{user_id}" data-hwid="{_esc_attr(hwid)}" data-title="{_esc_attr(title)}">Отвязать</button></td></tr>'
         )
     hwid_alert = ""
     if hwid_err:
@@ -739,11 +1379,10 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     for dev in db_devices:
         dev_db_rows.append(
             f"<tr><td>{dev.id}</td><td>{_esc(dev.name)}</td><td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(dev.remnawave_client_id or '—')}</code></td>"
-            f"<td>{_esc(dev.created_at)}</td><td>{_esc(dev.last_used_at or '—')}</td>"
+            f"<td>{_fmt_dt_msk(dev.created_at)}</td><td>{_fmt_dt_msk(dev.last_used_at) if dev.last_used_at else '—'}</td>"
             "<td class='text-right'>"
-            f"<form method='post' action='/admin/users/{user_id}/unlink-device' class='inline' onsubmit=\"return confirm('Удалить слот устройства в БД и в панели?');\">"
-            f"<input type='hidden' name='device_id' value='{dev.id}'/>"
-            "<button class='btn btn-warning btn-outline btn-md min-h-10' type='submit'>Снять слот</button></form></td></tr>"
+            f"<button type='button' class='btn btn-warning btn-outline btn-sm h-9 min-h-9' data-remna-open-slot data-no-row-nav "
+            f'data-user-id="{user_id}" data-device-id="{dev.id}">Снять слот</button></td></tr>'
         )
 
     devices_block = f"""
@@ -751,9 +1390,9 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-mobile-screen-button text-accent mr-2" aria-hidden="true"></i>Устройства панели (HWID)</h3>
         {hwid_alert}
-        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th></th></tr></thead>
-        <tbody>{''.join(hwid_rows) or '<tr><td colspan="4" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
-        <p class="text-xs opacity-60">«Отвязать» вызывает API панели и уменьшает оплаченные слоты активной подписки (как в боте).</p>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th>Данные</th><th></th></tr></thead>
+        <tbody>{''.join(hwid_rows) or '<tr><td colspan="5" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
+        <p class="text-xs opacity-60">«Отвязать»: в модальном окне — только снять HWID с панели или также уменьшить оплаченный слот.</p>
       </div>
     </div>
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
@@ -766,19 +1405,27 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     """
 
     body = f"""
-    {flash}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <div class="flex flex-wrap items-start gap-4">
-          <span class='rounded-full p-1 ring-2 ring-offset-4 ring-offset-base-100 {ring_tw}'><img class='rounded-full object-cover w-16 h-16' src='{_esc(_user_avatar_url(user))}' alt='' width='64' height='64'/></span>
-          <div><h2 class="text-2xl font-bold">Пользователь #{user.id}</h2><p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p></div>
+          {_avatar_with_fallback(user, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
+          <div class="min-w-0 flex-1">
+            <h2 class="text-2xl font-bold">Пользователь #{user.id}</h2>
+            <p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p>
+            {_telegram_profile_actions(user)}
+          </div>
         </div>
         <div class="divider my-0"></div>
+        {sub_summary_html}
+        <div class="divider my-0"></div>
         <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
-        <p>Username: <b>{_esc(user.username or '-')}</b> · Telegram ID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{user.telegram_id}</code></p>
-        <p>Реф. код: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{_esc(user.referral_code)}</code></p>
-        <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b> · RemnaWave UUID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">{_esc(user.remnawave_uuid or '-')}</code></p>
-        <p>Регистрация: <b>{_esc(user.created_at)}</b></p>
+        <p>Username: <b>{_esc(user.username or '-')}</b></p>
+        {_copy_line(label="ID в боте", value=str(user.id))}
+        {_copy_line(label="Telegram ID", value=str(user.telegram_id))}
+        {_copy_line(label="UUID в панели Remnawave", value=str(user.remnawave_uuid) if user.remnawave_uuid else "—")}
+        {_copy_line(label="Реф. код", value=str(user.referral_code))}
+        <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b></p>
+        <p>Регистрация: <b>{_fmt_dt_msk(user.created_at)}</b></p>
         <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
         {ref_block}
       </div>
@@ -803,19 +1450,30 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
 
 
 @router.post("/users/{user_id}/unlink-hwid")
-async def admin_user_unlink_hwid(request: Request, user_id: int, hwid: str = Form("")) -> RedirectResponse:
+async def admin_user_unlink_hwid(
+    request: Request,
+    user_id: int,
+    hwid: str = Form(""),
+    mode: str = Form("decrease_slot"),
+) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     settings = get_settings()
+    mode_n = (mode or "decrease_slot").strip()
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
-        ok, msg = await remove_hwid_device_from_panel(session, user=user, hwid=hwid, settings=settings)
+        if mode_n == "keep_slots":
+            ok, msg = await unlink_hwid_device_keep_slots(session, user=user, hwid=hwid, settings=settings)
+            ncode = "hwid_keep"
+        else:
+            ok, msg = await remove_hwid_device_from_panel(session, user=user, hwid=hwid, settings=settings)
+            ncode = "hwid_slot"
         if ok:
             await session.commit()
-            return RedirectResponse(f"/admin/users/{user_id}?unlinked=1", status_code=303)
+            return RedirectResponse(f"/admin/users/{user_id}?n={ncode}", status_code=303)
         await session.rollback()
     err = str(msg).replace("\n", " ")[:400]
     return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
@@ -834,10 +1492,85 @@ async def admin_user_unlink_device(request: Request, user_id: int, device_id: in
         ok, msg = await remove_device_slot(session, user=user, device_id=device_id, settings=settings)
         if ok:
             await session.commit()
-            return RedirectResponse(f"/admin/users/{user_id}?dev_removed=1", status_code=303)
+            return RedirectResponse(f"/admin/users/{user_id}?n=db_slot", status_code=303)
         await session.rollback()
     err = str(msg).replace("\n", " ")[:400]
     return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.get("/profile")
+async def admin_profile(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    auth = _auth_data(request)
+    display = (settings.web_admin_profile_display_name or "").strip() or str(auth.get("label") or "Администратор")
+    kind = str(auth.get("kind") or "")
+    avatar = _esc(_auth_avatar(request))
+    admin_ids = set(settings.admin_telegram_ids)
+    parts: list[str] = []
+    if kind == "telegram":
+        tid = auth.get("id")
+        try:
+            tid_int = int(tid) if tid is not None else None
+        except (TypeError, ValueError):
+            tid_int = None
+        un = str(auth.get("username") or "").strip()
+        parts.append("<p>Вход через <b>Telegram</b>.</p>")
+        if tid_int is not None:
+            in_list = "да" if tid_int in admin_ids else "нет"
+            parts.append(
+                f"<p>Telegram ID: <code class='bg-base-300 px-1 rounded text-xs'>{tid_int}</code>"
+                f" · в <code class='text-xs'>ADMIN_TELEGRAM_IDS</code>: <b>{in_list}</b></p>"
+            )
+        if un:
+            tg_url = f"https://t.me/{url_quote(un)}"
+            parts.append(
+                f"<p>Профиль: <a class='link link-primary font-medium' href=\"{_esc(tg_url)}\" target=\"_blank\" rel=\"noopener\">@{_esc(un)}</a></p>"
+            )
+    elif kind == "github":
+        login = str(auth.get("login") or auth.get("username") or "").strip()
+        parts.append("<p>Вход через <b>GitHub</b>.</p>")
+        if login:
+            allowed_gh = {x.casefold() for x in settings.web_admin_github_logins}
+            in_list = "да" if login.casefold() in allowed_gh else "нет"
+            parts.append(
+                f"<p>Аккаунт: <a class='link link-primary font-medium' href=\"https://github.com/{_esc(login)}\" target=\"_blank\" rel=\"noopener\">{_esc(login)}</a>"
+                f" · в <code class='text-xs'>WEB_ADMIN_GITHUB_LOGINS</code>: <b>{in_list}</b></p>"
+            )
+    else:
+        parts.append("<p class='opacity-70'>Способ входа не определён.</p>")
+
+    panel_raw = (settings.remnawave_public_url or settings.remnawave_api_url or "").strip().rstrip("/")
+    if panel_raw:
+        parts.append(
+            f"<p><a class='link link-secondary font-medium' href=\"{_esc(panel_raw)}\" target=\"_blank\" rel=\"noopener\">"
+            "Панель Remnawave (как у пользователей VPN)</a></p>"
+        )
+
+    ties = "\n".join(parts)
+
+    body = f"""
+    <div class="relative mx-auto max-w-lg overflow-hidden rounded-2xl border border-base-content/10 bg-base-100 shadow-xl">
+      <div class="pointer-events-none absolute -right-4 -top-8 h-36 w-56 rotate-12 rounded-3xl bg-gradient-to-br from-secondary/50 via-primary/45 to-accent/35 blur-sm" aria-hidden="true"></div>
+      <div class="absolute right-4 top-4 z-10">
+        <span class="badge badge-secondary badge-lg font-semibold shadow-md">Админ</span>
+      </div>
+      <div class="card-body relative z-[1] gap-4 pt-6">
+        <div class="flex flex-col items-center gap-3">
+          <img src="{avatar}" alt="" class="h-24 w-24 rounded-full border-4 border-primary/35 object-cover shadow-lg ring-4 ring-base-200" width="96" height="96" />
+          <h2 class="text-center text-2xl font-bold tracking-tight">{_esc(display)}</h2>
+        </div>
+        <div class="divider my-0"></div>
+        <div class="space-y-2 text-sm opacity-90">
+          {ties}
+          <p class="mt-4 text-xs opacity-60">Права на сайте совпадают с белыми списками в .env (Telegram ID и GitHub-логины). Бот и панель используют те же проектные настройки.</p>
+        </div>
+      </div>
+    </div>
+    """
+    return _layout("Мой профиль", body, request=request, back_href="/admin/dashboard")
 
 
 @router.get("/settings")
@@ -846,14 +1579,28 @@ async def admin_settings(request: Request) -> HTMLResponse:
     if denied is not None:
         return denied
     vals = read_whitelist_values()
-    env_fields = []
-    for key, label, _fn in WEB_ADMIN_ENV_WHITELIST:
-        v = vals.get(key, "")
-        env_fields.append(
-            f"<label class=\"form-control w-full\"><span class=\"label-text\"><span class=\"font-medium\">{_esc(label)}</span> "
-            f"<span class=\"text-xs opacity-50\">({_esc(key)})</span></span>"
-            f"<input class=\"input input-bordered input-lg min-h-12 w-full font-mono text-sm\" name=\"{key}\" "
-            f'value="{_esc(v)}" autocomplete="off" /></label>'
+    tab_buttons: list[str] = []
+    tab_panels: list[str] = []
+    for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
+        active = "btn-primary" if idx == 0 else "btn-ghost"
+        tab_buttons.append(
+            f"<button type=\"button\" data-env-tab=\"{_esc(sec_id)}\" class=\"btn btn-sm h-9 min-h-9 shrink-0 gap-1.5 {active}\">"
+            f"{_esc(sec_title)}</button>"
+        )
+        hidden = "" if idx == 0 else " hidden"
+        flds: list[str] = []
+        for key, label, _getter, help_text in fields:
+            v = vals.get(key, "")
+            flds.append(
+                f"<label class=\"form-control w-full border-b border-base-content/5 pb-4 last:border-0 last:pb-0\">"
+                f"<div class=\"label\"><span class=\"label-text font-medium\">{_esc(label)}</span>"
+                f"<code class=\"label-text-alt text-[10px] opacity-50\">{_esc(key)}</code></div>"
+                f"<p class=\"text-xs leading-snug text-base-content/70 mb-2 max-w-3xl\">{_esc(help_text)}</p>"
+                f"<input class=\"input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs\" name=\"{key}\" "
+                f'value="{_esc(v)}" autocomplete="off" /></label>'
+            )
+        tab_panels.append(
+            f"<div data-env-panel=\"{_esc(sec_id)}\" class=\"env-tab-panel flex flex-col gap-4{hidden}\">{''.join(flds)}</div>"
         )
     saved_note = ""
     if request.query_params.get("env_saved") == "1":
@@ -861,29 +1608,51 @@ async def admin_settings(request: Request) -> HTMLResponse:
             "<div class='alert alert-success shadow-sm'><span>Значения записаны в файл <code class=\"bg-base-300 px-1 rounded\">.env</code>. "
             "Часть параметров подхватится без перезапуска; для секретов и подключений перезапустите контейнеры API и бота.</span></div>"
         )
+    env_tabs_script = """
+    <script>
+    (function(){
+      function show(id){
+        document.querySelectorAll('[data-env-panel]').forEach(function(p){
+          p.classList.toggle('hidden', p.getAttribute('data-env-panel')!==id);
+        });
+        document.querySelectorAll('[data-env-tab]').forEach(function(b){
+          var on=b.getAttribute('data-env-tab')===id;
+          b.classList.toggle('btn-primary',on);
+          b.classList.toggle('btn-ghost',!on);
+        });
+      }
+      document.querySelectorAll('[data-env-tab]').forEach(function(b){
+        b.addEventListener('click',function(){show(b.getAttribute('data-env-tab'));});
+      });
+    })();
+    </script>"""
     body = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+    <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Переменные .env (безопасный список)</h2>
-        <p class="text-sm opacity-70">Можно менять только перечисленные ключи (токены, <code class="bg-base-300 px-1 rounded text-xs">DATABASE_URL</code>, пароли — только вручную в .env на сервере).</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
+        <p class="text-sm opacity-70">Редактируются только безопасные ключи (пояснения — как в комментариях к <code class="bg-base-300 px-1 rounded text-xs">.env.example</code>). Токены, <code class="bg-base-300 px-1 rounded text-xs">DATABASE_URL</code>, секреты платежей и GitHub — правьте на сервере вручную.</p>
         {saved_note}
-        <form method="post" action="/admin/settings/env" class="flex flex-col gap-3">
-          {''.join(env_fields)}
-          <button class="btn btn-primary btn-lg min-h-12 w-fit gap-2" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
+        <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
+          {''.join(tab_buttons)}
+        </div>
+        <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
+          {''.join(tab_panels)}
+          <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
         </form>
       </div>
     </div>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+    <div role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-gear text-primary mr-2" aria-hidden="true"></i>Сброс БД</h2>
-        <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Внимание: полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-triangle-exclamation text-error mr-2" aria-hidden="true"></i>Опасная зона</h2>
+        <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
         <form method="post" action="/admin/settings/factory-reset" class="flex flex-wrap items-end gap-2">
-          <input class="input input-bordered input-lg min-h-12 w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
-          <button class="btn btn-error btn-lg min-h-12 gap-2" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
+          <input class="input input-bordered input-sm h-9 min-h-9 w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
+          <button class="btn btn-error btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
         </form>
-        <p class="text-sm opacity-60">Повторяет функцию сброса из Telegram-админки, но с веб-подтверждением.</p>
+        <p class="text-sm opacity-60">То же, что сброс из Telegram-админки, с подтверждением в браузере.</p>
       </div>
     </div>
+    {env_tabs_script}
     """
     return _layout("Web-admin Settings", body, request=request)
 
@@ -946,7 +1715,8 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
         status = "истек" if is_expired else ("активен" if p.is_active else "неактивен")
         tw = "text-error font-medium" if is_expired else ("text-success font-medium" if p.is_active else "text-warning font-medium")
         rows.append(
-            f"<tr><td><a class='link link-primary font-mono font-semibold' href='/admin/promos/{p.id}'>{_esc(p.code)}</a></td>"
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/promos/{p.id}' tabindex='0' role='link' aria-label='Открыть промокод'>"
+            f"<td><span class='link link-primary font-mono font-semibold'>{_esc(p.code)}</span></td>"
             f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(p.type)}</code></td><td>{_esc(_promo_reward_caption(p))}</td>"
             f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else '∞')}</td>"
             f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{tw}'>{status}</td></tr>"
@@ -954,10 +1724,10 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Промокоды</h2>"
-        "<a class='btn btn-primary btn-lg min-h-12 gap-2' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
+        "<a class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered input-lg min-h-12 w-full max-w-md font-mono uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
-        "<button class='btn btn-primary btn-lg min-h-12 gap-2' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
+        f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md font-mono text-sm uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
+        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет промокодов</td></tr>'}</tbody></table></div></div></div>"
     )
@@ -976,27 +1746,27 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
         {e}
         <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
           <label class="form-control w-full"><span class="label-text font-medium">Код</span>
-            <input class="input input-bordered input-lg min-h-12 font-mono uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 font-mono text-sm uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
-            <select class="select select-bordered select-lg min-h-12" name="promo_type">
+            <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="promo_type">
             <option value="subscription_days" {'selected' if p and p.type == 'subscription_days' else ''}>subscription_days</option>
             <option value="balance_rub" {'selected' if p and p.type == 'balance_rub' else ''}>balance_rub</option>
             <option value="topup_bonus_percent" {'selected' if p and p.type == 'topup_bonus_percent' else ''}>topup_bonus_percent</option>
           </select></label>
           <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
-            <input class="input input-bordered input-lg min-h-12" name="value" value="{_esc(p.value if p else '')}" /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="value" value="{_esc(p.value if p else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (для subscription_days)</span>
-            <input class="input input-bordered input-lg min-h-12" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
-            <input class="input input-bordered input-lg min-h-12" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')</span>
-            <input class="input input-bordered input-lg min-h-12" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
-            <select class="select select-bordered select-lg min-h-12" name="is_active">
+            <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_active">
             <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
             <option value="false" {'selected' if p is not None and not p.is_active else ''}>нет</option>
           </select></label>
-          <button class="btn btn-primary btn-lg min-h-12 gap-2 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
+          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
         </form>
       </div>
     </div>
@@ -1108,9 +1878,9 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
         <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
         <div class="flex flex-wrap gap-2">
-          <a class="btn btn-primary btn-lg min-h-12 gap-2" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
+          <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
           <form method="post" action="/admin/promos/{promo.id}/delete" onsubmit="return confirm('Удалить промокод?');">
-            <button class="btn btn-error btn-outline btn-lg min-h-12 gap-2" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
+            <button class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
           </form>
         </div>
       </div>

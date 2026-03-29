@@ -432,6 +432,46 @@ async def add_paid_device_slot(
     )
 
 
+async def unlink_hwid_device_keep_slots(
+    session: AsyncSession,
+    *,
+    user: User,
+    hwid: str,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Снять HWID только с панели: слоты подписки (devices_count) и лимит в панели не уменьшаем."""
+    sub = await get_active_subscription(session, user.id)
+    if not sub:
+        return False, plain("Нет активной подписки.")
+    if user.remnawave_uuid is None:
+        return False, plain("Ошибка профиля VPN.")
+
+    hwid = (hwid or "").strip()
+    if not hwid:
+        return False, plain("Некорректный HWID.")
+
+    rw = RemnaWaveClient(settings)
+    try:
+        await rw.delete_user_hwid_device(str(user.remnawave_uuid), hwid)
+    except RemnaWaveError as e:
+        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
+
+    r = await session.execute(
+        select(Device).where(
+            Device.user_id == user.id,
+            Device.subscription_id == sub.id,
+            Device.remnawave_client_id == hwid,
+        )
+    )
+    for row in r.scalars().all():
+        await session.delete(row)
+    await session.flush()
+    return True, join_lines(
+        plain("Устройство отвязано от панели."),
+        plain("Оплаченные слоты не изменялись."),
+    )
+
+
 async def remove_hwid_device_from_panel(
     session: AsyncSession,
     *,
