@@ -575,3 +575,70 @@ async def list_user_devices(session: AsyncSession, subscription_id: int) -> list
         select(Device).where(Device.subscription_id == subscription_id).order_by(Device.id)
     )
     return list(r.scalars().all())
+
+
+async def admin_disable_subscription_record(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    subscription_id: int,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Отключить подписку как в TG-админке: статус cancelled + DISABLED в панели."""
+    sub = await session.get(Subscription, subscription_id)
+    if sub is None or sub.user_id != user_id:
+        return False, plain("Подписка не найдена.")
+    now = datetime.now(timezone.utc)
+    if sub.status not in ("active", "trial") or sub.expires_at <= now:
+        return False, plain("Нет активной подписки для отключения.")
+    sub.status = "cancelled"
+    u = await session.get(User, user_id)
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await rw.update_user(str(u.remnawave_uuid), status="DISABLED")
+        except RemnaWaveError as e:
+            logger.warning("admin_disable_subscription_record RW: %s", e)
+    return True, plain("Подписка отключена.")
+
+
+async def admin_enable_subscription_record(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    subscription_id: int,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Включить отменённую подписку (как admin:se в боте)."""
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == subscription_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None or sub.user_id != user_id:
+        return False, plain("Подписка не найдена.")
+    if sub.status != "cancelled":
+        return False, plain("Запись не в статусе «отключена админом».")
+    plan = sub.plan
+    is_trial = plan is not None and plan.name == "Триал"
+    sub.status = "trial" if is_trial else "active"
+    if not is_trial:
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
+    u = await session.get(User, user_id)
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
+        except RemnaWaveError as e:
+            logger.warning("admin_enable_subscription_record RW: %s", e)
+    return True, plain("Подписка снова активна.")

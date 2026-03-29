@@ -19,13 +19,14 @@ from urllib.parse import quote_plus
 import httpx
 import redis.asyncio as redis_async
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import desc, distinct, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
 from shared.database import get_session_factory
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
+from shared.integrations.rw_user_meta import rw_user_first_connected_at, rw_user_online_at
 from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
@@ -42,12 +43,16 @@ from shared.models.user import User
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
 from shared.services.subscription_service import (
+    admin_disable_subscription_record,
+    admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
     remove_hwid_device_from_panel,
     remove_device_slot,
+    set_subscription_auto_renew,
     unlink_hwid_device_keep_slots,
 )
+from shared.subscription_qr import subscription_url_qr_png
 
 router = APIRouter(tags=["web-admin"])
 
@@ -382,6 +387,18 @@ def _layout(
           <button type="submit" class="btn btn-warning">Снять слот</button>
         </form>
       </div>
+    </div>
+    <div id="remna-subdis-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-subdis-title">
+      <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="subdis" aria-label="Закрыть">✕</button>
+        <h3 id="remna-subdis-title" class="font-bold text-lg mb-2 pr-10">Отключить подписку?</h3>
+        <p class="text-sm opacity-80 mb-4">Как в боте: запись подписки станет <code class="text-xs bg-base-300 px-1 rounded">cancelled</code>, учётная запись в панели Remnawave — <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code>.</p>
+        <form id="remna-subdis-form" method="post" class="flex flex-wrap gap-2 justify-end">
+          <input type="hidden" name="subscription_id" id="remna-subdis-sid" value="" />
+          <button type="button" class="btn btn-ghost" data-remna-close="subdis">Отмена</button>
+          <button type="submit" class="btn btn-error">Отключить</button>
+        </form>
+      </div>
     </div>"""
     elif not show_nav:
         main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
@@ -464,15 +481,22 @@ def _layout(
       var o=document.getElementById('remna-slot-overlay');
       if(o){o.classList.add('hidden');o.classList.remove('flex');}
     }
-    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();};
+    function remnaCloseSubdis(){
+      var o=document.getElementById('remna-subdis-overlay');
+      if(o){o.classList.add('hidden');o.classList.remove('flex');}
+    }
+    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();};
     document.addEventListener('click',function(e){
       var t=e.target;
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='hwid'){e.preventDefault();remnaCloseHwid();}
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='slot'){e.preventDefault();remnaCloseSlot();}
+      if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='subdis'){e.preventDefault();remnaCloseSubdis();}
       var hw=t&&t.closest&&t.closest('#remna-hwid-overlay');
       if(hw&&t===hw)remnaCloseHwid();
       var sl=t&&t.closest&&t.closest('#remna-slot-overlay');
       if(sl&&t===sl)remnaCloseSlot();
+      var sd=t&&t.closest&&t.closest('#remna-subdis-overlay');
+      if(sd&&t===sd)remnaCloseSubdis();
       var openH=t&&t.closest&&t.closest('[data-remna-open-hwid]');
       if(openH){
         e.preventDefault();
@@ -500,6 +524,18 @@ def _layout(
         var ov2=document.getElementById('remna-slot-overlay');
         if(ov2){ov2.classList.remove('hidden');ov2.classList.add('flex');}
       }
+      var openD=t&&t.closest&&t.closest('[data-remna-open-sub-disable]');
+      if(openD){
+        e.preventDefault();
+        var u3=openD.getAttribute('data-user-id')||'';
+        var sid=openD.getAttribute('data-sub-id')||'';
+        var df=document.getElementById('remna-subdis-form');
+        if(df){df.action='/admin/users/'+u3+'/subscription/disable';}
+        var si=document.getElementById('remna-subdis-sid');
+        if(si)si.value=sid;
+        var ov3=document.getElementById('remna-subdis-overlay');
+        if(ov3){ov3.classList.remove('hidden');ov3.classList.add('flex');}
+      }
     });
     document.addEventListener('submit',function(e){
       var f=e.target;
@@ -519,7 +555,7 @@ def _layout(
         var u=new URL(window.location.href);
         var n=u.searchParams.get('n');
         var err=u.searchParams.get('err');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(err)window.remnaToast('error',err);
         if(n||err){
@@ -564,6 +600,22 @@ def _require_login(request: Request) -> RedirectResponse | None:
 async def _session() -> AsyncSession:
     factory = get_session_factory()
     return factory()
+
+
+async def _linked_bot_user_for_admin(request: Request) -> User | None:
+    """Пользователь бота по Telegram ID из сессии web-admin (если вход через Telegram)."""
+    if not _is_logged(request):
+        return None
+    auth = _auth_data(request)
+    if str(auth.get("kind")) != "telegram":
+        return None
+    try:
+        tid = int(auth.get("id"))
+    except (TypeError, ValueError):
+        return None
+    async with await _session() as session:
+        r = await session.execute(select(User).where(User.telegram_id == tid))
+        return r.scalar_one_or_none()
 
 
 def _promo_reward_caption(promo: PromoCode) -> str:
@@ -1249,6 +1301,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         )
         active_sub = await get_active_subscription(session, user.id)
         n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
+        last_cancelled_sub = (
+            await session.execute(
+                select(Subscription)
+                .where(Subscription.user_id == user.id, Subscription.status == "cancelled")
+                .order_by(Subscription.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
     uinf: dict | None = None
     hwid_list_ok = False
@@ -1304,6 +1364,14 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             "<span class='text-xs opacity-60'> (занято / слотов в боте)</span>"
         )
         st_badge = "success" if active_sub.status in ("active", "trial") else "warning"
+        conn_extra = ""
+        if uinf:
+            oa = rw_user_online_at(uinf)
+            fa = rw_user_first_connected_at(uinf)
+            if oa is not None:
+                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b></p>"
+            if fa is not None:
+                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Первое подключение: <b>{_fmt_dt_msk(fa)}</b></p>"
         sub_summary_html = f"""
     <div class="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-base-200/90 to-base-100 p-4 shadow-md backdrop-blur-sm">
       <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">Активная подписка</h3>
@@ -1312,11 +1380,28 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <p>Трафик: {traffic_line}</p>
         <p>Устройства: {slots_line}</p>
         <p class="sm:col-span-2">Окончание: <b>{_esc(exp_msk)}</b> <span class="opacity-70">(осталось: {_esc(left_phr)})</span></p>
+        {conn_extra}
       </div>
     </div>"""
     else:
+        conn_only = ""
+        if uinf:
+            oa = rw_user_online_at(uinf)
+            fa = rw_user_first_connected_at(uinf)
+            if oa is not None or fa is not None:
+                bits = []
+                if oa is not None:
+                    bits.append(f"Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b>")
+                if fa is not None:
+                    bits.append(f"Первое подключение: <b>{_fmt_dt_msk(fa)}</b>")
+                conn_only = (
+                    "<div class='rounded-xl border border-base-content/15 bg-base-200/40 p-3 text-sm shadow-sm'>"
+                    f"<p class='text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-2'>Панель Remnawave</p>"
+                    f"{'<br/>'.join(bits)}</div>"
+                )
         sub_summary_html = (
             "<div class='alert alert-info text-sm shadow-sm'>Нет активной подписки (статусы active/trial с неистёкшим сроком).</div>"
+            + conn_only
         )
 
     subs_rows = "".join(
@@ -1331,6 +1416,62 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     )
     ring = "bad" if user.is_blocked else "ok"
     ring_tw = "ring-success" if ring == "ok" else "ring-error"
+
+    sub_url_rw: str | None = None
+    if uinf:
+        sub_url_rw = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
+
+    vpn_link_card = ""
+    if sub_url_rw:
+        vpn_link_card = f"""
+    <div class="card bg-base-100 border border-accent/25 shadow-lg bg-gradient-to-br from-accent/8 via-base-100 to-base-100">
+      <div class="card-body gap-4">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-qrcode text-accent mr-2" aria-hidden="true"></i>Подключение VPN</h3>
+        {_copy_line("Ссылка подписки", sub_url_rw)}
+        <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/40 p-4">
+          <p class="text-xs opacity-60">QR для импорта в клиент</p>
+          <img src="/admin/users/{user_id}/subscription-qr.png" alt="QR" class="max-w-[240px] rounded-lg border border-base-content/15 bg-base-100 p-2 shadow-inner" width="240" height="240" loading="lazy" />
+        </div>
+      </div>
+    </div>"""
+
+    now_check = datetime.now(UTC)
+    mgmt_html = ""
+    if active_sub and active_sub.status in ("active", "trial"):
+        exp_chk = active_sub.expires_at
+        if exp_chk is not None and exp_chk.tzinfo is None:
+            exp_chk = exp_chk.replace(tzinfo=UTC)
+        if exp_chk is not None and exp_chk > now_check:
+            ar_on = active_sub.auto_renew
+            nxt = "0" if ar_on else "1"
+            lbl = "Выключить авто-продление" if ar_on else "Включить авто-продление"
+            tip = "После срока списание не произойдёт." if ar_on else "За ~1 ч до конца — попытка продлить с баланса."
+            mgmt_html = f"""
+    <div class="card bg-base-100 border border-warning/35 shadow-lg">
+      <div class="card-body gap-4">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-sliders text-warning mr-2" aria-hidden="true"></i>Управление подпиской</h3>
+        <form method="post" action="/admin/users/{user_id}/subscription/auto-renew" class="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="enabled" value="{nxt}"/>
+          <button type="submit" class="btn btn-outline btn-warning btn-sm h-9 min-h-9">{_esc(lbl)}</button>
+          <span class="text-xs opacity-60 max-w-xs">{_esc(tip)}</span>
+        </form>
+        <div class="divider my-0"></div>
+        <p class="text-sm opacity-80">Полное отключение (как в Telegram-админке): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> в БД и <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> в панели.</p>
+        <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_sub.id}">Отключить подписку</button>
+      </div>
+    </div>"""
+    elif last_cancelled_sub is not None:
+        mgmt_html = f"""
+    <div class="card bg-base-100 border border-success/35 shadow-lg">
+      <div class="card-body gap-4">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-plug-circle-check text-success mr-2" aria-hidden="true"></i>Включить подписку</h3>
+        <p class="text-sm opacity-80">Последняя отключённая запись: <b>#{last_cancelled_sub.id}</b>.</p>
+        <form method="post" action="/admin/users/{user_id}/subscription/enable" class="flex flex-wrap gap-2">
+          <input type="hidden" name="subscription_id" value="{last_cancelled_sub.id}"/>
+          <button type="submit" class="btn btn-success btn-sm h-9 min-h-9">Включить снова</button>
+        </form>
+      </div>
+    </div>"""
 
     ref_by_block = ""
     if referrer is not None:
@@ -1405,29 +1546,38 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     """
 
     body = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
-      <div class="card-body gap-4">
-        <div class="flex flex-wrap items-start gap-4">
-          {_avatar_with_fallback(user, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
-          <div class="min-w-0 flex-1">
-            <h2 class="text-2xl font-bold">Пользователь #{user.id}</h2>
-            <p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p>
-            {_telegram_profile_actions(user)}
+    <div class="grid gap-4 xl:grid-cols-3">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg xl:col-span-2">
+        <div class="card-body gap-4">
+          <div class="flex flex-wrap items-start gap-4">
+            {_avatar_with_fallback(user, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
+            <div class="min-w-0 flex-1">
+              <h2 class="text-2xl font-bold">Пользователь #{user.id}</h2>
+              <p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p>
+              {_telegram_profile_actions(user)}
+            </div>
           </div>
+          <div class="divider my-0"></div>
+          {sub_summary_html}
+          <div class="divider my-0"></div>
+          <h3 class="text-sm font-bold uppercase tracking-wide text-base-content/50">Данные аккаунта</h3>
+          <div class="grid gap-2 text-sm sm:grid-cols-2">
+            <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
+            <p>Username: <b>{_esc(user.username or '-')}</b></p>
+          </div>
+          {_copy_line(label="ID в боте", value=str(user.id))}
+          {_copy_line(label="Telegram ID", value=str(user.telegram_id))}
+          {_copy_line(label="UUID в панели Remnawave", value=str(user.remnawave_uuid) if user.remnawave_uuid else "—")}
+          {_copy_line(label="Реф. код", value=str(user.referral_code))}
+          <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b></p>
+          <p>Регистрация: <b>{_fmt_dt_msk(user.created_at)}</b></p>
+          <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
+          {ref_block}
         </div>
-        <div class="divider my-0"></div>
-        {sub_summary_html}
-        <div class="divider my-0"></div>
-        <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
-        <p>Username: <b>{_esc(user.username or '-')}</b></p>
-        {_copy_line(label="ID в боте", value=str(user.id))}
-        {_copy_line(label="Telegram ID", value=str(user.telegram_id))}
-        {_copy_line(label="UUID в панели Remnawave", value=str(user.remnawave_uuid) if user.remnawave_uuid else "—")}
-        {_copy_line(label="Реф. код", value=str(user.referral_code))}
-        <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b></p>
-        <p>Регистрация: <b>{_fmt_dt_msk(user.created_at)}</b></p>
-        <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
-        {ref_block}
+      </div>
+      <div class="flex flex-col gap-4">
+        {vpn_link_card}
+        {mgmt_html}
       </div>
     </div>
     {devices_block}
@@ -1447,6 +1597,104 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     </div>
     """
     return _layout(f"User {user_id}", body, request=request, back_href="/admin/users")
+
+
+@router.get("/users/{user_id}/subscription-qr.png")
+async def admin_user_subscription_qr(request: Request, user_id: int) -> Response:
+    if not _is_logged(request):
+        return Response(status_code=401)
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return Response(status_code=404)
+        rw_uuid = user.remnawave_uuid
+    if rw_uuid is None:
+        return Response(status_code=404)
+    try:
+        rw = RemnaWaveClient(settings)
+        uinf = await rw.get_user(str(rw_uuid))
+        url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
+        if not url:
+            return Response(status_code=404)
+        png = subscription_url_qr_png(url)
+    except (RemnaWaveError, ValueError, OSError):
+        return Response(status_code=502)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/users/{user_id}/subscription/auto-renew")
+async def admin_user_subscription_auto_renew(
+    request: Request, user_id: int, enabled: str = Form("0")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    want_on = (enabled or "").strip() == "1"
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        ok, msg = await set_subscription_auto_renew(session, user_id, want_on)
+        if ok:
+            await session.commit()
+            n = "ar_on" if want_on else "ar_off"
+            return RedirectResponse(f"/admin/users/{user_id}?n={n}", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/disable")
+async def admin_user_subscription_disable(
+    request: Request, user_id: int, subscription_id: int = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        ok, msg = await admin_disable_subscription_record(
+            session,
+            user_id=user_id,
+            subscription_id=subscription_id,
+            settings=settings,
+        )
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/users/{user_id}?n=sub_off", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/enable")
+async def admin_user_subscription_enable(
+    request: Request, user_id: int, subscription_id: int = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        ok, msg = await admin_enable_subscription_record(
+            session,
+            user_id=user_id,
+            subscription_id=subscription_id,
+            settings=settings,
+        )
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/users/{user_id}?n=sub_on", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
 
 
 @router.post("/users/{user_id}/unlink-hwid")
@@ -1498,6 +1746,26 @@ async def admin_user_unlink_device(request: Request, user_id: int, device_id: in
     return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
 
 
+@router.get("/profile/vpn-qr.png")
+async def admin_profile_vpn_qr(request: Request) -> Response:
+    if not _is_logged(request):
+        return Response(status_code=401)
+    settings = get_settings()
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None or linked.remnawave_uuid is None:
+        return Response(status_code=404)
+    try:
+        rw = RemnaWaveClient(settings)
+        uinf = await rw.get_user(str(linked.remnawave_uuid))
+        url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
+        if not url:
+            return Response(status_code=404)
+        png = subscription_url_qr_png(url)
+    except (RemnaWaveError, ValueError, OSError):
+        return Response(status_code=502)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/profile")
 async def admin_profile(request: Request) -> HTMLResponse:
     denied = _require_login(request)
@@ -1517,11 +1785,11 @@ async def admin_profile(request: Request) -> HTMLResponse:
         except (TypeError, ValueError):
             tid_int = None
         un = str(auth.get("username") or "").strip()
-        parts.append("<p>Вход через <b>Telegram</b>.</p>")
+        parts.append("<p class='text-base'>Вход через <b>Telegram</b>.</p>")
         if tid_int is not None:
             in_list = "да" if tid_int in admin_ids else "нет"
             parts.append(
-                f"<p>Telegram ID: <code class='bg-base-300 px-1 rounded text-xs'>{tid_int}</code>"
+                f"<p>Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{tid_int}</code>"
                 f" · в <code class='text-xs'>ADMIN_TELEGRAM_IDS</code>: <b>{in_list}</b></p>"
             )
         if un:
@@ -1531,7 +1799,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
             )
     elif kind == "github":
         login = str(auth.get("login") or auth.get("username") or "").strip()
-        parts.append("<p>Вход через <b>GitHub</b>.</p>")
+        parts.append("<p class='text-base'>Вход через <b>GitHub</b>.</p>")
         if login:
             allowed_gh = {x.casefold() for x in settings.web_admin_github_logins}
             in_list = "да" if login.casefold() in allowed_gh else "нет"
@@ -1546,28 +1814,93 @@ async def admin_profile(request: Request) -> HTMLResponse:
     if panel_raw:
         parts.append(
             f"<p><a class='link link-secondary font-medium' href=\"{_esc(panel_raw)}\" target=\"_blank\" rel=\"noopener\">"
-            "Панель Remnawave (как у пользователей VPN)</a></p>"
+            "Открыть панель Remnawave</a></p>"
         )
 
     ties = "\n".join(parts)
 
+    linked = await _linked_bot_user_for_admin(request)
+    uinf_p: dict | None = None
+    sub_url_p: str | None = None
+    if linked is not None and linked.remnawave_uuid is not None:
+        try:
+            rw = RemnaWaveClient(settings)
+            uinf_p = await rw.get_user(str(linked.remnawave_uuid))
+            sub_url_p = subscription_url_for_telegram(uinf_p.get("subscriptionUrl"), settings)
+        except RemnaWaveError:
+            pass
+
+    vpn_block = ""
+    if sub_url_p:
+        conn_lines = ""
+        if uinf_p is not None:
+            oa = rw_user_online_at(uinf_p)
+            fa = rw_user_first_connected_at(uinf_p)
+            if oa is not None:
+                conn_lines += f"<p class='text-sm text-base-content/75'>Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b></p>"
+            if fa is not None:
+                conn_lines += f"<p class='text-sm text-base-content/75'>Первое подключение: <b>{_fmt_dt_msk(fa)}</b></p>"
+        vpn_block = f"""
+    <div class="card bg-base-100 border border-success/30 shadow-lg overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-success/70 via-primary/60 to-accent/60"></div>
+      <div class="card-body gap-4">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-link text-success mr-2" aria-hidden="true"></i>Моя VPN-подписка</h3>
+        <p class="text-xs opacity-70">Данные вашего аккаунта в боте (совпадающий Telegram ID).</p>
+        {_copy_line("Ссылка подписки", sub_url_p)}
+        {conn_lines}
+        <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/50 p-4">
+          <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">QR-код</span>
+          <img src="/admin/profile/vpn-qr.png" alt="QR подписки" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
+        </div>
+      </div>
+    </div>"""
+    elif kind == "github":
+        vpn_block = """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-2">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-circle-info text-info mr-2" aria-hidden="true"></i>VPN-подписка</h3>
+        <p class="text-sm opacity-80">Ссылку подписки и QR можно посмотреть, войдя в админку через <b>Telegram</b> тем же аккаунтом, что в боте.</p>
+      </div>
+    </div>"""
+    elif kind == "telegram" and linked is None:
+        vpn_block = """
+    <div class="card bg-base-100 border border-warning/30 shadow-lg">
+      <div class="card-body gap-2">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-triangle-exclamation text-warning mr-2" aria-hidden="true"></i>VPN-подписка</h3>
+        <p class="text-sm opacity-80">В базе бота нет пользователя с вашим Telegram ID. Нажмите /start в боте, затем обновите эту страницу.</p>
+      </div>
+    </div>"""
+    elif kind == "telegram" and linked is not None and linked.remnawave_uuid is None:
+        vpn_block = """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-2">
+        <h3 class="text-lg font-semibold">VPN-подписка</h3>
+        <p class="text-sm opacity-80">У записи в боте ещё нет UUID панели Remnawave — активируйте триал или купите подписку в боте.</p>
+      </div>
+    </div>"""
+
     body = f"""
-    <div class="relative mx-auto max-w-lg overflow-hidden rounded-2xl border border-base-content/10 bg-base-100 shadow-xl">
-      <div class="pointer-events-none absolute -right-4 -top-8 h-36 w-56 rotate-12 rounded-3xl bg-gradient-to-br from-secondary/50 via-primary/45 to-accent/35 blur-sm" aria-hidden="true"></div>
+    <div class="mx-auto flex max-w-3xl flex-col gap-6">
+    <div class="relative overflow-hidden rounded-2xl border border-base-content/10 bg-base-100 shadow-xl">
+      <div class="pointer-events-none absolute -right-4 -top-8 h-40 w-60 rotate-12 rounded-3xl bg-gradient-to-br from-secondary/50 via-primary/45 to-accent/35 blur-sm" aria-hidden="true"></div>
       <div class="absolute right-4 top-4 z-10">
         <span class="badge badge-secondary badge-lg font-semibold shadow-md">Админ</span>
       </div>
-      <div class="card-body relative z-[1] gap-4 pt-6">
+      <div class="card-body relative z-[1] gap-4 pt-8">
         <div class="flex flex-col items-center gap-3">
           <img src="{avatar}" alt="" class="h-24 w-24 rounded-full border-4 border-primary/35 object-cover shadow-lg ring-4 ring-base-200" width="96" height="96" />
           <h2 class="text-center text-2xl font-bold tracking-tight">{_esc(display)}</h2>
         </div>
-        <div class="divider my-0"></div>
-        <div class="space-y-2 text-sm opacity-90">
-          {ties}
-          <p class="mt-4 text-xs opacity-60">Права на сайте совпадают с белыми списками в .env (Telegram ID и GitHub-логины). Бот и панель используют те же проектные настройки.</p>
-        </div>
       </div>
+    </div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
+        <div class="space-y-2 text-sm">{ties}</div>
+        <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
+      </div>
+    </div>
+    {vpn_block}
     </div>
     """
     return _layout("Мой профиль", body, request=request, back_href="/admin/dashboard")

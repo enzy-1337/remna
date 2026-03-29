@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
+from shared.subscription_qr import subscription_url_qr_png
 from shared.services.subscription_service import (
     get_active_subscription,
     list_paid_plans,
@@ -33,7 +34,10 @@ def _sub_main_keyboard(
     b = InlineKeyboardBuilder()
     if has_active:
         if subscription_url:
-            b.row(InlineKeyboardButton(text="📎 Подключиться", url=subscription_url))
+            b.row(
+                InlineKeyboardButton(text="📎 Подключиться", url=subscription_url),
+                InlineKeyboardButton(text="🔳 QR-код", callback_data="sub:qr"),
+            )
         b.row(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
@@ -63,6 +67,42 @@ async def _show_subscription_main(
         subscription_url=sub_url,
     ).as_markup()
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+
+
+@router.callback_query(F.data == "sub:qr")
+async def cb_sub_qr(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    _cap, sub_url = await build_subscription_detail_caption(
+        session, user=db_user, settings=settings, is_bot_admin=is_bot_admin
+    )
+    if not sub_url:
+        await cq.answer("Нет ссылки подписки", show_alert=True)
+        return
+    try:
+        png = subscription_url_qr_png(sub_url)
+    except ValueError:
+        await cq.answer("Нет ссылки подписки", show_alert=True)
+        return
+    if cq.message is None or cq.bot is None:
+        return
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Назад в подписку", callback_data="menu:sub_main"))
+    cap = join_lines("🔳 " + bold("QR для подключения"), "", plain("Отсканируйте в приложении VPN."))
+    await cq.message.answer_photo(
+        BufferedInputFile(png, filename="subscription.png"),
+        caption=cap,
+        parse_mode="MarkdownV2",
+        reply_markup=kb.as_markup(),
+    )
+    await cq.answer()
 
 
 @router.callback_query(F.data.in_(("menu:sub_main", "menu:subscription")))
