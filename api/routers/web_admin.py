@@ -53,106 +53,126 @@ def _auth_avatar(request: Request) -> str:
     return "https://ui-avatars.com/api/?background=1f2430&color=e6e8eb&name=Admin"
 
 
-def _layout(title: str, body: str, *, request: Request | None = None, show_nav: bool = True) -> HTMLResponse:
-    nav_auth = ""
-    if request is not None and _auth_label(request):
-        user_label = _auth_label(request) or "admin"
-        nav_auth = (
-            "<div class='nav-right'>"
-            f"<img src='{_esc(_auth_avatar(request))}' class='avatar me' alt='me'/>"
-            f"<span class='muted me-label'>{_esc(user_label)}</span>"
-            "<form method='post' action='/admin/logout' style='display:inline'>"
-            "<button type='submit' class='btn ghost'>Выйти</button></form>"
-            "</div>"
-        )
-    nav_block = ""
-    if show_nav:
-        nav_block = f"""
-    <header class="topbar">
-      <div class="brand">Remna Web Admin</div>
-      <input type="checkbox" id="menu-toggle" class="menu-toggle" />
-      <label for="menu-toggle" class="menu-btn"><span></span><span></span><span></span></label>
-      <nav class="nav">
-        <a href="/admin/dashboard">Дашборд</a>
-        <a href="/admin/users">Пользователи</a>
-        <a href="/admin/promos">Промокоды</a>
-        <a href="/admin/settings">Настройки</a>
-      </nav>
-      {nav_auth}
-    </header>
-"""
-    page = f"""<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
+def _head_common(title: str) -> str:
+    return f"""  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{_esc(title)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {{
+      theme: {{ extend: {{ fontFamily: {{ sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"] }} }} }}
+    }};
+  </script>
   <style>
-    :root {{ --bg:#0b1020; --bg2:#101936; --card:#131c33cc; --stroke:#2a3b66; --txt:#e9edf7; --muted:#a7b4d0; --acc:#7aa2ff; --ok:#60d394; --bad:#ff6b6b; --warn:#ffd166; }}
-    * {{ box-sizing:border-box; }}
-    body {{ font-family: Inter, Segoe UI, Arial, sans-serif; margin:0; color:var(--txt); background: radial-gradient(circle at 20% -20%, #2d4fa222, transparent 40%), linear-gradient(150deg, var(--bg), var(--bg2)); min-height:100vh; }}
-    .wrap {{ max-width:1160px; margin:0 auto; padding:16px; }}
-    .topbar {{ position:sticky; top:0; z-index:10; display:flex; gap:14px; align-items:center; margin-bottom:16px; padding:12px; border:1px solid var(--stroke); border-radius:16px; background:#0d162de6; backdrop-filter: blur(8px); }}
-    .brand {{ font-weight:700; }}
-    .nav {{ display:flex; gap:8px; align-items:center; }}
-    .nav a {{ color:#d7e2ff; text-decoration:none; padding:8px 10px; border-radius:10px; border:1px solid transparent; transition:.2s; }}
-    .nav a:hover {{ border-color:var(--stroke); background:#1a2748; }}
-    .nav-right {{ margin-left:auto; display:flex; align-items:center; gap:8px; }}
-    .menu-toggle, .menu-btn {{ display:none; }}
-    .card {{ background:var(--card); border:1px solid var(--stroke); border-radius:16px; padding:16px; margin-bottom:14px; box-shadow: 0 10px 30px #02061155; }}
-    table {{ width:100%; border-collapse:collapse; }}
-    th, td {{ text-align:left; padding:8px; border-bottom:1px solid #2a2f3a; vertical-align:top; }}
-    input, select {{ background:#0f162b; border:1px solid var(--stroke); color:var(--txt); padding:10px; border-radius:10px; }}
-    button, .btn {{ background:linear-gradient(135deg, #5989ff, #6f68ff); border:none; color:white; padding:9px 12px; border-radius:10px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:6px; }}
-    .btn.ghost {{ background:#1a2748; border:1px solid var(--stroke); }}
-    .muted {{ color:var(--muted); }}
-    .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-    .ok {{ color:var(--ok); }}
-    .bad {{ color:var(--bad); }}
-    .warn {{ color:var(--warn); }}
-    code {{ background:#0f162b; padding:2px 6px; border-radius:6px; }}
-    .avatar {{ border-radius:50%; object-fit:cover; background:#0f162b; }}
-    .avatar.me {{ width:28px; height:28px; border:2px solid #6f8dff; }}
-    .stat-grid {{ display:grid; grid-template-columns:repeat(3, minmax(170px,1fr)); gap:10px; }}
-    .donut {{ --deg:180deg; width:118px; height:118px; border-radius:50%; background:conic-gradient(#86a6ff var(--deg), #1c2b50 0); display:grid; place-items:center; margin:8px 0; }}
-    .donut::after {{ content:""; width:78px; height:78px; border-radius:50%; background:#101936; box-shadow:inset 0 0 0 1px #334a7b; }}
-    .donut-wrap {{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }}
-    .login-wrap {{ min-height:80vh; display:grid; place-items:center; justify-items:center; width:100%; }}
-    .login-card {{ width:min(100%, 460px); margin-left:auto; margin-right:auto; text-align:center; }}
-    .login-card h2 {{ margin-top:0; text-align:center; }}
-    .login-actions {{ display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; }}
-    .login-card .row {{ justify-content:center; width:100%; }}
-    .login-card .btn {{ justify-content:center; }}
-    .me-label {{ font-weight:600; }}
-    .identity {{ display:flex; align-items:center; gap:10px; }}
-    .status-ring {{ padding:2px; border-radius:999px; display:inline-block; }}
-    .status-ring.ok {{ background:var(--ok); }}
-    .status-ring.bad {{ background:var(--bad); }}
-    .user-cell {{ display:flex; gap:10px; align-items:center; }}
-    @media (max-width: 860px) {{
-      .topbar {{ flex-wrap:wrap; }}
-      .menu-btn {{ display:flex; width:38px; height:34px; border:1px solid var(--stroke); border-radius:10px; align-items:center; justify-content:center; flex-direction:column; gap:4px; cursor:pointer; margin-left:auto; }}
-      .menu-btn span {{ display:block; width:16px; height:2px; background:#dce7ff; }}
-      .nav {{ display:none; width:100%; flex-direction:column; align-items:stretch; }}
-      .menu-toggle:checked ~ .nav {{ display:flex; }}
-      .nav-right {{ width:100%; justify-content:flex-end; }}
-      .stat-grid {{ grid-template-columns:1fr; }}
-      th, td {{ font-size:13px; }}
-    }}
-  </style>
+    body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+  </style>"""
+
+
+def _nav_link_class(href: str, cur: str) -> str:
+    base = "flex items-center gap-0 rounded-xl px-2.5 py-2.5 text-sm font-medium transition-colors no-underline"
+    h = href.rstrip("/")
+    c = cur.rstrip("/") or "/"
+    active = False
+    if h == "/admin/dashboard":
+        active = c in ("/admin/dashboard", "/admin")
+    elif c == h or c.startswith(h + "/"):
+        active = True
+    if active:
+        return f"{base} bg-primary/20 text-primary shadow-sm border border-primary/20"
+    return f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content border border-transparent"
+
+
+def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
+    cls = _nav_link_class(href, cur)
+    return f"""<a href="{href}" class="{cls}">
+      <i class="{icon_class} fa-fw w-7 shrink-0 text-center text-base opacity-90" aria-hidden="true"></i>
+      <span class="nav-label ml-1 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
+    </a>"""
+
+
+def _mob_nav_cls(href: str, cur: str) -> str:
+    h = href.rstrip("/")
+    c = cur.rstrip("/") or "/"
+    act = (h == "/admin/dashboard" and c in ("/admin/dashboard", "/admin")) or (
+        h != "/admin/dashboard" and (c == h or c.startswith(h + "/"))
+    )
+    return "text-primary font-semibold" if act else "text-base-content/55"
+
+
+def _layout(title: str, body: str, *, request: Request | None = None, show_nav: bool = True) -> HTMLResponse:
+    cur = ""
+    if request is not None:
+        cur = request.url.path.rstrip("/") or "/"
+
+    nav_blocks = ""
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 p-4 pb-24 md:pb-8 md:pl-[4.75rem]"
+
+    if show_nav and request is not None:
+        user_label = _auth_label(request) or "admin"
+        avatar = _esc(_auth_avatar(request))
+        desktop_sidebar = f"""
+    <aside class="group/sidebar fixed left-0 top-0 z-40 hidden h-screen w-[4.75rem] flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-60 md:flex">
+      <div class="flex shrink-0 items-center gap-0 px-2 pb-4 pt-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/20 text-primary">
+          <i class="fa-solid fa-shield-halved text-lg" aria-hidden="true"></i>
+        </span>
+        <span class="nav-label ml-2 max-w-0 overflow-hidden whitespace-nowrap text-base font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">Remna</span>
+      </div>
+      <nav class="flex flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-2">
+        {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
+        {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
+        {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
+        {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
+      </nav>
+      <div class="mt-auto border-t border-base-content/10 p-2">
+        <div class="flex items-center gap-0">
+          <img src="{avatar}" alt="" class="h-10 w-10 shrink-0 rounded-full border-2 border-primary/40 object-cover ring-2 ring-base-100" width="40" height="40" />
+          <div class="nav-label flex min-w-0 flex-1 flex-col gap-1 pl-2 max-w-0 overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100">
+            <span class="truncate text-sm font-semibold text-base-content">{_esc(user_label)}</span>
+            <form method="post" action="/admin/logout">
+              <button type="submit" class="btn btn-ghost btn-xs gap-1 px-0 normal-case text-error hover:bg-error/10">
+                <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Выйти
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </aside>"""
+        mobile_nav = f"""
+    <nav class="fixed bottom-0 left-0 right-0 z-30 flex h-16 items-center justify-around border-t border-base-content/10 bg-base-300/95 px-1 py-2 backdrop-blur-md md:hidden" aria-label="Мобильное меню">
+      <a href="/admin/dashboard" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-lg"></i><span>Дашборд</span></a>
+      <a href="/admin/users" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-lg"></i><span>Юзеры</span></a>
+      <a href="/admin/promos" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-lg"></i><span>Промо</span></a>
+      <a href="/admin/settings" class="flex flex-col items-center gap-0.5 p-2 text-[10px] {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-lg"></i><span>Настр.</span></a>
+      <form method="post" action="/admin/logout" class="flex flex-col items-center justify-center p-2"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-lg"></i></button></form>
+    </nav>"""
+        nav_blocks = desktop_sidebar + mobile_nav
+    elif not show_nav:
+        main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
+
+    page = f"""<!DOCTYPE html>
+<html lang="ru" data-theme="night">
+<head>
+{_head_common(title)}
 </head>
-<body>
-  <div class="wrap">
-    {nav_block}
+<body class="text-base-content antialiased">
+  {nav_blocks}
+  <div class="{main_cls} max-w-[1400px] mx-auto w-full">
     {body}
   </div>
 </body>
-</html>
-"""
+</html>"""
     return HTMLResponse(page)
+</think>
+Проверяю файл после правки — исправляю дублирование и структуру сайдбара.
+
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+Read
 
 
 def _is_logged(request: Request) -> bool:
@@ -231,7 +251,7 @@ async def admin_login_page(request: Request) -> HTMLResponse:
     if _is_logged(request):
         return RedirectResponse("/admin/dashboard", status_code=303)
     bot_username = (get_settings().bot_username or "").strip()
-    telegram_block = "<p class='muted'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
+    telegram_block = "<p class='text-sm opacity-60'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
     base = (get_settings().public_site_url or "").strip().rstrip("/")
     auth_url = "/admin/login/telegram/widget"
     if base:
@@ -241,12 +261,18 @@ async def admin_login_page(request: Request) -> HTMLResponse:
       <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
 """
     body = f"""
-    <div class="login-wrap">
-      <div class="card login-card">
-        <h2>Вход</h2>
-        <div class="login-actions">
-          <div class="row">{telegram_block}</div>
-          <a class="btn" href="/admin/login/github/start">Войти через GitHub</a>
+    <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
+      <div class="card-body items-center gap-6 text-center">
+        <h2 class="card-title justify-center text-2xl font-bold">
+          <i class="fa-solid fa-right-to-bracket text-primary" aria-hidden="true"></i>
+          <span>Вход</span>
+        </h2>
+        <div class="flex w-full flex-col items-center gap-4">
+          <div class="flex flex-wrap justify-center">{telegram_block}</div>
+          <a class="btn btn-primary gap-2" href="/admin/login/github/start">
+            <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
+            Войти через GitHub
+          </a>
         </div>
       </div>
     </div>
@@ -434,24 +460,35 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     month_pct = int(min(100, round((safe_month / safe_total) * 100))) if safe_total > 0 else 0
     day_pct = int(min(100, round((safe_day / safe_month) * 100))) if safe_month > 0 else 0
     body = f"""
-    <div class="card"><h2>Доход</h2>
-      <p>За все время: <b>{_esc(total_income)} ₽</b> · За месяц: <b>{_esc(month_income)} ₽</b> · За день: <b>{_esc(day_income)} ₽</b></p>
-      <div class="stat-grid">
-        <div class="card">
-          <div class="muted">Месяц от всего оборота</div>
-          <div class="donut-wrap"><div class="donut" style="--deg:{month_pct * 3.6}deg"></div><div><b>{month_pct}%</b></div></div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-6">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
+        <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
+        · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
+        · За день: <span class="font-bold">{_esc(day_income)} ₽</span></p>
+        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body items-center text-center gap-2">
+              <p class="text-sm opacity-60">Месяц от всего оборота</p>
+              <div class="radial-progress text-primary" style="--value:{month_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{month_pct}">{month_pct}%</div>
+            </div>
+          </div>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body items-center text-center gap-2">
+              <p class="text-sm opacity-60">День от месяца</p>
+              <div class="radial-progress text-secondary" style="--value:{day_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{day_pct}">{day_pct}%</div>
+            </div>
+          </div>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md sm:col-span-2 xl:col-span-1">
+            <div class="card-body justify-center">
+              <p class="text-sm opacity-60 mb-2">Пользователи / промокоды</p>
+              <p class="text-2xl font-bold"><span class="text-primary">{users_count}</span> <span class="opacity-40">/</span> <span>{promos_count}</span></p>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <div class="muted">День от месяца</div>
-          <div class="donut-wrap"><div class="donut" style="--deg:{day_pct * 3.6}deg"></div><div><b>{day_pct}%</b></div></div>
-        </div>
-        <div class="card">
-          <div class="muted">Пользователи / промокоды</div>
-          <p><b>{users_count}</b> / <b>{promos_count}</b></p>
-        </div>
+        <p class="text-sm opacity-60">Учитываются только платежи (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
+        <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(bars))}</pre>
       </div>
-      <p class="muted">Учитываются только платежи ({'<code>type=topup,status=completed</code>'}).</p>
-      <pre>{_esc(chr(10).join(bars))}</pre>
     </div>
     """
     return _layout("Web-admin Dashboard", body, request=request)
@@ -495,28 +532,32 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
     rows = []
     for u in users:
         ring = "bad" if u.is_blocked else "ok"
+        ring_tw = "ring-success" if ring == "ok" else "ring-error"
+        badge_tw = "badge-error" if u.is_blocked else "badge-success"
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
         rows.append(
             "<tr>"
-            f"<td><div class='user-cell'><span class='status-ring {ring}'><img class='avatar' src='{_esc(_user_avatar_url(u))}' alt='u' width='34' height='34'/></span>"
-            f"<a href='/admin/users/{u.id}'>{_esc(display)}</a></div></td>"
-            f"<td>{_esc(username)}</td><td><code>{u.telegram_id}</code></td><td>{u.id}</td><td>{_esc(u.balance)}</td>"
-            f"<td>{'Заблокирован' if u.is_blocked else 'Активен'}</td></tr>"
+            f"<td><div class='flex items-center gap-3'><span class='rounded-full p-0.5 ring-2 ring-offset-2 ring-offset-base-100 {ring_tw}'><img class='rounded-full object-cover w-9 h-9' src='{_esc(_user_avatar_url(u))}' alt='' width='36' height='36'/></span>"
+            f"<a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(display)}</a></div></td>"
+            f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
+            f"<td><span class='badge {badge_tw} badge-sm'>{'Заблокирован' if u.is_blocked else 'Активен'}</span></td></tr>"
         )
     pages = []
     if total_pages > 1:
         for p in range(1, total_pages + 1):
-            cls = "btn ghost" if p != page else "btn"
+            cls = "btn btn-ghost btn-sm" if p != page else "btn btn-primary btn-sm"
             pages.append(f"<a class='{cls}' href='/admin/users?q={_esc(needle)}&page={p}'>{p}</a>")
     body = (
-        "<div class='card'><h2>Пользователи</h2>"
-        "<form method='get' class='row'>"
-        f"<input name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
-        "<button type='submit'>Поиск</button></form><br/>"
-        "<table><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=6 class=muted>Нет данных</td></tr>'}</tbody></table>"
-        f"<div class='row' style='margin-top:10px'><span class='muted'>Страница {page} из {total_pages}</span>{''.join(pages)}</div></div>"
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
+        "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
+        "<form method='get' class='flex flex-wrap items-end gap-2'>"
+        f"<input class='input input-bordered w-full max-w-md' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
+        "<button class='btn btn-primary btn-sm gap-1' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Статус</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        f"<div class='flex flex-wrap items-center gap-2'><span class='text-sm opacity-60'>Страница {page} из {total_pages}</span>{''.join(pages)}</div></div></div>"
     )
     return _layout("Web-admin Users", body, request=request)
 
@@ -529,7 +570,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
-            return _layout("User not found", "<div class='card'><h2>Пользователь не найден</h2></div>", request=request)
+            return _layout(
+                "User not found",
+                "<div class='alert alert-warning shadow-lg'><i class='fa-solid fa-user-slash mr-2' aria-hidden='true'></i><span>Пользователь не найден</span></div>",
+                request=request,
+            )
         subs = list(
             (
                 await session.execute(
@@ -562,27 +607,35 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         for t in txs
     )
     ring = "bad" if user.is_blocked else "ok"
+    ring_tw = "ring-success" if ring == "ok" else "ring-error"
     body = f"""
-    <div class="card">
-      <div class="user-cell">
-        <span class='status-ring {ring}'><img class='avatar' src='{_esc(_user_avatar_url(user))}' alt='u' width='68' height='68'/></span>
-        <div><h2>Пользователь #{user.id}</h2><div class="muted">{_esc(user.first_name or user.username or '-')}</div></div>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-4">
+        <div class="flex flex-wrap items-start gap-4">
+          <span class='rounded-full p-1 ring-2 ring-offset-4 ring-offset-base-100 {ring_tw}'><img class='rounded-full object-cover w-16 h-16' src='{_esc(_user_avatar_url(user))}' alt='' width='64' height='64'/></span>
+          <div><h2 class="text-2xl font-bold">Пользователь #{user.id}</h2><p class="text-sm opacity-60">{_esc(user.first_name or user.username or '-')}</p></div>
+        </div>
+        <div class="divider my-0"></div>
+        <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
+        <p>Username: <b>{_esc(user.username or '-')}</b> · Telegram ID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{user.telegram_id}</code></p>
+        <p>Баланс: <b class="text-primary">{_esc(user.balance)} ₽</b> · RemnaWave UUID: <code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">{_esc(user.remnawave_uuid or '-')}</code></p>
+        <p>Регистрация: <b>{_esc(user.created_at)}</b></p>
+        <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
       </div>
-      <p>Имя: <b>{_esc((user.first_name or '') + ' ' + (user.last_name or ''))}</b></p>
-      <p>Username: <b>{_esc(user.username or '-')}</b> · Telegram ID: <code>{user.telegram_id}</code></p>
-      <p>Баланс: <b>{_esc(user.balance)} ₽</b> · RemnaWave UUID: <code>{_esc(user.remnawave_uuid or '-')}</code></p>
-      <p>Регистрация: <b>{_esc(user.created_at)}</b></p>
-      <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
     </div>
-    <div class="card">
-      <h3>История подписок ({len(subs)})</h3>
-      <table><thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>До</th><th>Устройства</th></tr></thead>
-      <tbody>{subs_rows or '<tr><td colspan=5 class=muted>Нет подписок</td></tr>'}</tbody></table>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>История подписок ({len(subs)})</h3>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>До</th><th>Устройства</th></tr></thead>
+        <tbody>{subs_rows or '<tr><td colspan="5" class="opacity-50">Нет подписок</td></tr>'}</tbody></table></div>
+      </div>
     </div>
-    <div class="card">
-      <h3>История транзакций ({len(txs)})</h3>
-      <table><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th></tr></thead>
-      <tbody>{tx_rows or '<tr><td colspan=6 class=muted>Нет транзакций</td></tr>'}</tbody></table>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>История транзакций ({len(txs)})</h3>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th></tr></thead>
+        <tbody>{tx_rows or '<tr><td colspan="6" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
+      </div>
     </div>
     """
     return _layout(f"User {user_id}", body, request=request)
@@ -594,14 +647,16 @@ async def admin_settings(request: Request) -> HTMLResponse:
     if denied is not None:
         return denied
     body = """
-    <div class="card">
-      <h2>Админские настройки / сброс БД</h2>
-      <p class="warn">Внимание: полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</p>
-      <form method="post" action="/admin/settings/factory-reset" class="row">
-        <input name="confirm_text" placeholder="Введите WIPE ALL" />
-        <button type="submit">Сделать factory reset</button>
-      </form>
-      <p class="muted">Повторяет функцию сброса из Telegram-админки, но с веб-подтверждением.</p>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-gear text-primary mr-2" aria-hidden="true"></i>Админские настройки / сброс БД</h2>
+        <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Внимание: полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
+        <form method="post" action="/admin/settings/factory-reset" class="flex flex-wrap items-end gap-2">
+          <input class="input input-bordered w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
+          <button class="btn btn-error btn-sm gap-1" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
+        </form>
+        <p class="text-sm opacity-60">Повторяет функцию сброса из Telegram-админки, но с веб-подтверждением.</p>
+      </div>
     </div>
     """
     return _layout("Web-admin Settings", body, request=request)
@@ -615,7 +670,7 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
     if confirm_text.strip() != "WIPE ALL":
         return _layout(
             "Reset rejected",
-            "<div class='card'><h2>Сброс отменен</h2><p>Неверная фраза подтверждения.</p></div>",
+            "<div class='alert alert-info shadow-lg'><h2 class='font-bold'>Сброс отменен</h2><p>Неверная фраза подтверждения.</p></div>",
             request=request,
         )
     async with await _session() as session:
@@ -623,7 +678,7 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
         await session.commit()
     return _layout(
         "Reset done",
-        "<div class='card'><h2>База очищена</h2><p>Factory reset выполнен успешно.</p></div>",
+        "<div class='alert alert-success shadow-lg'><h2 class='font-bold'>База очищена</h2><p>Factory reset выполнен успешно.</p></div>",
         request=request,
     )
 
@@ -644,53 +699,60 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     for p in promos:
         is_expired = p.expires_at is not None and p.expires_at < now
         status = "истек" if is_expired else ("активен" if p.is_active else "неактивен")
-        status_cls = "bad" if is_expired else ("ok" if p.is_active else "warn")
+        tw = "text-error font-medium" if is_expired else ("text-success font-medium" if p.is_active else "text-warning font-medium")
         rows.append(
-            f"<tr><td><a href='/admin/promos/{p.id}'>{_esc(p.code)}</a></td>"
-            f"<td>{_esc(p.type)}</td><td>{_esc(_promo_reward_caption(p))}</td>"
+            f"<tr><td><a class='link link-primary font-mono font-semibold' href='/admin/promos/{p.id}'>{_esc(p.code)}</a></td>"
+            f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(p.type)}</code></td><td>{_esc(_promo_reward_caption(p))}</td>"
             f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else '∞')}</td>"
-            f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{status_cls}'>{status}</td></tr>"
+            f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{tw}'>{status}</td></tr>"
         )
     body = (
-        "<div class='card'><h2>Промокоды</h2>"
-        "<div class='row'><a href='/admin/promos/new'><button type='button'>Создать промокод</button></a></div><br/>"
-        "<form method='get' class='row'>"
-        f"<input name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
-        "<button type='submit'>Искать</button></form><br/>"
-        "<table><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=6 class=muted>Нет промокодов</td></tr>'}</tbody></table></div>"
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
+        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Промокоды</h2>"
+        "<a class='btn btn-primary btn-sm gap-1' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
+        "<form method='get' class='flex flex-wrap items-end gap-2'>"
+        f"<input class='input input-bordered w-full max-w-md font-mono uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
+        "<button class='btn btn-primary btn-sm gap-1' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет промокодов</td></tr>'}</tbody></table></div></div></div>"
     )
     return _layout("Web-admin Promos", body, request=request)
 
 
 def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | None = None) -> str:
     p = promo
-    e = f"<p class='bad'>{_esc(error)}</p>" if error else ""
+    e = f"<div class='alert alert-error text-sm'>{_esc(error)}</div>" if error else ""
+    ro = "readonly" if p else ""
     return f"""
-    <div class="card">
-      <h2>{'Редактирование промокода' if p else 'Создание промокода'}</h2>
-      {e}
-      <form method="post" action="{_esc(action)}">
-        <p>Код<br/><input name="code" value="{_esc(p.code if p else '')}" {'readonly' if p else ''} /></p>
-        <p>Тип<br/>
-          <select name="promo_type">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg max-w-2xl">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-xl"><i class="fa-solid fa-pen-to-square text-primary mr-2" aria-hidden="true"></i>{'Редактирование промокода' if p else 'Создание промокода'}</h2>
+        {e}
+        <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
+          <label class="form-control w-full"><span class="label-text font-medium">Код</span>
+            <input class="input input-bordered font-mono uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
+            <select class="select select-bordered" name="promo_type">
             <option value="subscription_days" {'selected' if p and p.type == 'subscription_days' else ''}>subscription_days</option>
             <option value="balance_rub" {'selected' if p and p.type == 'balance_rub' else ''}>balance_rub</option>
             <option value="topup_bonus_percent" {'selected' if p and p.type == 'topup_bonus_percent' else ''}>topup_bonus_percent</option>
-          </select>
-        </p>
-        <p>Награда (число)<br/><input name="value" value="{_esc(p.value if p else '')}" /></p>
-        <p>Фолбэк в ₽ (для subscription_days)<br/><input name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></p>
-        <p>Лимит активаций (число или '-')<br/><input name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></p>
-        <p>Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')<br/><input name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></p>
-        <p>Активен
-          <select name="is_active">
+          </select></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
+            <input class="input input-bordered" name="value" value="{_esc(p.value if p else '')}" /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (для subscription_days)</span>
+            <input class="input input-bordered" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
+            <input class="input input-bordered" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')</span>
+            <input class="input input-bordered" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
+            <select class="select select-bordered" name="is_active">
             <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
             <option value="false" {'selected' if p is not None and not p.is_active else ''}>нет</option>
-          </select>
-        </p>
-        <button type="submit">Сохранить</button>
-      </form>
+          </select></label>
+          <button class="btn btn-primary gap-2 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
+        </form>
+      </div>
     </div>
     """
 
@@ -770,7 +832,11 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
         if promo is None:
-            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
+            return _layout(
+                "Promo not found",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
+                request=request,
+            )
         usages = (
             await session.execute(
                 select(PromoUsage, User)
@@ -786,22 +852,26 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         for pu, u in usages
     )
     body = f"""
-    <div class="card">
-      <h2>Промокод <code>{_esc(promo.code)}</code></h2>
-      <p>Тип: <b>{_esc(promo.type)}</b> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
-      <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
-      <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
-      <div class="row">
-        <a href="/admin/promos/{promo.id}/edit"><button type="button">Редактировать</button></a>
-        <form method="post" action="/admin/promos/{promo.id}/delete" onsubmit="return confirm('Удалить промокод?');">
-          <button type="submit">Удалить</button>
-        </form>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-2xl font-mono">Промокод <span class="text-primary">{_esc(promo.code)}</span></h2>
+        <p>Тип: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{_esc(promo.type)}</code> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
+        <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
+        <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
+        <div class="flex flex-wrap gap-2">
+          <a class="btn btn-primary btn-sm gap-1" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
+          <form method="post" action="/admin/promos/{promo.id}/delete" onsubmit="return confirm('Удалить промокод?');">
+            <button class="btn btn-error btn-outline btn-sm gap-1" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
+          </form>
+        </div>
       </div>
     </div>
-    <div class="card">
-      <h3>История активаций ({len(usages)})</h3>
-      <table><thead><tr><th>ID usage</th><th>User ID</th><th>Telegram ID</th><th>Дата</th></tr></thead>
-      <tbody>{usage_rows or '<tr><td colspan=4 class=muted>Нет активаций</td></tr>'}</tbody></table>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold">История активаций ({len(usages)})</h3>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID usage</th><th>User ID</th><th>Telegram ID</th><th>Дата</th></tr></thead>
+        <tbody>{usage_rows or '<tr><td colspan="4" class="opacity-50">Нет активаций</td></tr>'}</tbody></table></div>
+      </div>
     </div>
     """
     return _layout(f"Promo {promo_id}", body, request=request)
@@ -815,7 +885,11 @@ async def admin_promos_edit(request: Request, promo_id: int) -> HTMLResponse:
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
     if promo is None:
-        return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
+        return _layout(
+            "Promo not found",
+            "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
+            request=request,
+        )
     return _layout(
         "Edit Promo",
         _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo),
@@ -840,7 +914,11 @@ async def admin_promos_edit_post(
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
         if promo is None:
-            return _layout("Promo not found", "<div class='card'><h2>Промокод не найден</h2></div>", request=request)
+            return _layout(
+                "Promo not found",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
+                request=request,
+            )
         try:
             if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
                 raise ValueError("Неверный тип")
