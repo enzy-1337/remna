@@ -16,6 +16,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from api.routers import public_pages, web_admin, webhooks
@@ -50,6 +51,14 @@ app.add_middleware(
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")
 app.include_router(public_pages.router)
+
+_assets_dir = _ROOT / "assets"
+if _assets_dir.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_assets_dir)),
+        name="assets",
+    )
 
 
 @app.get("/health")
