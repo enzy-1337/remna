@@ -311,21 +311,37 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
             {"st": st, "now": now, "tid": ticket_id},
         )
         await session.commit()
-    if st == "closed" and tickets_config.bot_token:
+    if tickets_config.bot_token:
         bot = Bot(token=tickets_config.bot_token)
         try:
             try:
                 topic_id = int(t["topic_id"] or 0)
             except Exception:
                 topic_id = 0
+            # Всегда пишем в топик о смене статуса из веба.
             if topic_id:
+                status_ru = {"open": "Открыт", "in_progress": "В работе", "closed": "Закрыт"}.get(st, st)
                 try:
-                    await bot.close_forum_topic(chat_id=tickets_config.support_group_id, message_thread_id=topic_id)
+                    await bot.send_message(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        text=f"<b>ℹ️ Статус тикета #{ticket_id} обновлен через сайт:</b> {status_ru}",
+                        disable_web_page_preview=True,
+                    )
                 except Exception:
                     pass
-            uid = int(t["telegram_user_id"] or 0)
-            if uid:
-                await bot.send_message(chat_id=uid, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
+                if st == "closed":
+                    try:
+                        await bot.close_forum_topic(chat_id=tickets_config.support_group_id, message_thread_id=topic_id)
+                    except Exception:
+                        pass
+            if st == "closed":
+                uid = int(t["telegram_user_id"] or 0)
+                if uid:
+                    try:
+                        await bot.send_message(chat_id=uid, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
+                    except Exception:
+                        pass
         finally:
             await bot.session.close()
     return {"ok": True}

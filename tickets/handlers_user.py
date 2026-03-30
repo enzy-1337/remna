@@ -11,7 +11,17 @@ from datetime import datetime, timezone
 
 from tickets.keyboards import active_ticket_keyboard, rating_keyboard, start_keyboard, topic_ticket_keyboard
 from tickets.states import TicketStates
-from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, get_ticket_brief, save_ticket_rating, set_ticket_status, set_ticket_topic
+from tickets.services import (
+    add_ticket_message,
+    bump_ticket_activity,
+    create_ticket,
+    ensure_db_user,
+    get_active_ticket_id,
+    get_ticket_brief,
+    save_ticket_rating,
+    set_ticket_status,
+    set_ticket_topic,
+)
 from tickets.config import config
 
 router = Router(name="tickets_user")
@@ -199,14 +209,25 @@ async def cb_rate_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
             pass
 
 
-@router.message(F.text)
+@router.message()
 async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> None:
     """Любое новое сообщение пользователя в ЛС -> в топик тикета + в ЛС назначенному админу."""
     if message.from_user is None:
         return
-    txt = (message.text or "").strip()
+    txt = (message.text or message.caption or "").strip()
     if not txt:
-        return
+        if message.photo:
+            txt = "📷 [Фото без подписи]"
+        elif message.video:
+            txt = "🎬 [Видео без подписи]"
+        elif message.document:
+            txt = "📎 [Файл без подписи]"
+        elif message.voice:
+            txt = "🎤 [Голосовое сообщение]"
+        elif message.sticker:
+            txt = "🧩 [Стикер]"
+        else:
+            return
     if txt.startswith("/"):
         # Команды обрабатываются отдельными роутами.
         return
