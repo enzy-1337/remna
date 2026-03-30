@@ -461,6 +461,7 @@ def _layout(
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
+        {_sidebar_nav_item("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
         {_sidebar_nav_item("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
         {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
@@ -491,6 +492,7 @@ def _layout(
       <a href="/admin/dashboard" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-base"></i><span>Дашборд</span></a>
       <a href="/admin/status" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/status', cur)}"><i class="fa-solid fa-heart-pulse text-base"></i><span>Статус</span></a>
       <a href="/admin/users" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-base"></i><span>Юзеры</span></a>
+      <a href="/admin/tickets" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tickets', cur)}"><i class="fa-solid fa-headset text-base"></i><span>Тикеты</span></a>
       <a href="/admin/subscriptions" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/subscriptions', cur)}"><i class="fa-solid fa-clock-rotate-left text-base"></i><span>Подписки</span></a>
       <a href="/admin/promos" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-base"></i><span>Промо</span></a>
       <a href="/admin/settings" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-base"></i><span>Настр.</span></a>
@@ -1534,6 +1536,130 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     </div>
     """
     return _layout("Web-admin Dashboard", body, request=request)
+
+
+@router.get("/tickets")
+async def admin_tickets(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="card-title text-2xl"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Тикеты</h2>
+          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/admin/tickets" title="Сбросить фильтры"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Сброс</a>
+        </div>
+        <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <label class="form-control"><span class="label-text text-xs opacity-70">Статус</span>
+            <select id="tk-status" class="select select-bordered select-sm h-9 min-h-9 text-sm">
+              <option value="">Все</option>
+              <option value="open">Открыт</option>
+              <option value="in_progress">В работе</option>
+              <option value="closed">Закрыт</option>
+            </select>
+          </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Дата с</span>
+            <input id="tk-from" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
+          </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Дата по</span>
+            <input id="tk-to" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
+          </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Поиск</span>
+            <input id="tk-q" type="text" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="ID, текст, имя, username" />
+          </label>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="tk-apply" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-filter" aria-hidden="true"></i>Применить</button>
+          <select id="tk-sort" class="select select-bordered select-sm h-9 min-h-9 text-sm w-[220px]">
+            <option value="desc">Новые по активности</option>
+            <option value="asc">Старые по активности</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div id="tk-grid" class="grid gap-4 md:grid-cols-2 mt-4"></div>
+    <div id="tk-empty" class="hidden alert mt-4"><span>Нет тикетов по текущим фильтрам.</span></div>
+    <script>
+    (function(){
+      var grid=document.getElementById('tk-grid');
+      var empty=document.getElementById('tk-empty');
+      var st=document.getElementById('tk-status');
+      var df=document.getElementById('tk-from');
+      var dt=document.getElementById('tk-to');
+      var q=document.getElementById('tk-q');
+      var sort=document.getElementById('tk-sort');
+      var apply=document.getElementById('tk-apply');
+      function esc(s){return String(s||'').replace(/[&<>\"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]||ch;});}
+      function statusBadge(s){
+        if(s==='open')return '<span class=\"badge badge-info badge-sm\">Открыт</span>';
+        if(s==='in_progress')return '<span class=\"badge badge-warning badge-sm\">В работе</span>';
+        return '<span class=\"badge badge-ghost badge-sm\">Закрыт</span>';
+      }
+      function avatarFor(u){
+        var uid=u&&u.id?u.id:'0';
+        var nm=((u&&u.first_name)||'user');
+        var initials=(nm[0]||'?').toUpperCase();
+        return '<div class=\"avatar placeholder\"><div class=\"bg-base-300 text-base-content rounded-full w-10\"><span>'+esc(initials)+'</span></div></div>';
+      }
+      function card(t){
+        var u=t.user||{};
+        var uname=u.username?('@'+u.username):'—';
+        var nm=(u.first_name||u.username||('user#'+u.id||'—'));
+        var prev=esc((t.preview||'').slice(0,180));
+        var ass=t.assigned_admin_id?('#'+t.assigned_admin_id):'—';
+        return ''
+          +'<div class=\"card bg-base-100 border border-base-content/10 shadow-md hover:shadow-lg transition-shadow\">'
+          +'<div class=\"card-body gap-3\">'
+          +'<div class=\"flex items-start justify-between gap-2\"><h3 class=\"card-title text-lg\">Тикет #'+t.id+'</h3>'+statusBadge(t.status)+'</div>'
+          +'<div class=\"flex items-center gap-3\">'+avatarFor(u)
+          +'<div class=\"min-w-0\"><a class=\"link link-primary font-medium truncate block\" href=\"/admin/users/'+u.id+'\">'+esc(nm)+'</a>'
+          +'<p class=\"text-xs opacity-70 truncate\">'+esc(uname)+'</p></div></div>'
+          +'<p class=\"text-sm opacity-80 line-clamp-3\">'+prev+'</p>'
+          +'<div class=\"text-xs opacity-70\">Создан: '+esc(t.created_at||'—')+'</div>'
+          +'<div class=\"text-xs opacity-70\">Последняя активность: '+esc(t.last_activity||'—')+'</div>'
+          +'<div class=\"text-xs opacity-70\">Назначен: '+esc(ass)+'</div>'
+          +'<div class=\"card-actions justify-end\"><a class=\"btn btn-ghost btn-sm\" href=\"/admin/tickets/'+t.id+'\">Открыть</a></div>'
+          +'</div></div>';
+      }
+      async function loadTickets(){
+        var p=new URLSearchParams();
+        if(st.value)p.set('status',st.value);
+        if(df.value)p.set('date_from',df.value);
+        if(dt.value)p.set('date_to',dt.value);
+        if((q.value||'').trim())p.set('q',q.value.trim());
+        p.set('sort',sort.value||'desc');
+        p.set('limit','200');
+        var res=await fetch('/api/tickets?'+p.toString(),{credentials:'include'});
+        if(!res.ok){grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки: '+res.status+'</span></div>';empty.classList.add('hidden');return;}
+        var data=await res.json();
+        var items=(data&&data.items)||[];
+        if(!items.length){grid.innerHTML='';empty.classList.remove('hidden');return;}
+        empty.classList.add('hidden');
+        grid.innerHTML=items.map(card).join('');
+      }
+      apply.addEventListener('click',function(){loadTickets();});
+      q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();loadTickets();}});
+      loadTickets();
+    })();
+    </script>
+    """
+    return _layout("Web-admin Tickets", body, request=request)
+
+
+@router.get("/tickets/{ticket_id}")
+async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = (
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-3'>"
+        f"<h2 class='card-title text-2xl'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Тикет #{ticket_id}</h2>"
+        "<p class='text-sm opacity-70'>Детальная страница тикета будет расширена следующим шагом. Сейчас данные доступны через API:</p>"
+        f"<a class='link link-primary break-all' href='/api/tickets/{ticket_id}' target='_blank' rel='noopener noreferrer'>/api/tickets/{ticket_id}</a>"
+        "</div></div>"
+    )
+    return _layout(f"Ticket {ticket_id}", body, request=request, back_href="/admin/tickets")
 
 
 @router.get("/users")
