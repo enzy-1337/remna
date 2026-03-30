@@ -67,6 +67,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
       REDIS_URL: redis://redis:6379/0
+      TICKETS_BOT_TOKEN: ${TICKETS_BOT_TOKEN:-}
       SUPPORT_GROUP_ID: ${SUPPORT_GROUP_ID:-0}
       REMINDER_HOURS: ${REMINDER_HOURS:-6}
       AUTO_CLOSE_DAYS: ${AUTO_CLOSE_DAYS:-3}
