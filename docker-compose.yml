@@ -57,10 +57,7 @@ services:
     restart: unless-stopped
 
   tickets-bot:
-    # В средах без доступа в интернет нельзя пересобирать образ:
-    # tickets-bot должен использовать уже собранный локальный образ сервиса `bot`.
-    # Если тег на сервере отличается — поменяем под ваш `docker images`.
-    image: remna-bot-bot
+    build: .
     command: ["python", "-m", "tickets.main"]
     env_file:
       - .env
