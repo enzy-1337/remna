@@ -37,3 +37,12 @@ def topic_ticket_keyboard(*, bot_username: str, ticket_id: int) -> InlineKeyboar
     )
     return b.as_markup()
 
+
+def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="👍", callback_data=f"tickets:rate:{ticket_id}:1"),
+        InlineKeyboardButton(text="👎", callback_data=f"tickets:rate:{ticket_id}:0"),
+    )
+    return b.as_markup()
+

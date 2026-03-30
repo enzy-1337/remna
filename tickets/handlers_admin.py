@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import html
 
 from tickets.config import config
+from tickets.keyboards import rating_keyboard
 from tickets.states import TicketStates
 from tickets.services import (
     add_ticket_message,
     bump_ticket_activity,
     ensure_db_user,
     get_ticket_brief,
+    set_ticket_status,
 )
 
 router = Router(name="tickets_admin")
@@ -67,15 +69,95 @@ async def cmd_start_admin_entry(
 
 
 @router.callback_query(F.data.startswith("tickets:status:"))
-async def cb_status_stub(cq: CallbackQuery) -> None:
-    # Полная логика будет на шаге 7.
-    await cq.answer("Ок.", show_alert=False)
+async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    data = (cq.data or "").split(":")
+    if len(data) < 4:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        ticket_id = int(data[2])
+    except Exception:
+        await cq.answer("Некорректный ticket id.", show_alert=True)
+        return
+    status = data[3]
+    if status not in {"in_progress"}:
+        await cq.answer("Неподдерживаемый статус.", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    if str(t.get("status") or "") == "closed":
+        await cq.answer("Тикет уже закрыт.", show_alert=True)
+        return
+    await set_ticket_status(session, ticket_id=ticket_id, status="in_progress", close_now=False)
+    await cq.answer("Статус: в работе")
+    if cq.message and cq.message.text:
+        base = cq.message.text.split("\n\nСтатус:")[0]
+        try:
+            await cq.message.edit_text(base + "\n\nСтатус: 🔄 В работе", reply_markup=cq.message.reply_markup)
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("tickets:close:"))
-async def cb_close_stub(cq: CallbackQuery) -> None:
-    # Полная логика будет на шаге 7.
-    await cq.answer("Ок.", show_alert=False)
+async def cb_close_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    data = (cq.data or "").split(":")
+    if len(data) < 3:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        ticket_id = int(data[2])
+    except Exception:
+        await cq.answer("Некорректный ticket id.", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    if str(t.get("status") or "") == "closed":
+        await cq.answer("Тикет уже закрыт.", show_alert=True)
+        return
+
+    await set_ticket_status(session, ticket_id=ticket_id, status="closed", close_now=True)
+
+    # Архивируем/закрываем топик в группе.
+    try:
+        topic_id = int(t.get("topic_id") or 0)
+    except Exception:
+        topic_id = 0
+    if topic_id:
+        try:
+            await cq.bot.close_forum_topic(chat_id=config.support_group_id, message_thread_id=topic_id)
+        except Exception:
+            pass
+
+    # Уведомление пользователю + запрос оценки.
+    try:
+        user_tg = int(t.get("telegram_user_id") or 0)
+    except Exception:
+        user_tg = 0
+    if user_tg:
+        await cq.bot.send_message(chat_id=user_tg, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
+        await cq.bot.send_message(
+            chat_id=user_tg,
+            text=f"Оцените работу поддержки по тикету #{ticket_id}:",
+            reply_markup=rating_keyboard(ticket_id),
+        )
+
+    await cq.answer("Тикет закрыт")
+    if cq.message and cq.message.text:
+        base = cq.message.text.split("\n\nСтатус:")[0]
+        try:
+            await cq.message.edit_text(base + "\n\nСтатус: ✅ Закрыт", reply_markup=None)
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("tickets:reply:"))

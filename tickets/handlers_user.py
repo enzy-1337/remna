@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import html
 from datetime import datetime, timezone
 
-from tickets.keyboards import start_keyboard, topic_ticket_keyboard
+from tickets.keyboards import rating_keyboard, start_keyboard, topic_ticket_keyboard
 from tickets.states import TicketStates
-from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, set_ticket_topic
+from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, save_ticket_rating, set_ticket_topic
 from tickets.config import config
 
 router = Router(name="tickets_user")
@@ -107,4 +107,34 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
 
     await state.clear()
     await message.answer(f"✅ Ваш тикет #{ticket_id} создан. Ожидайте ответа от администратора.")
+
+
+@router.callback_query(F.data.startswith("tickets:rate:"))
+async def cb_rate_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None:
+        await cq.answer()
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) < 4:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        ticket_id = int(parts[2])
+        rating_bool = parts[3] == "1"
+    except Exception:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+
+    ok = await save_ticket_rating(session, ticket_id=ticket_id, rating=rating_bool)
+    if not ok:
+        await cq.answer("Оценка уже сохранена.", show_alert=True)
+        return
+
+    await cq.answer("Спасибо за оценку!")
+    if cq.message:
+        label = "👍" if rating_bool else "👎"
+        try:
+            await cq.message.edit_text(f"Спасибо! Ваша оценка по тикету #{ticket_id}: {label}", reply_markup=None)
+        except Exception:
+            pass
 

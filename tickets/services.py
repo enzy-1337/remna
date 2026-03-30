@@ -148,6 +148,63 @@ async def bump_ticket_activity(
             ),
             {"now": now, "tid": ticket_id},
         )
+
+
+async def set_ticket_status(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    status: str,
+    close_now: bool = False,
+) -> None:
+    now = datetime.now(timezone.utc)
+    if close_now:
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET status = :st,
+                    updated_at = :now,
+                    last_activity = :now,
+                    closed_at = :now
+                WHERE id = :tid
+                """
+            ),
+            {"st": status, "now": now, "tid": ticket_id},
+        )
+    else:
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET status = :st,
+                    updated_at = :now,
+                    last_activity = :now
+                WHERE id = :tid
+                """
+            ),
+            {"st": status, "now": now, "tid": ticket_id},
+        )
+
+
+async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: bool) -> bool:
+    """Возвращает True, если оценка добавлена впервые."""
+    check = await session.execute(
+        text("SELECT id FROM ticket_ratings WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1"),
+        {"tid": ticket_id},
+    )
+    if check.first() is not None:
+        return False
+    await session.execute(
+        text(
+            """
+            INSERT INTO ticket_ratings (ticket_id, rating, created_at)
+            VALUES (:tid, :r, :now)
+            """
+        ),
+        {"tid": ticket_id, "r": bool(rating), "now": datetime.now(timezone.utc)},
+    )
+    return True
     else:
         await session.execute(
             text(
