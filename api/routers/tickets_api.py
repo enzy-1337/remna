@@ -303,8 +303,8 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
             text(
                 """
                 UPDATE tickets
-                SET status=:st, updated_at=:now, last_activity=:now,
-                    closed_at=CASE WHEN :st='closed' THEN :now ELSE closed_at END
+                SET status=CAST(:st AS VARCHAR), updated_at=:now, last_activity=:now,
+                    closed_at=CASE WHEN CAST(:st AS VARCHAR)='closed' THEN :now ELSE closed_at END
                 WHERE id=:tid
                 """
             ),
