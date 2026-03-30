@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from bot.middlewares.db_session import DbSessionMiddleware
 from tickets.config import config
 from tickets.router import tickets_router
 
@@ -32,6 +33,7 @@ def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    dp.update.middleware(DbSessionMiddleware())
     dp.include_router(tickets_router())
     dp.run_polling(bot)
 
