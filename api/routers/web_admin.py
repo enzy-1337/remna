@@ -2175,10 +2175,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     tix_closed = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st == "closed")
     tix_rates = [1 if rt is True else 0 for _tid, _st, _ca, _cl, rt in tix_tuples if rt is not None]
     tix_rate_pct = f"{(sum(tix_rates) / len(tix_rates) * 100):.0f}%" if tix_rates else "—"
+    tix_status_label = {"open": "Открыт", "in_progress": "В работе", "closed": "Закрыт"}
     tix_rows_html = "".join(
         f"<tr>"
         f"<td><a class='link link-primary' href='/admin/tickets/{tid}'>#{tid}</a></td>"
-        f"<td><span class='badge badge-sm {'badge-warning' if st == 'in_progress' else ('badge-info' if st == 'open' else 'badge-ghost')}'>{_esc(st)}</span></td>"
+        f"<td><span class='badge badge-sm {'badge-warning' if st == 'in_progress' else ('badge-info' if st == 'open' else 'badge-ghost')}'>{_esc(tix_status_label.get(st, st))}</span></td>"
         f"<td>{_fmt_dt_msk(ca)}</td>"
         f"<td>{_fmt_dt_msk(cl) if cl else '—'}</td>"
         f"<td>{'👍' if rt is True else ('👎' if rt is False else '—')}</td>"
