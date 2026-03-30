@@ -17,7 +17,7 @@ from tickets.config import config
 router = Router(name="tickets_user")
 
 
-@router.message(CommandStart())
+@router.message(CommandStart(deep_link=False))
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return

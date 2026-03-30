@@ -34,7 +34,7 @@ def _is_admin(telegram_id: int | None) -> bool:
     return telegram_id in (config.admin_ids or [])
 
 
-@router.message(CommandStart())
+@router.message(CommandStart(deep_link=True))
 async def cmd_start_admin_entry(
     message: Message,
     session: AsyncSession,
