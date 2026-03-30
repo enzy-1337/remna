@@ -1652,13 +1652,145 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     denied = _require_login(request)
     if denied is not None:
         return denied
-    body = (
-        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-3'>"
-        f"<h2 class='card-title text-2xl'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Тикет #{ticket_id}</h2>"
-        "<p class='text-sm opacity-70'>Детальная страница тикета будет расширена следующим шагом. Сейчас данные доступны через API:</p>"
-        f"<a class='link link-primary break-all' href='/api/tickets/{ticket_id}' target='_blank' rel='noopener noreferrer'>/api/tickets/{ticket_id}</a>"
-        "</div></div>"
-    )
+    settings = get_settings()
+    admin_opts: list[dict[str, object]] = []
+    tg_admins = [int(x) for x in (settings.admin_telegram_ids or [])]
+    if tg_admins:
+        async with await _session() as session:
+            rows = (
+                await session.execute(select(User).where(User.telegram_id.in_(tg_admins)).order_by(User.id))
+            ).scalars().all()
+        by_tg = {int(u.telegram_id): u for u in rows}
+        for tg_id in tg_admins:
+            u = by_tg.get(tg_id)
+            label = f"#{u.id} {((u.first_name or u.username or '').strip() or f'admin:{tg_id}')}" if u else f"admin:{tg_id}"
+            admin_opts.append({"db_id": int(u.id) if u else None, "tg_id": tg_id, "label": label})
+    admins_json = json.dumps(admin_opts, ensure_ascii=False)
+    body = f"""
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-1">
+        <div class="card-body gap-3">
+          <h2 class="card-title text-2xl"><i class="fa-solid fa-ticket text-primary mr-2" aria-hidden="true"></i>Тикет #{ticket_id}</h2>
+          <div id="tk-meta" class="text-sm opacity-80">Загрузка...</div>
+          <div class="grid gap-2">
+            <label class="form-control">
+              <span class="label-text text-xs opacity-70">Назначенный админ</span>
+              <select id="tk-assign" class="select select-bordered select-sm h-9 min-h-9 text-sm"></select>
+            </label>
+            <button id="tk-assign-save" class="btn btn-outline btn-sm h-9 min-h-9">Сохранить назначение</button>
+          </div>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button id="tk-set-open" class="btn btn-ghost btn-sm h-9 min-h-9">Открыт</button>
+            <button id="tk-set-progress" class="btn btn-warning btn-sm h-9 min-h-9">В работе</button>
+            <button id="tk-set-closed" class="btn btn-error btn-sm h-9 min-h-9">Закрыть</button>
+          </div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-2">
+        <div class="card-body gap-3">
+          <h3 class="card-title text-xl"><i class="fa-solid fa-comments text-primary mr-2" aria-hidden="true"></i>Диалог</h3>
+          <div id="tk-chat" class="min-h-[360px] max-h-[62vh] overflow-y-auto rounded-xl border border-base-content/10 bg-base-200/40 p-3 space-y-2"></div>
+          <div id="tk-compose" class="grid gap-2">
+            <textarea id="tk-text" class="textarea textarea-bordered h-28" placeholder="Введите ответ пользователю или внутреннюю заметку"></textarea>
+            <div class="flex flex-wrap gap-2">
+              <button id="tk-send-reply" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить ответ</button>
+              <button id="tk-send-note" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i>Добавить заметку</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+    (function(){{
+      var ticketId={ticket_id};
+      var admins={admins_json};
+      var stMap={{open:['badge-info','Открыт'],in_progress:['badge-warning','В работе'],closed:['badge-ghost','Закрыт']}};
+      var meta=document.getElementById('tk-meta');
+      var chat=document.getElementById('tk-chat');
+      var txt=document.getElementById('tk-text');
+      var assign=document.getElementById('tk-assign');
+      var compose=document.getElementById('tk-compose');
+      var model=null;
+      function esc(s){{return String(s||'').replace(/[&<>\"']/g,function(ch){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}}[ch]||ch;}});}}
+      function initAssign() {{
+        assign.innerHTML='';
+        var opt=document.createElement('option');opt.value='';opt.textContent='— не назначен —';assign.appendChild(opt);
+        admins.forEach(function(a){{
+          var o=document.createElement('option');
+          o.value=String(a.tg_id||'');
+          o.textContent=String(a.label||('admin:'+a.tg_id));
+          o.dataset.dbId=(a.db_id===null||a.db_id===undefined)?'':String(a.db_id);
+          assign.appendChild(o);
+        }});
+      }}
+      function renderMeta() {{
+        if(!model) return;
+        var t=model.ticket||{{}};
+        var u=t.user_id||'—';
+        var tg=t.telegram_user_id||0;
+        var st=t.status||'open';
+        var b=stMap[st]||['badge-ghost',st];
+        meta.innerHTML=''
+          +'Статус: <span class="badge '+b[0]+' badge-sm">'+esc(b[1])+'</span><br>'
+          +'Пользователь: <a class="link link-primary" href="/admin/users/'+u+'">#'+u+'</a>'+(tg?(' · <a class="link" href="tg://user?id='+tg+'">tg://'+tg+'</a>'):'')+'<br>'
+          +'Создан: '+esc(t.created_at||'—')+'<br>'
+          +'Последняя активность: '+esc(t.last_activity||'—')+'<br>'
+          +'Закрыт: '+esc(t.closed_at||'—');
+        compose.classList.toggle('hidden', st==='closed');
+      }}
+      function renderChat() {{
+        var msgs=(model&&model.messages)||[];
+        if(!msgs.length) {{
+          chat.innerHTML='<div class="opacity-60 text-sm">Сообщений пока нет.</div>'; return;
+        }}
+        chat.innerHTML=msgs.map(function(m){{
+          var left=m.sender_role==='user';
+          var note=!!m.is_internal;
+          var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
+          var side=left?'items-start':'items-end';
+          var who=note?'Заметка':(left?'Пользователь':'Администратор');
+          return ''
+            +'<div class="flex '+side+'">'
+            +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+'">'
+            +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
+            +'<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'
+            +'</div></div>';
+        }}).join('');
+        chat.scrollTop=chat.scrollHeight;
+      }}
+      async function load() {{
+        var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
+        if(!r.ok){{meta.textContent='Ошибка загрузки: '+r.status;return;}}
+        model=await r.json();
+        renderMeta(); renderChat();
+        var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
+        assign.value=atg?String(atg):'';
+      }}
+      async function sendJson(url, method, data) {{
+        var r=await fetch(url,{{method:method,credentials:'include',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(data||{{}})}});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        return await r.json();
+      }}
+      document.getElementById('tk-send-reply').addEventListener('click', async function(){{
+        var v=(txt.value||'').trim(); if(!v) return;
+        try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{alert('Ошибка отправки ответа');}}
+      }});
+      document.getElementById('tk-send-note').addEventListener('click', async function(){{
+        var v=(txt.value||'').trim(); if(!v) return;
+        try{{await sendJson('/api/tickets/'+ticketId+'/note','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{alert('Ошибка добавления заметки');}}
+      }});
+      document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
+      document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
+      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm('Закрыть тикет?'))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{alert('Не удалось закрыть тикет');}}}});
+      document.getElementById('tk-assign-save').addEventListener('click', async function(){{
+        var tg=assign.value||'';
+        var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
+        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{alert('Не удалось сохранить назначение');}}
+      }});
+      initAssign(); load();
+    }})();
+    </script>
+    """
     return _layout(f"Ticket {ticket_id}", body, request=request, back_href="/admin/tickets")
 
 
