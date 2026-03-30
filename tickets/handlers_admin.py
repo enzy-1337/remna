@@ -13,6 +13,7 @@ from tickets.keyboards import rating_keyboard
 from tickets.states import TicketStates
 from tickets.services import (
     add_ticket_message,
+    assign_ticket_admin,
     bump_ticket_activity,
     ensure_db_user,
     get_ticket_brief,
@@ -93,6 +94,13 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
     if str(t.get("status") or "") == "closed":
         await cq.answer("Тикет уже закрыт.", show_alert=True)
         return
+    db_admin = await ensure_db_user(session, cq.from_user)
+    await assign_ticket_admin(
+        session,
+        ticket_id=ticket_id,
+        admin_user_id=db_admin.id,
+        admin_telegram_id=int(cq.from_user.id),
+    )
     await set_ticket_status(session, ticket_id=ticket_id, status="in_progress", close_now=False)
     await cq.answer("Статус: в работе")
     if cq.message and cq.message.text:
@@ -202,6 +210,12 @@ async def msg_admin_reply(
 
     # Сохраняем сообщение админа.
     db_admin = await ensure_db_user(session, message.from_user)
+    await assign_ticket_admin(
+        session,
+        ticket_id=ticket_id,
+        admin_user_id=db_admin.id,
+        admin_telegram_id=int(message.from_user.id),
+    )
     await add_ticket_message(
         session,
         ticket_id=ticket_id,

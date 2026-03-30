@@ -87,7 +87,8 @@ async def get_ticket_brief(session: AsyncSession, *, ticket_id: int) -> dict | N
     r = await session.execute(
         text(
             """
-            SELECT id, status, topic_id, user_id, telegram_user_id
+            SELECT id, status, topic_id, user_id, telegram_user_id,
+                   assigned_admin_id, telegram_assigned_admin_id
             FROM tickets
             WHERE id = :tid
             """
@@ -196,6 +197,28 @@ async def set_ticket_status(
             ),
             {"st": status, "now": now, "tid": ticket_id},
         )
+
+
+async def assign_ticket_admin(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    admin_user_id: int,
+    admin_telegram_id: int,
+) -> None:
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        text(
+            """
+            UPDATE tickets
+            SET assigned_admin_id = :aid,
+                telegram_assigned_admin_id = :atg,
+                updated_at = :now
+            WHERE id = :tid
+            """
+        ),
+        {"aid": admin_user_id, "atg": admin_telegram_id, "now": now, "tid": ticket_id},
+    )
 
 
 async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: bool) -> bool:

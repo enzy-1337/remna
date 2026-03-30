@@ -198,3 +198,73 @@ async def cb_rate_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
         except Exception:
             pass
 
+
+@router.message(F.text)
+async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> None:
+    """Любое новое сообщение пользователя в ЛС -> в топик тикета + в ЛС назначенному админу."""
+    if message.from_user is None:
+        return
+    txt = (message.text or "").strip()
+    if not txt:
+        return
+    if txt.startswith("/"):
+        # Команды обрабатываются отдельными роутами.
+        return
+
+    db_user = await ensure_db_user(session, message.from_user)
+    active_id = await get_active_ticket_id(session, user_id=db_user.id)
+    if active_id is None:
+        return
+    t = await get_ticket_brief(session, ticket_id=active_id)
+    if not t or str(t.get("status") or "") == "closed":
+        return
+
+    await add_ticket_message(
+        session,
+        ticket_id=active_id,
+        sender_id=db_user.id,
+        sender_role="user",
+        sender_telegram_id=int(message.from_user.id),
+        text_body=txt,
+        is_internal=False,
+    )
+    await bump_ticket_activity(session, ticket_id=active_id, status_to_in_progress=False)
+
+    disp = (message.from_user.full_name or "Пользователь").strip()
+    user_line = f"<a href=\"tg://user?id={int(message.from_user.id)}\">{disp}</a>"
+    topic_text = (
+        f"<b>✉️ Новое сообщение в тикете #{active_id}</b>\n"
+        f"От: {user_line}\n\n"
+        f"{html.escape(txt)}"
+    )
+
+    # В топик тикета.
+    try:
+        topic_id = int(t.get("topic_id") or 0)
+    except Exception:
+        topic_id = 0
+    if topic_id:
+        await message.bot.send_message(
+            chat_id=config.support_group_id,
+            message_thread_id=topic_id,
+            text=topic_text,
+            disable_web_page_preview=True,
+        )
+
+    # В личку назначенному админу (если тикет уже кто-то взял).
+    try:
+        admin_tg = int(t.get("telegram_assigned_admin_id") or 0)
+    except Exception:
+        admin_tg = 0
+    if admin_tg:
+        me = await message.bot.get_me()
+        un = (me.username or "").lstrip("@")
+        deep = f"https://t.me/{un}?start=reply_{active_id}" if un else ""
+        dm = (
+            f"<b>✉️ Пользователь написал в тикет #{active_id}</b>\n"
+            f"От: {user_line}\n\n"
+            f"{html.escape(txt)}"
+            + (f"\n\n<a href=\"{deep}\">Ответить</a>" if deep else "")
+        )
+        await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)
+
