@@ -148,6 +148,17 @@ async def bump_ticket_activity(
             ),
             {"now": now, "tid": ticket_id},
         )
+    else:
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET updated_at = :now, last_activity = :now
+                WHERE id = :tid
+                """
+            ),
+            {"now": now, "tid": ticket_id},
+        )
 
 
 async def set_ticket_status(
@@ -205,15 +216,4 @@ async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: b
         {"tid": ticket_id, "r": bool(rating), "now": datetime.now(timezone.utc)},
     )
     return True
-    else:
-        await session.execute(
-            text(
-                """
-                UPDATE tickets
-                SET updated_at = :now, last_activity = :now
-                WHERE id = :tid
-                """
-            ),
-            {"now": now, "tid": ticket_id},
-        )
 
