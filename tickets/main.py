@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.middlewares.db_session import DbSessionMiddleware
 from tickets.config import config
 from tickets.router import tickets_router
+from tickets.scheduler import TicketScheduler
 
 def main() -> None:
     logging.basicConfig(
@@ -33,6 +34,17 @@ def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    scheduler = TicketScheduler(bot)
+
+    async def _on_startup(*_args, **_kwargs) -> None:
+        await scheduler.start()
+
+    async def _on_shutdown(*_args, **_kwargs) -> None:
+        await scheduler.stop()
+
+    dp.startup.register(_on_startup)
+    dp.shutdown.register(_on_shutdown)
+
     dp.update.middleware(DbSessionMiddleware())
     dp.include_router(tickets_router())
     dp.run_polling(bot)
