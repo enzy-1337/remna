@@ -82,3 +82,81 @@ async def set_ticket_topic(session: AsyncSession, *, ticket_id: int, topic_id: i
         {"tp": topic_id, "now": now, "tid": ticket_id},
     )
 
+
+async def get_ticket_brief(session: AsyncSession, *, ticket_id: int) -> dict | None:
+    r = await session.execute(
+        text(
+            """
+            SELECT id, status, topic_id, user_id, telegram_user_id
+            FROM tickets
+            WHERE id = :tid
+            """
+        ),
+        {"tid": ticket_id},
+    )
+    row = r.mappings().first()
+    return dict(row) if row else None
+
+
+async def add_ticket_message(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    sender_id: int | None,
+    sender_role: str,
+    sender_telegram_id: int | None,
+    text_body: str,
+    is_internal: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        text(
+            """
+            INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal)
+            VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal)
+            """
+        ),
+        {
+            "tid": ticket_id,
+            "sid": sender_id,
+            "role": sender_role,
+            "stg": sender_telegram_id,
+            "txt": text_body,
+            "now": now,
+            "internal": bool(is_internal),
+        },
+    )
+
+
+async def bump_ticket_activity(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    status_to_in_progress: bool = False,
+) -> None:
+    now = datetime.now(timezone.utc)
+    if status_to_in_progress:
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                    updated_at = :now,
+                    last_activity = :now
+                WHERE id = :tid
+                """
+            ),
+            {"now": now, "tid": ticket_id},
+        )
+    else:
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET updated_at = :now, last_activity = :now
+                WHERE id = :tid
+                """
+            ),
+            {"now": now, "tid": ticket_id},
+        )
+
