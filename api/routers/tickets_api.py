@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,6 +14,7 @@ from shared.database import get_session_factory
 from tickets.config import config as tickets_config
 
 router = APIRouter(tags=["tickets-api"])
+_MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _is_api_logged(request: Request) -> bool:
@@ -34,7 +36,7 @@ def _to_iso(dt: Any) -> str | None:
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat()
+        return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M МСК")
     return str(dt)
 
 

@@ -1979,6 +1979,21 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 )
             ).scalars()
         )
+        tix_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT t.id, t.status, t.created_at, t.closed_at,
+                           (SELECT tr.rating FROM ticket_ratings tr WHERE tr.ticket_id = t.id ORDER BY tr.id DESC LIMIT 1) AS rating
+                    FROM tickets t
+                    WHERE t.user_id = :uid
+                    ORDER BY t.id DESC
+                    LIMIT 200
+                    """
+                ),
+                {"uid": user_id},
+            )
+        ).all()
         payments_total = (
             await session.execute(
                 select(func.coalesce(func.sum(Transaction.amount), 0)).where(
@@ -2022,6 +2037,9 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         subs_tuples = [(s.id, s.status, s.started_at, s.expires_at, s.devices_count) for s in subs]
         txs_tuples = [
             (t.id, t.type, t.amount, t.status, t.payment_provider, t.created_at) for t in txs
+        ]
+        tix_tuples = [
+            (int(r[0]), str(r[1]), r[2], r[3], r[4]) for r in tix_rows
         ]
         invited_tuples = [
             (u.id, u.first_name, u.username, u.telegram_id, u.created_at) for u in invited_list
@@ -2152,6 +2170,36 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         f"<td>{_esc(tp or '-')}</td><td>{_fmt_dt_msk(tc)}</td></tr>"
         for tid, tt, ta, ts, tp, tc in txs_tuples
     )
+    tix_total = len(tix_tuples)
+    tix_open = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st in ("open", "in_progress"))
+    tix_closed = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st == "closed")
+    tix_rates = [1 if rt is True else 0 for _tid, _st, _ca, _cl, rt in tix_tuples if rt is not None]
+    tix_rate_pct = f"{(sum(tix_rates) / len(tix_rates) * 100):.0f}%" if tix_rates else "—"
+    tix_rows_html = "".join(
+        f"<tr>"
+        f"<td><a class='link link-primary' href='/admin/tickets/{tid}'>#{tid}</a></td>"
+        f"<td><span class='badge badge-sm {'badge-warning' if st == 'in_progress' else ('badge-info' if st == 'open' else 'badge-ghost')}'>{_esc(st)}</span></td>"
+        f"<td>{_fmt_dt_msk(ca)}</td>"
+        f"<td>{_fmt_dt_msk(cl) if cl else '—'}</td>"
+        f"<td>{'👍' if rt is True else ('👎' if rt is False else '—')}</td>"
+        f"</tr>"
+        for tid, st, ca, cl, rt in tix_tuples
+    )
+    tickets_block = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Тикеты ({tix_total})</h3>
+        <div class="grid gap-2 sm:grid-cols-4 text-sm">
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Всего</div><div class="text-lg font-semibold">{tix_total}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Активные</div><div class="text-lg font-semibold">{tix_open}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Закрытые</div><div class="text-lg font-semibold">{tix_closed}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Позитивные оценки</div><div class="text-lg font-semibold">{_esc(tix_rate_pct)}</div></div>
+        </div>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Статус</th><th>Создан</th><th>Закрыт</th><th>Оценка</th></tr></thead>
+        <tbody>{tix_rows_html or '<tr><td colspan="5" class="opacity-50">Тикетов пока нет</td></tr>'}</tbody></table></div>
+      </div>
+    </div>
+    """
     ring = "bad" if ud.is_blocked else "ok"
     ring_tw = "ring-emerald-500" if ring == "ok" else "ring-red-500"
 
@@ -2334,6 +2382,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <tbody>{tx_rows or '<tr><td colspan="6" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
       </div>
     </div>
+    {tickets_block}
     """
     return _layout(f"User {user_id}", body, request=request, back_href="/admin/users")
 
