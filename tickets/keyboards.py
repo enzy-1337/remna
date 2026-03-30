@@ -23,3 +23,17 @@ def ticket_cancel_keyboard() -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="tickets:home"))
     return b.as_markup()
 
+
+def topic_ticket_keyboard(*, bot_username: str, ticket_id: int) -> InlineKeyboardMarkup:
+    un = (bot_username or "").lstrip("@")
+    deep = f"https://t.me/{un}?start=reply_{ticket_id}" if un else ""
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="💬 Ответить", url=deep) if deep else InlineKeyboardButton(text="💬 Ответить", callback_data=f"tickets:reply:{ticket_id}"),
+    )
+    b.row(
+        InlineKeyboardButton(text="🔄 В работе", callback_data=f"tickets:status:{ticket_id}:in_progress"),
+        InlineKeyboardButton(text="✅ Закрыть", callback_data=f"tickets:close:{ticket_id}"),
+    )
+    return b.as_markup()
+

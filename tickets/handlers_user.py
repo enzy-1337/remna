@@ -6,9 +6,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tickets.keyboards import start_keyboard
+import html
+from datetime import datetime, timezone
+
+from tickets.keyboards import start_keyboard, topic_ticket_keyboard
 from tickets.states import TicketStates
-from tickets.services import ensure_db_user, get_active_ticket_id
+from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, set_ticket_topic
+from tickets.config import config
 
 router = Router(name="tickets_user")
 
@@ -52,4 +56,55 @@ async def cb_create_ticket(cq: CallbackQuery, session: AsyncSession, state: FSMC
             "Опишите проблему одним сообщением. Это сообщение будет основным управляющим экраном."
         )
         await cq.message.answer(prompt)
+
+
+@router.message(TicketStates.waiting_problem_text, F.text)
+async def msg_problem_text(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    raw = (message.text or "").strip()
+    if not raw:
+        return
+    db_user = await ensure_db_user(session, message.from_user)
+    active_id = await get_active_ticket_id(session, user_id=db_user.id)
+    if active_id is not None:
+        await state.clear()
+        await message.answer(f"У вас уже есть активный тикет #{active_id}.")
+        return
+
+    ticket_id = await create_ticket(
+        session,
+        user=db_user,
+        telegram_user_id=int(message.from_user.id),
+        text_body=raw,
+    )
+
+    # Создаём топик в супергруппе (forum topics).
+    disp = (message.from_user.full_name or "Пользователь").strip()
+    title = f"Тикет #{ticket_id} — {disp}"
+    title = title[:128]
+    topic = await message.bot.create_forum_topic(chat_id=config.support_group_id, name=title)
+    await set_ticket_topic(session, ticket_id=ticket_id, topic_id=int(topic.message_thread_id))
+
+    me = await message.bot.get_me()
+    kb = topic_ticket_keyboard(bot_username=me.username or "", ticket_id=ticket_id)
+    created_line = "Дата: " + datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    user_line = f"<a href=\"tg://user?id={int(message.from_user.id)}\">{disp}</a>"
+    un = ("@" + message.from_user.username) if message.from_user.username else ""
+    cap = (
+        f"<b>🎫 Тикет #{ticket_id}</b>\n"
+        f"Пользователь: {user_line} {un}\n"
+        f"{created_line}\n\n"
+        f"{html.escape(raw)}"
+    )
+    await message.bot.send_message(
+        chat_id=config.support_group_id,
+        message_thread_id=int(topic.message_thread_id),
+        text=cap,
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
+
+    await state.clear()
+    await message.answer(f"✅ Ваш тикет #{ticket_id} создан. Ожидайте ответа от администратора.")
 

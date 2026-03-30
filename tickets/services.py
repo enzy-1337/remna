@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,4 +35,50 @@ async def get_active_ticket_id(session: AsyncSession, *, user_id: int) -> int | 
     )
     row = q.first()
     return int(row[0]) if row else None
+
+
+async def create_ticket(
+    session: AsyncSession,
+    *,
+    user: User,
+    telegram_user_id: int,
+    text_body: str,
+) -> int:
+    """Создать тикет и первое сообщение пользователя. topic_id временно 0, обновим после create_forum_topic."""
+    now = datetime.now(timezone.utc)
+    r = await session.execute(
+        text(
+            """
+            INSERT INTO tickets (user_id, telegram_user_id, status, topic_id, created_at, updated_at, last_activity)
+            VALUES (:uid, :tg, 'open', 0, :now, :now, :now)
+            RETURNING id
+            """
+        ),
+        {"uid": user.id, "tg": telegram_user_id, "now": now},
+    )
+    tid = int(r.scalar_one())
+    await session.execute(
+        text(
+            """
+            INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal)
+            VALUES (:tid, :sid, 'user', :stg, :txt, :now, false)
+            """
+        ),
+        {"tid": tid, "sid": user.id, "stg": telegram_user_id, "txt": text_body, "now": now},
+    )
+    return tid
+
+
+async def set_ticket_topic(session: AsyncSession, *, ticket_id: int, topic_id: int) -> None:
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        text(
+            """
+            UPDATE tickets
+            SET topic_id = :tp, updated_at = :now
+            WHERE id = :tid
+            """
+        ),
+        {"tp": topic_id, "now": now, "tid": ticket_id},
+    )
 
