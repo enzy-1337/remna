@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import html
 from datetime import datetime, timezone
 
-from tickets.keyboards import rating_keyboard, start_keyboard, topic_ticket_keyboard
+from tickets.keyboards import active_ticket_keyboard, rating_keyboard, start_keyboard, topic_ticket_keyboard
 from tickets.states import TicketStates
-from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, save_ticket_rating, set_ticket_topic
+from tickets.services import create_ticket, ensure_db_user, get_active_ticket_id, get_ticket_brief, save_ticket_rating, set_ticket_status, set_ticket_topic
 from tickets.config import config
 
 router = Router(name="tickets_user")
@@ -35,6 +35,24 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
 @router.callback_query(F.data == "tickets:noop")
 async def cb_noop(cq: CallbackQuery) -> None:
     await cq.answer()
+
+
+@router.callback_query(F.data == "tickets:home")
+async def cb_home(cq: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    if cq.from_user is None:
+        await cq.answer()
+        return
+    await state.clear()
+    db_user = await ensure_db_user(session, cq.from_user)
+    active_id = await get_active_ticket_id(session, user_id=db_user.id)
+    kb = start_keyboard(has_active_ticket=active_id is not None, active_ticket_id=active_id)
+    text = (
+        "👋 Добро пожаловать в поддержку Flux Network.\n\n"
+        "Здесь вы можете создать тикет и получить ответ администратора."
+    )
+    await cq.answer()
+    if cq.message:
+        await cq.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "tickets:create")
@@ -106,7 +124,49 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
     )
 
     await state.clear()
-    await message.answer(f"✅ Ваш тикет #{ticket_id} создан. Ожидайте ответа от администратора.")
+    await message.answer(
+        f"✅ Ваш тикет #{ticket_id} создан. Ожидайте ответа от администратора.",
+        reply_markup=active_ticket_keyboard(ticket_id),
+    )
+
+
+@router.callback_query(F.data.startswith("tickets:user_close:"))
+async def cb_user_close_ticket(cq: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    if cq.from_user is None:
+        await cq.answer()
+        return
+    await state.clear()
+    db_user = await ensure_db_user(session, cq.from_user)
+    active_id = await get_active_ticket_id(session, user_id=db_user.id)
+    if active_id is None:
+        await cq.answer("Активных тикетов нет.", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=active_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    # Защита от закрытия чужого тикета.
+    if int(t.get("telegram_user_id") or 0) != int(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if str(t.get("status") or "") == "closed":
+        await cq.answer("Тикет уже закрыт.", show_alert=True)
+        return
+
+    await set_ticket_status(session, ticket_id=active_id, status="closed", close_now=True)
+    topic_id = int(t.get("topic_id") or 0)
+    if topic_id:
+        try:
+            await cq.bot.close_forum_topic(chat_id=config.support_group_id, message_thread_id=topic_id)
+        except Exception:
+            pass
+
+    await cq.answer("Тикет закрыт")
+    if cq.message:
+        await cq.message.edit_text(
+            f"Ваш тикет #{active_id} закрыт.\n\nОцените работу поддержки:",
+            reply_markup=rating_keyboard(active_id),
+        )
 
 
 @router.callback_query(F.data.startswith("tickets:rate:"))

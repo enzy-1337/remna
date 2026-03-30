@@ -13,6 +13,7 @@ def start_keyboard(*, has_active_ticket: bool, active_ticket_id: int | None = No
                 callback_data="tickets:noop",
             )
         )
+        b.row(InlineKeyboardButton(text="❌ Закрыть тикет", callback_data=f"tickets:user_close:{active_ticket_id}"))
     else:
         b.row(InlineKeyboardButton(text="📩 Создать тикет", callback_data="tickets:create"))
     return b.as_markup()
@@ -44,5 +45,13 @@ def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="👍", callback_data=f"tickets:rate:{ticket_id}:1"),
         InlineKeyboardButton(text="👎", callback_data=f"tickets:rate:{ticket_id}:0"),
     )
+    return b.as_markup()
+
+
+def active_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text=f"🎫 Тикет #{ticket_id} активен", callback_data="tickets:noop"))
+    b.row(InlineKeyboardButton(text="❌ Закрыть тикет", callback_data=f"tickets:user_close:{ticket_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="tickets:home"))
     return b.as_markup()
 
