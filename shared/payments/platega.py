@@ -200,3 +200,34 @@ class PlategaProvider(BasePaymentProvider):
             amount_rub=amount_rub,
             paid=True,
         )
+
+    async def get_transaction_status(self, transaction_id: str) -> tuple[str, Decimal | None, dict[str, Any]]:
+        """
+        Ручная проверка: GET /transaction/{id} (Platega docs).
+        Возвращает (status_upper, amount_rub_or_None, raw).
+        """
+        if self._stub:
+            return "CONFIRMED", Decimal("100"), {"stub": True, "id": transaction_id, "status": "CONFIRMED"}
+        tid = (transaction_id or "").strip()
+        if not tid:
+            return "", None, {"error": "empty transaction_id"}
+        async with httpx.AsyncClient(base_url=self._base, timeout=15.0) as client:
+            r = await client.get(f"/transaction/{tid}", headers=self._headers())
+            if r.status_code == 404:
+                return "", None, {"error": "not_found"}
+            r.raise_for_status()
+            data = r.json()
+        st = str(data.get("status") or "").upper()
+        pd = data.get("paymentDetails") or {}
+        amt: Decimal | None = None
+        if isinstance(pd, dict) and pd.get("amount") is not None:
+            try:
+                amt = Decimal(str(pd["amount"]))
+            except Exception:
+                amt = None
+        if amt is None and data.get("amount") is not None:
+            try:
+                amt = Decimal(str(data["amount"]))
+            except Exception:
+                amt = None
+        return st, amt, data

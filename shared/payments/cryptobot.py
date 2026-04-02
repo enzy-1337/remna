@@ -140,3 +140,43 @@ class CryptoBotProvider(BasePaymentProvider):
             amount_rub=amount_rub,
             paid=True,
         )
+
+    async def is_invoice_paid(self, invoice_id: str) -> tuple[bool, Decimal | None, dict[str, Any]]:
+        """
+        Ручная проверка: получить invoice по id и понять, оплачен ли он.
+        Используем Crypto Pay API (pay.crypt.bot) метод getInvoices.
+        """
+        if self._stub:
+            return True, Decimal("100"), {"stub": True, "invoice_id": invoice_id, "status": "paid"}
+        iid = (invoice_id or "").strip()
+        if not iid:
+            return False, None, {"error": "empty invoice_id"}
+        async with httpx.AsyncClient(base_url=CRYPTO_PAY_API, timeout=15.0) as client:
+            r = await client.post(
+                "/api/getInvoices",
+                headers=self._headers(),
+                json={"invoice_ids": iid},
+            )
+            r.raise_for_status()
+            data = r.json()
+        if not data.get("ok"):
+            return False, None, {"error": "api_not_ok", "raw": data}
+        res = data.get("result") or {}
+        items = res.get("items") or res.get("invoices") or res.get("result") or []
+        if isinstance(items, dict):
+            items = [items]
+        inv: dict[str, Any] | None = None
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict) and str(it.get("invoice_id") or "") == iid:
+                    inv = it
+                    break
+            if inv is None and len(items) == 1 and isinstance(items[0], dict):
+                inv = items[0]
+        if not isinstance(inv, dict):
+            return False, None, {"error": "invoice_not_found", "raw": data}
+        st = str(inv.get("status") or "").lower()
+        paid = st in ("paid", "completed")
+        paid_amt = inv.get("paid_amount") or inv.get("amount")
+        amt = Decimal(str(paid_amt)) if paid_amt is not None else None
+        return paid, amt, inv

@@ -268,3 +268,77 @@ async def notify_topup_success(
                     session=session2,
                 )
             await session2.commit()
+
+
+async def manual_check_and_apply_topup(
+    session: AsyncSession,
+    *,
+    txn_id: int,
+    settings: Settings,
+) -> tuple[str, Decimal | None]:
+    """
+    Ручная проверка платежа пользователем (кнопка в боте).
+    Возвращает (status, credited_total_or_None).
+    status: completed | pending | rejected | not_found | error
+    """
+    r = await session.execute(select(Transaction).where(Transaction.id == txn_id))
+    txn = r.scalar_one_or_none()
+    if txn is None:
+        return "not_found", None
+    if txn.type != "topup":
+        return "rejected", None
+    if txn.status == "completed":
+        return "completed", txn.amount
+
+    provider = (txn.payment_provider or "").lower().strip()
+    external_id = (txn.payment_id or "").strip()
+    if not provider or not external_id:
+        return "error", None
+
+    try:
+        if provider == "cryptobot":
+            from shared.payments.cryptobot import CryptoBotProvider
+
+            prov = CryptoBotProvider(settings)
+            paid, amt, raw = await prov.is_invoice_paid(external_id)
+            if not paid:
+                return "pending", None
+            parsed = ParsedWebhookTopup(
+                internal_transaction_id=txn.id,
+                external_payment_id=external_id,
+                amount_rub=amt or txn.amount,
+                paid=True,
+            )
+        elif provider in ("platega", "platega_io"):
+            from shared.payments.platega import PlategaProvider
+
+            prov = PlategaProvider(settings)
+            st, amt, raw = await prov.get_transaction_status(external_id)
+            if st not in ("CONFIRMED", "PAID", "SUCCESS", "COMPLETED"):
+                return "pending", None
+            parsed = ParsedWebhookTopup(
+                internal_transaction_id=txn.id,
+                external_payment_id=external_id,
+                amount_rub=amt or txn.amount,
+                paid=True,
+            )
+        else:
+            # неизвестный провайдер
+            return "error", None
+    except Exception:
+        logger.exception("manual topup check failed txn=%s provider=%s", txn.id, provider)
+        return "error", None
+
+    status, _tg_id, credited_total, _user_id, _promo_bonus = await apply_topup_from_webhook(
+        session,
+        provider_name=provider,
+        parsed=parsed,
+        settings=settings,
+    )
+    if status == "completed":
+        return "completed", credited_total
+    if status == "duplicate":
+        return "completed", txn.amount
+    if status in ("rejected", "not_found"):
+        return status, None
+    return "error", None
