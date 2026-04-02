@@ -223,24 +223,39 @@ async def apply_topup_from_webhook(
 
 async def notify_topup_success(
     *,
-    telegram_id: int,
+    telegram_id: int | None,
     amount_rub: Decimal,
     promo_bonus_rub: Decimal | None = None,
     settings: Settings,
     user_id: int | None = None,
     provider_name: str | None = None,
 ) -> None:
+    tg: int | None = int(telegram_id) if telegram_id else None
+    if (tg is None or tg <= 0) and user_id is not None:
+        factory0 = get_session_factory()
+        async with factory0() as s0:
+            u0 = await s0.get(User, user_id)
+            if u0 is not None:
+                tg = int(u0.telegram_id)
+
     extra: str | None = None
     factory = get_session_factory()
     async with factory() as session:
-        extra = await try_apply_smart_cart_after_topup(session, telegram_id, settings)
+        if tg is not None and tg > 0:
+            extra = await try_apply_smart_cart_after_topup(session, tg, settings)
+        else:
+            logger.warning(
+                "notify_topup_success: нет telegram_id для корзины user_id=%s",
+                user_id,
+            )
         await session.commit()
     text = plain("✅ Баланс пополнен на ") + bold(str(amount_rub)) + plain(" ₽.")
     if extra:
         text += f"\n\n{extra}"
     if promo_bonus_rub is not None and promo_bonus_rub > 0:
         text += f"\n\n🎁 Промокод бонус: +{bold(str(promo_bonus_rub))} ₽."
-    await send_telegram_message(telegram_id, text, settings=settings)
+    if tg is not None and tg > 0:
+        await send_telegram_message(tg, text, settings=settings)
 
     if user_id is not None:
         from shared.services.admin_notify import notify_admin
@@ -275,25 +290,26 @@ async def manual_check_and_apply_topup(
     *,
     txn_id: int,
     settings: Settings,
-) -> tuple[str, Decimal | None]:
+) -> tuple[str, Decimal | None, Decimal | None, bool]:
     """
     Ручная проверка платежа пользователем (кнопка в боте).
-    Возвращает (status, credited_total_or_None).
+    Возвращает (status, credited_total_or_None, promo_bonus_or_None, should_notify).
+    should_notify=True только если зачисление выполнено в этом вызове (не дубликат вебхука).
     status: completed | pending | rejected | not_found | error
     """
     r = await session.execute(select(Transaction).where(Transaction.id == txn_id))
     txn = r.scalar_one_or_none()
     if txn is None:
-        return "not_found", None
+        return "not_found", None, None, False
     if txn.type != "topup":
-        return "rejected", None
+        return "rejected", None, None, False
     if txn.status == "completed":
-        return "completed", txn.amount
+        return "completed", txn.amount, None, False
 
     provider = (txn.payment_provider or "").lower().strip()
     external_id = (txn.payment_id or "").strip()
     if not provider or not external_id:
-        return "error", None
+        return "error", None, None, False
 
     try:
         if provider == "cryptobot":
@@ -302,7 +318,7 @@ async def manual_check_and_apply_topup(
             prov = CryptoBotProvider(settings)
             paid, amt, raw = await prov.is_invoice_paid(external_id)
             if not paid:
-                return "pending", None
+                return "pending", None, None, False
             parsed = ParsedWebhookTopup(
                 internal_transaction_id=txn.id,
                 external_payment_id=external_id,
@@ -315,7 +331,7 @@ async def manual_check_and_apply_topup(
             prov = PlategaProvider(settings)
             st, amt, raw = await prov.get_transaction_status(external_id)
             if st not in ("CONFIRMED", "PAID", "SUCCESS", "COMPLETED"):
-                return "pending", None
+                return "pending", None, None, False
             parsed = ParsedWebhookTopup(
                 internal_transaction_id=txn.id,
                 external_payment_id=external_id,
@@ -324,21 +340,21 @@ async def manual_check_and_apply_topup(
             )
         else:
             # неизвестный провайдер
-            return "error", None
+            return "error", None, None, False
     except Exception:
         logger.exception("manual topup check failed txn=%s provider=%s", txn.id, provider)
-        return "error", None
+        return "error", None, None, False
 
-    status, _tg_id, credited_total, _user_id, _promo_bonus = await apply_topup_from_webhook(
+    status, _tg_id, credited_total, _user_id, promo_bonus = await apply_topup_from_webhook(
         session,
         provider_name=provider,
         parsed=parsed,
         settings=settings,
     )
     if status == "completed":
-        return "completed", credited_total
+        return "completed", credited_total, promo_bonus, True
     if status == "duplicate":
-        return "completed", txn.amount
+        return "completed", txn.amount, None, False
     if status in ("rejected", "not_found"):
-        return status, None
-    return "error", None
+        return status, None, None, False
+    return "error", None, None, False

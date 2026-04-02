@@ -26,7 +26,11 @@ from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.services.topup_service import create_topup_payment, manual_check_and_apply_topup
+from shared.services.topup_service import (
+    create_topup_payment,
+    manual_check_and_apply_topup,
+    notify_topup_success,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -404,10 +408,23 @@ async def cb_topup_manual_check(
         return
 
     settings = get_settings()
-    status, credited = await manual_check_and_apply_topup(session, txn_id=txn_id, settings=settings)
+    status, credited, promo_bonus, should_notify = await manual_check_and_apply_topup(
+        session, txn_id=txn_id, settings=settings
+    )
     await session.commit()
 
     if status == "completed" and credited is not None:
+        if should_notify:
+            txn_row = await session.get(Transaction, txn_id)
+            tg = cq.from_user.id if cq.from_user else db_user.telegram_id
+            await notify_topup_success(
+                telegram_id=tg,
+                amount_rub=credited,
+                promo_bonus_rub=promo_bonus,
+                settings=settings,
+                user_id=db_user.id,
+                provider_name=(txn_row.payment_provider if txn_row else None),
+            )
         await cq.answer()
         cap = join_lines(
             "✅ " + bold("Платёж зачислен"),

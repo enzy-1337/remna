@@ -50,7 +50,7 @@ async def webhook_cryptobot(request: Request) -> Response:
         )
         await session.commit()
 
-    if status == "completed" and tg_id and amount is not None:
+    if status == "completed" and amount is not None:
         await notify_topup_success(
             telegram_id=tg_id,
             amount_rub=amount,
@@ -96,7 +96,7 @@ async def webhook_platega(request: Request) -> Response:
         )
         await session.commit()
 
-    if status == "completed" and tg_id and amount is not None:
+    if status == "completed" and amount is not None:
         await notify_topup_success(
             telegram_id=tg_id,
             amount_rub=amount,
