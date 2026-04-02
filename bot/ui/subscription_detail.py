@@ -159,12 +159,7 @@ async def build_subscription_detail_caption(
     exp_msk = exp.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
 
     header = "🔑 " + bold("Подписка:")
-    quote_lines = [
-        status_human,
-        plain("🆔 ID в боте: ") + code(str(user.id)),
-    ]
-    if user.remnawave_uuid:
-        quote_lines.append(plain("🖥️ UUID в панели: ") + code(str(user.remnawave_uuid)))
+    quote_lines = [status_human]
     quote_lines.extend(
         [
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
@@ -175,7 +170,6 @@ async def build_subscription_detail_caption(
         + plain(" (")
         + esc(left_phrase)
         + plain(")"),
-        plain("💸 Стоимость: ") + _monthly_price_line(plan),
         ]
     )
     if sub.auto_renew and sub.status == "active":

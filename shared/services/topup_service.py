@@ -140,7 +140,13 @@ async def apply_topup_from_webhook(
             txn.payment_id,
             parsed.external_payment_id,
         )
-        return "rejected", None, None, None, None
+        # Для Platega бывает разный формат идентификаторов (создание/вебхук),
+        # при этом `internal_transaction_id` всё равно мапится на запись в БД.
+        # Поэтому не блокируем зачисление, а фиксируем payment_id как best-effort.
+        if provider_name.lower().strip() == "platega":
+            txn.payment_id = parsed.external_payment_id
+        else:
+            return "rejected", None, None, None, None
 
     # Сумма: доверяем нашей записи в БД; вебхук может уточнить для fiat
     credited = txn.amount

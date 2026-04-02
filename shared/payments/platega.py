@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -110,40 +111,92 @@ class PlategaProvider(BasePaymentProvider):
         """
         Wiki-пример: { signature, status, transaction: { id, status, pricing, ... } }
         """
+        def _walk_strings(v: Any):
+            if isinstance(v, str):
+                yield v
+                return
+            if isinstance(v, dict):
+                for vv in v.values():
+                    yield from _walk_strings(vv)
+                return
+            if isinstance(v, list):
+                for vv in v:
+                    yield from _walk_strings(vv)
+                return
+
         status_root = (body.get("status") or "").upper()
         tx = body.get("transaction")
-        if isinstance(tx, dict):
-            st = (tx.get("status") or status_root).upper()
-            tid = str(tx.get("id") or tx.get("invoiceId") or "")
-            raw_pl = tx.get("payload") or ""
-        else:
-            st = status_root
-            tid = str(body.get("id") or body.get("transactionId") or "")
-            raw_pl = body.get("payload") or ""
+        tx_dict = tx if isinstance(tx, dict) else None
 
-        if st not in ("CONFIRMED", "PAID", "SUCCESS", "COMPLETED"):
-            return None
-        if not isinstance(raw_pl, str) or not raw_pl.startswith("txn:"):
-            return None
-        try:
-            internal_id = int(raw_pl.split(":", 1)[1])
-        except (ValueError, IndexError):
+        # --- status
+        st = status_root
+        if tx_dict is not None:
+            st = (tx_dict.get("status") or status_root).upper()
+        allowed_status = {"CONFIRMED", "PAID", "SUCCESS", "COMPLETED"}
+        if st and st not in allowed_status:
             return None
 
+        # --- internal transaction id (from payload: "txn:<int>")
+        payload_candidates: list[str] = []
+        for v in (
+            (tx_dict.get("payload") if tx_dict is not None else None),
+            body.get("payload"),
+        ):
+            if isinstance(v, str) and "txn:" in v.lower():
+                payload_candidates.append(v)
+
+        internal_id: int | None = None
+        for s in payload_candidates:
+            m = re.search(r"txn:(\d+)", s, flags=re.IGNORECASE)
+            if m:
+                internal_id = int(m.group(1))
+                break
+        if internal_id is None:
+            for s in _walk_strings(body):
+                if "txn:" not in s.lower():
+                    continue
+                m = re.search(r"txn:(\d+)", s, flags=re.IGNORECASE)
+                if m:
+                    internal_id = int(m.group(1))
+                    break
+        if internal_id is None:
+            return None
+
+        # --- external payment id (for logging/idempotency)
+        ext_candidates: list[str] = []
+        if tx_dict is not None:
+            for k in ("transactionId", "id", "invoiceId", "paymentId"):
+                v = tx_dict.get(k)
+                if v is not None and str(v).strip():
+                    ext_candidates.append(str(v).strip())
+        for k in ("transactionId", "id", "invoiceId", "paymentId"):
+            v = body.get(k)
+            if v is not None and str(v).strip():
+                ext_candidates.append(str(v).strip())
+        external_id = ext_candidates[0] if ext_candidates else ""
+
+        # --- amount (optional; зачисление всё равно идемпотентно по txn.amount)
         amount_rub = Decimal("0")
-        pricing = (tx or {}).get("pricing") if isinstance(tx, dict) else None
-        if isinstance(pricing, dict):
-            loc = pricing.get("local") or {}
-            if isinstance(loc, dict) and loc.get("amount") is not None:
-                amount_rub = Decimal(str(loc["amount"]))
-        if amount_rub <= 0 and isinstance(tx, dict):
-            pd = tx.get("paymentDetails") or {}
-            if isinstance(pd, dict) and pd.get("amount") is not None:
-                amount_rub = Decimal(str(pd["amount"]))
+        if tx_dict is not None:
+            pricing = tx_dict.get("pricing")
+            if isinstance(pricing, dict):
+                loc = pricing.get("local") or {}
+                if isinstance(loc, dict) and loc.get("amount") is not None:
+                    amount_rub = Decimal(str(loc["amount"]))
+            if amount_rub <= 0:
+                pd = tx_dict.get("paymentDetails") or {}
+                if isinstance(pd, dict) and pd.get("amount") is not None:
+                    amount_rub = Decimal(str(pd["amount"]))
+
+        if amount_rub <= 0 and body.get("amount") is not None:
+            try:
+                amount_rub = Decimal(str(body["amount"]))
+            except Exception:
+                pass
 
         return ParsedWebhookTopup(
             internal_transaction_id=internal_id,
-            external_payment_id=tid,
+            external_payment_id=external_id,
             amount_rub=amount_rub,
             paid=True,
         )

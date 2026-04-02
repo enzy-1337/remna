@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message, User as TgUser
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.handlers.common import reject_if_blocked, reject_if_no_user
-from bot.keyboards.inline import submenu_back_keyboard
+from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
+from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.states.promo import PromoStates
 from bot.utils.screen_photo import (
     answer_callback_with_photo_screen,
@@ -19,12 +18,15 @@ from bot.utils.screen_photo import (
     delete_message_safe,
     send_profile_screen,
 )
+from bot.ui.profile_text import profile_caption
 from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
+from shared.services.subscription_service import get_active_subscription
 from shared.services.promo_service import apply_promo_code_for_user
+from shared.services.trial_service import trial_eligible
 
 router = Router(name="promo")
 
@@ -74,16 +76,41 @@ async def cb_promo_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
 
 
 @router.callback_query(F.data == "promo:cancel")
-async def cb_promo_cancel(cq: CallbackQuery, state: FSMContext) -> None:
+async def cb_promo_cancel(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    tg_user: TgUser | None,
+    state: FSMContext,
+    is_bot_admin: bool = False,
+) -> None:
     await state.clear()
     await cq.answer()
-    if cq.message:
-        cap = esc("Операция отменена.")
-        kb = submenu_back_keyboard()
-        if cq.message.photo:
-            await cq.message.edit_caption(caption=cap, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
-        else:
-            await cq.message.edit_text(cap, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+
+    settings = get_settings()
+    if tg_user is None:
+        await cq.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    show_trial = trial_eligible(db_user, has_act)
+
+    cap = profile_caption(db_user, tg_user)
+    kb = profile_main_keyboard(
+        has_active_sub=has_act,
+        show_trial=show_trial,
+        support_url=support_telegram_url(settings.support_username),
+        is_admin=is_bot_admin,
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
+    )
 
 
 @router.message(PromoStates.waiting_code, F.text)

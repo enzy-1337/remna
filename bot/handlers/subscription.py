@@ -49,7 +49,6 @@ def _sub_main_keyboard(
         b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
         ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
-    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
@@ -159,7 +158,6 @@ async def cb_plans_or_extend(
             )
         )
     back_cb = "menu:sub_main" if has_act else "menu:main"
-    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
     await answer_callback_with_photo_screen(
         cq,
