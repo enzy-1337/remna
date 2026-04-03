@@ -270,8 +270,8 @@ async def msg_admin_reply(
         user_tg_id = 0
     if user_tg_id:
         body = (
-            f"<b>📨 Ответ от администратора | Тикет #{ticket_id}</b>\n\n"
-            f"<pre>{html.escape(txt)}</pre>\n\n"
+            f"📨 Ответ от администратора | Тикет #{ticket_id}\n\n"
+            f"{html.escape(txt)}\n\n"
             "С уважением, Flux Network"
         )
         await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
@@ -283,7 +283,7 @@ async def msg_admin_reply(
         topic_id = 0
     if topic_id:
         admin_name = (message.from_user.full_name or "Администратор").strip()
-        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n<pre>{html.escape(txt)}</pre>"
+        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n<blockquote>{html.escape(txt)}</blockquote>"
         await message.bot.send_message(
             chat_id=config.support_group_id,
             message_thread_id=topic_id,
@@ -338,8 +338,8 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         user_tg_id = 0
     if user_tg_id:
         body = (
-            f"<b>📨 Ответ от администратора | Тикет #{int(t['id'])}</b>\n\n"
-            f"<pre>{html.escape(txt)}</pre>\n\n"
+            f"📨 Ответ от администратора | Тикет #{int(t['id'])}\n\n"
+            f"{html.escape(txt)}\n\n"
             "С уважением, Flux Network"
         )
         try:

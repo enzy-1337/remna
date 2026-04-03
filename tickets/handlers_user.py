@@ -123,7 +123,7 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
         f"<b>🎫 Тикет #{ticket_id}</b>\n"
         f"Пользователь: {user_line} {un}\n"
         f"{created_line}\n\n"
-        f"<pre>{html.escape(raw)}</pre>"
+        f"<blockquote>{html.escape(raw)}</blockquote>"
     )
     await message.bot.send_message(
         chat_id=config.support_group_id,
@@ -256,7 +256,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     topic_text = (
         f"<b>✉️ Новое сообщение в тикете #{active_id}</b>\n"
         f"От: {user_line}\n\n"
-        f"<pre>{html.escape(txt)}</pre>"
+        f"<blockquote>{html.escape(txt)}</blockquote>"
     )
 
     # В топик тикета.
@@ -282,9 +282,9 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         un = (me.username or "").lstrip("@")
         deep = f"https://t.me/{un}?start=reply_{active_id}" if un else ""
         dm = (
-            f"<b>✉️ Пользователь написал в тикет #{active_id}</b>\n"
-            f"От: {user_line}\n\n"
-            f"<pre>{html.escape(txt)}</pre>"
+            f"✉️ Пользователь написал в тикет #{active_id}\n"
+            f"От: {disp}\n\n"
+            f"{txt}"
             + (f"\n\n<a href=\"{deep}\">Ответить</a>" if deep else "")
         )
         await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)

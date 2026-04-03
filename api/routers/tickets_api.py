@@ -235,7 +235,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
             if uid:
                 await bot.send_message(
                     chat_id=uid,
-                    text=f"<b>📨 Ответ от администратора | Тикет #{ticket_id}</b>\n\n<pre>{txt_html}</pre>\n\nС уважением, Flux Network",
+                    text=f"📨 Ответ от администратора | Тикет #{ticket_id}\n\n{txt_html}\n\nС уважением, Flux Network",
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
@@ -245,7 +245,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                 await bot.send_message(
                     chat_id=tickets_config.support_group_id,
                     message_thread_id=topic_id,
-                    text=f"<b>💬 Ответ администратора</b> — {label}\n\n<pre>{txt_html}</pre>",
+                    text=f"<b>💬 Ответ администратора</b> — {label}\n\n<blockquote>{txt_html}</blockquote>",
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
