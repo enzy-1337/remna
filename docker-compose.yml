@@ -14,6 +14,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Однократно применяет Alembic (в т.ч. новые колонки) до старта ботов/API.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   redis:
     image: redis:7-alpine
     # Пробрасываем на хост нестандартный порт под `network_mode: host`.
@@ -34,6 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   api:
@@ -54,6 +69,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   tickets-bot:
@@ -77,6 +94,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     restart: "no"
 
 volumes:

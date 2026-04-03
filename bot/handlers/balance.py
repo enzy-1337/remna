@@ -384,3 +384,47 @@ async def cb_topup_provider(
             )
         else:
             await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id))
+
+
+@router.callback_query(F.data.startswith("topup:check:"))
+async def cb_topup_check(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    """Ручная проверка: вебхук мог зачислить платёж после показа счёта."""
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    parts = cq.data.split(":")
+    if len(parts) != 3 or parts[0] != "topup" or parts[1] != "check":
+        await cq.answer("Ошибка данных", show_alert=True)
+        return
+    try:
+        txn_id = int(parts[2])
+    except ValueError:
+        await cq.answer("Ошибка данных", show_alert=True)
+        return
+    txn = (
+        await session.execute(
+            select(Transaction).where(Transaction.id == txn_id, Transaction.user_id == db_user.id)
+        )
+    ).scalar_one_or_none()
+    if txn is None:
+        await cq.answer("Платёж не найден", show_alert=True)
+        return
+    if txn.type != "topup":
+        await cq.answer("Некорректная операция", show_alert=True)
+        return
+    await session.refresh(txn)
+    if txn.status != "completed":
+        await cq.answer(
+            "Платёж ещё не получен. Обычно зачисление за 1–3 мин после оплаты.",
+            show_alert=True,
+        )
+        return
+    await session.refresh(db_user)
+    hist = await _history_lines(session, db_user.id)
+    cap = _balance_caption(db_user, hist)
+    await cq.answer("Баланс обновлён")
+    await _edit_or_send_balance(cq, caption=cap, reply_markup=topup_amounts_keyboard())

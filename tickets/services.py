@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.models.user import User
 from shared.services.user_registration import get_user_by_telegram_id, register_user
+from shared.tickets_db_compat import ticket_messages_has_photo_file_id_column
 
 
 async def ensure_db_user(session: AsyncSession, tg_user) -> User:
@@ -129,24 +130,44 @@ async def add_ticket_message(
     photo_file_id: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
-    await session.execute(
-        text(
-            """
-            INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal, photo_file_id)
-            VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal, :photo)
-            """
-        ),
-        {
-            "tid": ticket_id,
-            "sid": sender_id,
-            "role": sender_role,
-            "stg": sender_telegram_id,
-            "txt": text_body,
-            "now": now,
-            "internal": bool(is_internal),
-            "photo": photo_file_id,
-        },
-    )
+    has_photo = await ticket_messages_has_photo_file_id_column(session)
+    if has_photo:
+        await session.execute(
+            text(
+                """
+                INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal, photo_file_id)
+                VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal, :photo)
+                """
+            ),
+            {
+                "tid": ticket_id,
+                "sid": sender_id,
+                "role": sender_role,
+                "stg": sender_telegram_id,
+                "txt": text_body,
+                "now": now,
+                "internal": bool(is_internal),
+                "photo": photo_file_id,
+            },
+        )
+    else:
+        await session.execute(
+            text(
+                """
+                INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal)
+                VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal)
+                """
+            ),
+            {
+                "tid": ticket_id,
+                "sid": sender_id,
+                "role": sender_role,
+                "stg": sender_telegram_id,
+                "txt": text_body,
+                "now": now,
+                "internal": bool(is_internal),
+            },
+        )
 
 
 async def bump_ticket_activity(

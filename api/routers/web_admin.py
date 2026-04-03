@@ -1681,11 +1681,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     day_pct = int(min(100, round((safe_day / safe_month) * 100))) if safe_month > 0 else 0
     sub_pct = int(min(100, round((active_sub_users / users_count) * 100))) if users_count > 0 else 0
     body = f"""
-    <style>
-    @keyframes remnaTileIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: none; }} }}
-    .remna-tile-in {{ animation: remnaTileIn 0.45s ease-out both; }}
-    </style>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg remna-tile-in" style="animation-delay:0ms">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
         <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
@@ -1728,7 +1724,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
       </div>
     </div>
     <div class="mt-4">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg remna-tile-in" style="animation-delay:70ms">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
         <div class="card-body items-center text-center gap-2">
           <p class="text-sm opacity-60">Подключённых клиентов (сумма по API Remnawave)</p>
           {rw_tile}
@@ -1736,7 +1732,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         </div>
       </div>
     </div>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4 remna-tile-in" style="animation-delay:140ms">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-line text-primary mr-2" aria-hidden="true"></i>Графики: дни и часы (МСК)</h2>
         <p class="text-sm opacity-60">Одна библиотека Chart.js: столбцы — сумма успешных пополнений по дню (14 календарных дней по МСК); линии — за 7 дней: пополнения по часу суток и активность устройств по <code class="bg-base-300 px-1 rounded text-xs">last_used_at</code> в БД.</p>

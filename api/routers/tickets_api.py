@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from shared.database import get_session_factory
+from shared.tickets_db_compat import ticket_messages_has_photo_file_id_column
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
@@ -47,6 +48,13 @@ def _to_iso(dt: Any) -> str | None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M МСК")
     return str(dt)
+
+
+def _ticket_message_json(m: Any, has_photo: bool) -> dict[str, Any]:
+    d = {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
+    if not has_photo:
+        d["photo_file_id"] = None
+    return d
 
 
 class TicketReplyIn(BaseModel):
@@ -159,11 +167,17 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
         ).mappings().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        msg_cols = (
+            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id"
+            if has_photo
+            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal"
+        )
         msgs = (
             await session.execute(
                 text(
-                    """
-                    SELECT id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id
+                    f"""
+                    SELECT {msg_cols}
                     FROM ticket_messages
                     WHERE ticket_id = :tid
                     ORDER BY id ASC
@@ -224,7 +238,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
     return {
         "ticket": {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()},
         "messages": [
-            {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
+            _ticket_message_json(m, has_photo)
             for m in msgs
         ],
         "user": user_info,
@@ -252,6 +266,8 @@ async def api_ticket_message_photo(request: Request, ticket_id: int, msg_id: int
     if not tok:
         raise HTTPException(status_code=503, detail="Tickets bot not configured")
     async with await _session() as session:
+        if not await ticket_messages_has_photo_file_id_column(session):
+            raise HTTPException(status_code=404, detail="Photo not available")
         row = (
             await session.execute(
                 text("SELECT photo_file_id FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
@@ -303,15 +319,27 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
             ).first()
             admin_uid = int(u[0]) if u else None
         now = datetime.now(timezone.utc)
-        await session.execute(
-            text(
-                """
-                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
-                VALUES (:tid,:sid,'admin',:stg,:txt,:now,false,NULL)
-                """
-            ),
-            {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
-        )
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        if has_photo:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,false,NULL)
+                    """
+                ),
+                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+            )
+        else:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,false)
+                    """
+                ),
+                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+            )
         await session.execute(
             text(
                 """
@@ -374,15 +402,27 @@ async def api_ticket_note(request: Request, ticket_id: int, body: TicketNoteIn) 
             u = (await session.execute(text("SELECT id FROM users WHERE telegram_id=:tg LIMIT 1"), {"tg": admin_tg})).first()
             admin_uid = int(u[0]) if u else None
         now = datetime.now(timezone.utc)
-        await session.execute(
-            text(
-                """
-                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
-                VALUES (:tid,:sid,'admin',:stg,:txt,:now,true,NULL)
-                """
-            ),
-            {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
-        )
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        if has_photo:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,true,NULL)
+                    """
+                ),
+                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+            )
+        else:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,true)
+                    """
+                ),
+                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+            )
         await session.execute(
             text("UPDATE tickets SET updated_at=:now,last_activity=:now WHERE id=:tid"),
             {"now": now, "tid": ticket_id},

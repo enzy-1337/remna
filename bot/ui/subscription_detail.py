@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +13,7 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subsc
 from shared.integrations.rw_traffic import (
     extract_connected_devices_from_rw_user,
     extract_traffic_gb_from_rw_user,
+    is_rw_hwid_devices_unlimited,
     is_rw_traffic_unlimited,
     traffic_limit_gb_for_display,
 )
@@ -53,15 +53,6 @@ def _humanize_left(exp: datetime, now: datetime) -> str:
     return "меньше минуты"
 
 
-def _monthly_price_line(plan) -> str:
-    if not plan or plan.price_rub <= 0:
-        return esc("Триал / без оплаты за период")
-    d = max(1, int(plan.duration_days))
-    monthly = (plan.price_rub * Decimal(30)) / Decimal(d)
-    m = monthly.quantize(Decimal("0.01"))
-    return esc(f"≈ {m} ₽/мес (разово {plan.price_rub} ₽ за {d} дн.)")
-
-
 async def build_subscription_detail_caption(
     session: AsyncSession,
     *,
@@ -72,7 +63,7 @@ async def build_subscription_detail_caption(
     """
     Возвращает (подпись MarkdownV2, url подписки или None).
     Трафик и устройства: из панели Remnawave при наличии uuid; ∞ если лимит отключён в панели.
-    Слоты: занято (HWID/панель) / куплено слотов в боте (sub.devices_count); у админа бота знаменатель ∞.
+    Слоты: привязано / разрешено в подписке (sub.devices_count); ∞ если админ бота или в панели отключён лимит HWID.
     """
     sub = await get_active_subscription(session, user.id)
     now = datetime.now(timezone.utc)
@@ -136,7 +127,7 @@ async def build_subscription_detail_caption(
                 + limit_hint
             )
 
-    # --- Слоты: занято (список HWID или запасной счётчик) / куплено в боте (devices_count); админ бота → ∞
+    # --- Слоты: привязано / devices_count; ∞ — админ бота или лимит HWID отключён в панели
     if uinf:
         if hwid_list_ok:
             n_occupied = hwid_devices_count
@@ -147,7 +138,8 @@ async def build_subscription_detail_caption(
     else:
         n_occupied = await count_devices(session, sub.id)
 
-    denom_slots = bold("∞") if is_bot_admin else bold(str(sub.devices_count))
+    denom_unlimited = is_bot_admin or (uinf is not None and is_rw_hwid_devices_unlimited(uinf))
+    denom_slots = bold("∞") if denom_unlimited else bold(str(sub.devices_count))
     devices_slots_line = (
         plain("📟 Слоты: ") + bold(str(n_occupied)) + plain(" / ") + denom_slots
     )
@@ -172,7 +164,6 @@ async def build_subscription_detail_caption(
         + plain(" (")
         + esc(left_phrase)
         + plain(")"),
-        plain("💸 Стоимость: ") + _monthly_price_line(plan),
         ]
     )
     if sub.auto_renew and sub.status == "active":
