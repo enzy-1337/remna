@@ -2016,7 +2016,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     (function(){{
       var ticketId={ticket_id};
       var admins={admins_json};
-      var stMap={{open:['badge-info','Открыт'],in_progress:['badge-warning','В работе'],closed:['badge-ghost','Закрыт']}};
+      var stMap={{{"open":["badge-info","Открыт"],"in_progress":["badge-warning","В работе"],"closed":["badge-ghost","Закрыт"]}}};
       var meta=document.getElementById('tk-meta');
       var user=document.getElementById('tk-user');
       var chat=document.getElementById('tk-chat');
@@ -2098,7 +2098,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +'<input type="hidden" name="enabled" value="'+nxt+'"/>'
             +'<button type="submit" class="btn btn-ghost btn-xs">'+esc(lbl)+'</button>'
             +'</form>';
-          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" onsubmit="return confirm(\'Отключить подписку пользователя?\');">'
+          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" onsubmit="return confirm(&quot;Отключить подписку пользователя?&quot;);">'
             +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
             +'<button type="submit" class="btn btn-error btn-outline btn-sm">Отключить подписку</button>'
             +'</form>';
@@ -2162,7 +2162,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       }});
       document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
       document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
-      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm('Закрыть тикет?'))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{alert('Не удалось закрыть тикет');}}}});
+      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm("Закрыть тикет?"))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{alert("Не удалось закрыть тикет");}}}});
       document.getElementById('tk-assign-save').addEventListener('click', async function(){{
         var tg=assign.value||'';
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
