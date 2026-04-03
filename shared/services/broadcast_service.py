@@ -7,7 +7,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,11 +56,21 @@ async def broadcast_to_users(
     async with factory() as session:
         ids = await collect_recipient_telegram_ids(session, skip_blocked=skip_blocked)
 
+    n = len(ids)
+    logger.info("broadcast: старт, получателей=%s (skip_blocked=%s)", n, skip_blocked)
+
     ok = 0
     failed = 0
 
     async def _send(chat_id: int) -> None:
-        await bot.send_message(chat_id, body, parse_mode=parse_mode)
+        try:
+            await bot.send_message(chat_id, body, parse_mode=parse_mode)
+        except TelegramBadRequest:
+            # Часто ломается разметка HTML — повтор без parse_mode (как обычный текст)
+            if parse_mode:
+                await bot.send_message(chat_id, body, parse_mode=None)
+            else:
+                raise
 
     for tid in ids:
         try:
@@ -74,15 +84,16 @@ async def broadcast_to_users(
                 await _send(tid)
                 ok += 1
             except Exception:
-                logger.debug("broadcast retry failed chat=%s", tid, exc_info=True)
+                logger.warning("broadcast retry failed chat=%s", tid, exc_info=True)
                 failed += 1
         except TelegramForbiddenError:
             failed += 1
         except Exception:
-            logger.debug("broadcast send failed chat=%s", tid, exc_info=True)
+            logger.warning("broadcast send failed chat=%s", tid, exc_info=True)
             failed += 1
 
         if delay_sec > 0:
             await asyncio.sleep(delay_sec)
 
+    logger.info("broadcast: завершено ok=%s failed=%s (всего в выборке %s)", ok, failed, n)
     return ok, failed

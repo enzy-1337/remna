@@ -1111,16 +1111,25 @@ async def admin_logout(request: Request):
 
 
 async def _admin_broadcast_job(text: str) -> None:
+    import logging
+
     from aiogram import Bot
 
     from shared.services.broadcast_service import broadcast_to_users
 
+    log = logging.getLogger("api.broadcast")
     settings = get_settings()
     tok = (settings.bot_token or "").strip()
     if not tok:
+        log.error("фоновая рассылка: BOT_TOKEN пуст — пропуск")
         return
-    async with Bot(token=tok) as bot:
-        await broadcast_to_users(bot, text)
+    try:
+        log.info("фоновая рассылка из web-admin: длина текста=%s симв.", len((text or "").strip()))
+        async with Bot(token=tok) as bot:
+            ok, failed = await broadcast_to_users(bot, text)
+        log.info("фоновая рассылка завершена: доставлено=%s ошибок=%s", ok, failed)
+    except Exception:
+        log.exception("фоновая рассылка: необработанная ошибка")
 
 
 @router.get("/broadcast")
@@ -2016,7 +2025,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     (function(){{
       var ticketId={ticket_id};
       var admins={admins_json};
-      var stMap={{{"open":["badge-info","Открыт"],"in_progress":["badge-warning","В работе"],"closed":["badge-ghost","Закрыт"]}}};
+      var stMap={{"open":["badge-info","Открыт"],"in_progress":["badge-warning","В работе"],"closed":["badge-ghost","Закрыт"]}};
       var meta=document.getElementById('tk-meta');
       var user=document.getElementById('tk-user');
       var chat=document.getElementById('tk-chat');
