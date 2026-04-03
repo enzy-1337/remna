@@ -26,11 +26,7 @@ from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.services.topup_service import (
-    create_topup_payment,
-    manual_check_and_apply_topup,
-    notify_topup_success,
-)
+from shared.services.topup_service import create_topup_payment
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +351,7 @@ async def cb_topup_provider(
         return
 
     try:
-        txn, pay_url = await create_topup_payment(
+        _txn, pay_url = await create_topup_payment(
             session,
             user=db_user,
             telegram_id=tg.id,
@@ -379,71 +375,12 @@ async def cb_topup_provider(
         "",
         plain("Нажмите кнопку ниже, чтобы перейти к оплате."),
         "",
-        plain("Пожалуйста, не закрывайте это окно, пока платёж не зачислится."),
         plain("После оплаты баланс обновится автоматически (обычно в течение минуты)."),
-        plain("Если не обновилось — нажмите «Проверить зачисление»."),
     )
     if cq.message:
         if cq.message.photo:
             await cq.message.edit_caption(
-                caption=text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id)
+                caption=text, reply_markup=topup_invoice_keyboard(pay_url)
             )
         else:
-            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id))
-
-
-@router.callback_query(F.data.startswith("topup:check:"))
-async def cb_topup_manual_check(
-    cq: CallbackQuery,
-    session: AsyncSession,
-    db_user: User | None,
-) -> None:
-    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
-        return
-    assert db_user is not None
-    try:
-        txn_id = int(cq.data.split(":")[2])
-    except Exception:
-        await cq.answer("Ошибка проверки", show_alert=True)
-        return
-
-    settings = get_settings()
-    status, credited, promo_bonus, should_notify = await manual_check_and_apply_topup(
-        session, txn_id=txn_id, settings=settings
-    )
-    await session.commit()
-
-    if status == "completed" and credited is not None:
-        if should_notify:
-            txn_row = await session.get(Transaction, txn_id)
-            tg = cq.from_user.id if cq.from_user else db_user.telegram_id
-            await notify_topup_success(
-                telegram_id=tg,
-                amount_rub=credited,
-                promo_bonus_rub=promo_bonus,
-                settings=settings,
-                user_id=db_user.id,
-                provider_name=(txn_row.payment_provider if txn_row else None),
-            )
-        await cq.answer()
-        cap = join_lines(
-            "✅ " + bold("Платёж зачислен"),
-            "",
-            plain("Зачислено: ") + bold(str(credited)) + plain(" ₽"),
-        )
-        await _edit_or_send_balance(
-            cq,
-            caption=cap,
-            reply_markup=topup_amounts_keyboard(),
-        )
-        return
-
-    if status in ("pending",):
-        await cq.answer("Платёж пока не подтверждён. Попробуйте через 10–30 сек.", show_alert=False)
-        return
-
-    if status == "not_found":
-        await cq.answer("Транзакция не найдена.", show_alert=True)
-        return
-
-    await cq.answer("Не удалось проверить платёж. Попробуйте позже.", show_alert=True)
+            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url))

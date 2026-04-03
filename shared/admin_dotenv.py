@@ -343,6 +343,18 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Час UTC для ежедневного бэкапа PostgreSQL.",
             ),
             (
+                "BACKUP_TIMEZONE",
+                "Таймзона бэкапа",
+                lambda s: s.backup_timezone,
+                "Например Europe/Moscow. Используется с BACKUP_HOUR_LOCAL.",
+            ),
+            (
+                "BACKUP_HOUR_LOCAL",
+                "Час бэкапа (локальный)",
+                lambda s: "" if s.backup_hour_local is None else str(s.backup_hour_local),
+                "Если задан, имеет приоритет над BACKUP_HOUR_UTC.",
+            ),
+            (
                 "BACKUP_MAX_TELEGRAM_MB",
                 "Макс. размер файла бэкапа (МБ)",
                 lambda s: str(s.backup_max_telegram_mb),

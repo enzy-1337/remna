@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -176,6 +178,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
 async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn) -> dict:
     _require_api_login(request)
     txt = (body.text or "").strip()
+    txt_html = html.escape(txt)
     if not txt:
         raise HTTPException(status_code=400, detail="text is required")
     async with await _session() as session:
@@ -232,16 +235,18 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
             if uid:
                 await bot.send_message(
                     chat_id=uid,
-                    text=f"<b>📨 Ответ от администратора | Тикет #{ticket_id}</b>\n\n{txt}\n\nС уважением, Flux Network",
+                    text=f"<b>📨 Ответ от администратора | Тикет #{ticket_id}</b>\n\n<pre>{txt_html}</pre>\n\nС уважением, Flux Network",
+                    parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
             topic_id = int(t["topic_id"] or 0)
             if topic_id:
-                label = str((request.session.get("wauth") or {}).get("label") or "Администратор")
+                label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
                 await bot.send_message(
                     chat_id=tickets_config.support_group_id,
                     message_thread_id=topic_id,
-                    text=f"<b>💬 Ответ администратора</b> — {label}\n\n{txt}",
+                    text=f"<b>💬 Ответ администратора</b> — {label}\n\n<pre>{txt_html}</pre>",
+                    parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
         finally:
@@ -326,10 +331,16 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
                         chat_id=tickets_config.support_group_id,
                         message_thread_id=topic_id,
                         text=f"<b>ℹ️ Статус тикета #{ticket_id} обновлен через сайт:</b> {status_ru}",
+                        parse_mode=ParseMode.HTML,
                         disable_web_page_preview=True,
                     )
                 except Exception:
                     pass
+                if st in {"open", "in_progress"}:
+                    try:
+                        await bot.reopen_forum_topic(chat_id=tickets_config.support_group_id, message_thread_id=topic_id)
+                    except Exception:
+                        pass
                 if st == "closed":
                     try:
                         await bot.close_forum_topic(chat_id=tickets_config.support_group_id, message_thread_id=topic_id)

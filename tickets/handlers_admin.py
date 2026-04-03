@@ -16,6 +16,7 @@ from tickets.services import (
     assign_ticket_admin,
     bump_ticket_activity,
     ensure_db_user,
+    get_ticket_by_topic,
     get_ticket_brief,
     set_ticket_status,
 )
@@ -84,7 +85,7 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
         await cq.answer("Некорректный ticket id.", show_alert=True)
         return
     status = data[3]
-    if status not in {"in_progress"}:
+    if status not in {"open", "in_progress"}:
         await cq.answer("Неподдерживаемый статус.", show_alert=True)
         return
     t = await get_ticket_brief(session, ticket_id=ticket_id)
@@ -101,14 +102,48 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
         admin_user_id=db_admin.id,
         admin_telegram_id=int(cq.from_user.id),
     )
-    await set_ticket_status(session, ticket_id=ticket_id, status="in_progress", close_now=False)
-    await cq.answer("Статус: в работе")
+    await set_ticket_status(session, ticket_id=ticket_id, status=status, close_now=False)
+    if status == "open":
+        try:
+            topic_id = int(t.get("topic_id") or 0)
+        except Exception:
+            topic_id = 0
+        if topic_id:
+            try:
+                await cq.bot.reopen_forum_topic(chat_id=config.support_group_id, message_thread_id=topic_id)
+            except Exception:
+                pass
+    await cq.answer("Статус обновлён")
     if cq.message and cq.message.text:
         base = cq.message.text.split("\n\nСтатус:")[0]
         try:
-            await cq.message.edit_text(base + "\n\nСтатус: 🔄 В работе", reply_markup=cq.message.reply_markup)
+            badge = "🟢 Открыт" if status == "open" else "🔄 В работе"
+            await cq.message.edit_text(base + f"\n\nСтатус: {badge}", reply_markup=cq.message.reply_markup)
         except Exception:
             pass
+
+
+@router.callback_query(F.data.startswith("tickets:status_info:"))
+async def cb_status_info(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    data = (cq.data or "").split(":")
+    if len(data) < 3:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        ticket_id = int(data[2])
+    except Exception:
+        await cq.answer("Некорректный ticket id.", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    st = str(t.get("status") or "open")
+    ru = {"open": "Открыт", "in_progress": "В работе", "closed": "Закрыт"}.get(st, st)
+    await cq.answer(f"Статус тикета #{ticket_id}: {ru}", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("tickets:close:"))
@@ -236,7 +271,7 @@ async def msg_admin_reply(
     if user_tg_id:
         body = (
             f"<b>📨 Ответ от администратора | Тикет #{ticket_id}</b>\n\n"
-            f"{html.escape(txt)}\n\n"
+            f"<pre>{html.escape(txt)}</pre>\n\n"
             "С уважением, Flux Network"
         )
         await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
@@ -248,7 +283,7 @@ async def msg_admin_reply(
         topic_id = 0
     if topic_id:
         admin_name = (message.from_user.full_name or "Администратор").strip()
-        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n{html.escape(txt)}"
+        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n<pre>{html.escape(txt)}</pre>"
         await message.bot.send_message(
             chat_id=config.support_group_id,
             message_thread_id=topic_id,
@@ -258,4 +293,57 @@ async def msg_admin_reply(
 
     await state.clear()
     await message.answer(f"✅ Ответ отправлен пользователю (тикет #{ticket_id}).")
+
+
+@router.message(F.chat.id == config.support_group_id, F.message_thread_id, F.text)
+async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) -> None:
+    if message.from_user is None or message.from_user.is_bot:
+        return
+    if not _is_admin(message.from_user.id):
+        return
+    try:
+        topic_id = int(message.message_thread_id or 0)
+    except Exception:
+        return
+    if topic_id <= 0:
+        return
+    t = await get_ticket_by_topic(session, topic_id=topic_id)
+    if not t:
+        return
+    if str(t.get("status") or "") == "closed":
+        return
+    txt = (message.text or "").strip()
+    if not txt:
+        return
+    db_admin = await ensure_db_user(session, message.from_user)
+    await assign_ticket_admin(
+        session,
+        ticket_id=int(t["id"]),
+        admin_user_id=db_admin.id,
+        admin_telegram_id=int(message.from_user.id),
+    )
+    await add_ticket_message(
+        session,
+        ticket_id=int(t["id"]),
+        sender_id=db_admin.id,
+        sender_role="admin",
+        sender_telegram_id=int(message.from_user.id),
+        text_body=txt,
+        is_internal=False,
+    )
+    await bump_ticket_activity(session, ticket_id=int(t["id"]), status_to_in_progress=True)
+    try:
+        user_tg_id = int(t.get("telegram_user_id") or 0)
+    except Exception:
+        user_tg_id = 0
+    if user_tg_id:
+        body = (
+            f"<b>📨 Ответ от администратора | Тикет #{int(t['id'])}</b>\n\n"
+            f"<pre>{html.escape(txt)}</pre>\n\n"
+            "С уважением, Flux Network"
+        )
+        try:
+            await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
+        except Exception:
+            pass
 

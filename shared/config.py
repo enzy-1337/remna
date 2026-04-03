@@ -319,6 +319,18 @@ class Settings(BaseSettings):
         validation_alias="BACKUP_HOUR_UTC",
         description="Час UTC для ежедневного бэкапа PostgreSQL",
     )
+    backup_timezone: str = Field(
+        default="UTC",
+        validation_alias="BACKUP_TIMEZONE",
+        description="Часовой пояс ежедневного бэкапа (например Europe/Moscow)",
+    )
+    backup_hour_local: int | None = Field(
+        default=None,
+        ge=0,
+        le=23,
+        validation_alias="BACKUP_HOUR_LOCAL",
+        description="Час в BACKUP_TIMEZONE. Если задан, имеет приоритет над BACKUP_HOUR_UTC",
+    )
     backup_max_telegram_mb: float = Field(
         default=45.0,
         ge=1.0,

@@ -123,7 +123,7 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
         f"<b>🎫 Тикет #{ticket_id}</b>\n"
         f"Пользователь: {user_line} {un}\n"
         f"{created_line}\n\n"
-        f"{html.escape(raw)}"
+        f"<pre>{html.escape(raw)}</pre>"
     )
     await message.bot.send_message(
         chat_id=config.support_group_id,
@@ -256,7 +256,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     topic_text = (
         f"<b>✉️ Новое сообщение в тикете #{active_id}</b>\n"
         f"От: {user_line}\n\n"
-        f"{html.escape(txt)}"
+        f"<pre>{html.escape(txt)}</pre>"
     )
 
     # В топик тикета.
@@ -284,7 +284,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         dm = (
             f"<b>✉️ Пользователь написал в тикет #{active_id}</b>\n"
             f"От: {user_line}\n\n"
-            f"{html.escape(txt)}"
+            f"<pre>{html.escape(txt)}</pre>"
             + (f"\n\n<a href=\"{deep}\">Ответить</a>" if deep else "")
         )
         await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)

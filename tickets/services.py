@@ -99,6 +99,24 @@ async def get_ticket_brief(session: AsyncSession, *, ticket_id: int) -> dict | N
     return dict(row) if row else None
 
 
+async def get_ticket_by_topic(session: AsyncSession, *, topic_id: int) -> dict | None:
+    r = await session.execute(
+        text(
+            """
+            SELECT id, status, topic_id, user_id, telegram_user_id,
+                   assigned_admin_id, telegram_assigned_admin_id
+            FROM tickets
+            WHERE topic_id = :tp
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ),
+        {"tp": topic_id},
+    )
+    row = r.mappings().first()
+    return dict(row) if row else None
+
+
 async def add_ticket_message(
     session: AsyncSession,
     *,

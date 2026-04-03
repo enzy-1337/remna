@@ -34,8 +34,10 @@ def topic_ticket_keyboard(*, bot_username: str, ticket_id: int) -> InlineKeyboar
     )
     b.row(
         InlineKeyboardButton(text="🔄 В работе", callback_data=f"tickets:status:{ticket_id}:in_progress"),
+        InlineKeyboardButton(text="🟢 Открыт", callback_data=f"tickets:status:{ticket_id}:open"),
         InlineKeyboardButton(text="✅ Закрыть", callback_data=f"tickets:close:{ticket_id}"),
     )
+    b.row(InlineKeyboardButton(text="📌 Статус", callback_data=f"tickets:status_info:{ticket_id}"))
     return b.as_markup()
 
 
