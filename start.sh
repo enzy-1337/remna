@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Запуск всего стека (Linux/macOS): PostgreSQL, Redis, бот, API.
-#   ./start.sh              — up -d --build
-#   ./start.sh --migrate    — сначала alembic upgrade head
+#   ./start.sh              — up -d --build (миграции через сервис migrate при up)
+#   ./start.sh --migrate    — только alembic: docker compose run --rm migrate
 #   ./start.sh --foreground — логи в консоли
 #   ./start.sh --no-build   — без пересборки
 #   ./start.sh --down       — docker compose down
@@ -40,8 +40,8 @@ if [[ "$DOWN" == true ]]; then
 fi
 
 if [[ "$MIGRATE" == true ]]; then
-  echo ">>> Миграции БД..."
-  docker compose run --rm bot alembic upgrade head
+  echo ">>> Миграции БД (alembic upgrade head)..."
+  docker compose run --rm migrate
 fi
 
 ARGS=(compose up)

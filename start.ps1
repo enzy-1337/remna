@@ -1,7 +1,7 @@
 # Запуск всего стека: PostgreSQL, Redis, бот, API (Docker Compose).
 # Использование:
-#   .\start.ps1              — поднять в фоне (-d) с пересборкой образов
-#   .\start.ps1 -Migrate     — сначала alembic upgrade head, потом up
+#   .\start.ps1              — поднять в фоне (-d) с пересборкой (миграции — сервис migrate при up)
+#   .\start.ps1 -Migrate     — только миграции: docker compose run --rm migrate, затем up
 #   .\start.ps1 -Foreground  — логи в консоли (без -d)
 #   .\start.ps1 -NoBuild     — без --build (быстрее при повторном запуске)
 #   .\start.ps1 -Down        — остановить и удалить контейнеры
@@ -42,8 +42,8 @@ if ($Down) {
 }
 
 if ($Migrate) {
-    Write-Host ">>> Миграции БД (alembic upgrade head)..." -ForegroundColor Cyan
-    docker compose run --rm bot alembic upgrade head
+    Write-Host ">>> Миграции БД (docker compose run --rm migrate)..." -ForegroundColor Cyan
+    docker compose run --rm migrate
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -23,6 +24,17 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
+    """
+    URL для миграций.
+
+    В Docker Compose `DATABASE_URL` задаётся в `environment` у сервиса `migrate` и должен
+    использоваться напрямую — без загрузки полного `Settings`, иначе любая ошибка в `.env`
+    (обрезанный BOT_TOKEN и т.п.) ломает `alembic upgrade` до подключения к Postgres.
+    Локально, без переменной в окружении, читаем через `get_settings()` из `.env`.
+    """
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if url:
+        return url
     get_settings.cache_clear()
     return get_settings().database_url
 

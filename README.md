@@ -22,8 +22,18 @@ pip install -e .
 
 ### Миграции БД
 
+Локально (без Docker):
+
 ```bash
 alembic upgrade head
+```
+
+В Docker миграции обычно **не нужно вызывать вручную**: сервис **`migrate`** в `docker-compose.yml` выполняет `alembic upgrade head` перед стартом бота и API.
+
+Только миграции, без подъёма всего стека (Postgres уже запущен):
+
+```bash
+docker compose run --rm migrate
 ```
 
 Создаются все таблицы из ТЗ и начальные тарифы (Триал, 1/2/3 месяца).
@@ -54,17 +64,50 @@ python -m bot.main
 ```bash
 cp .env.example .env
 # заполните BOT_TOKEN, REQUIRED_CHANNEL_*, REMNAWAVE_*, и т.д.
-
-docker compose build
-docker compose run --rm bot alembic upgrade head
-docker compose up -d
 ```
 
-Или одной командой из корня репозитория:
+**Сборка образов** (при изменении `Dockerfile` или зависимостей):
 
-- **Windows:** `.\start.bat` или `.\start.ps1` (первый раз с миграциями: `.\start.ps1 -Migrate`)
-- **Linux/macOS:** `chmod +x start.sh && ./start.sh` (с миграциями: `./start.sh --migrate`)
+```bash
+docker compose build
+```
 
+Полная пересборка без кэша слоёв:
+
+```bash
+docker compose build --no-cache
+```
+
+**Запуск в фоне** — пересборка + подъём Postgres/Redis + **Alembic** (`migrate`) + бот + API + tickets-bot **одной командой**:
+
+```bash
+docker compose up -d --build
+```
+
+То же в PowerShell / CMD:
+
+```powershell
+docker compose up -d --build
+```
+
+**Однострочник из корня** (обёртка с проверкой `.env`):
+
+- **Windows:** `.\start.bat` или `.\start.ps1`
+- **Linux/macOS:** `chmod +x start.sh && ./start.sh`
+
+Опции скриптов: `-NoBuild` / `--no-build` (без `--build`), `-Foreground` / `--foreground` (логи в консоли), `-Down` / `--down` (остановка). Отдельно прогнать только миграции: `docker compose run --rm migrate` или `.\start.ps1 -Migrate` / `./start.sh --migrate`.
+
+**Если `migrate` падает с `exit 1`:** посмотрите текст ошибки (лог одноразового контейнера):
+
+```bash
+docker compose logs migrate
+# или интерактивно:
+docker compose run --rm migrate
+```
+
+Частые причины: неверный пароль к Postgres (том `pgdata` создан с другими `POSTGRES_*`, чем в текущем `docker-compose.yml`), конфликт ревизий Alembic, недоступен `postgres`. Починить миграции **не** через `docker compose exec api alembic` (если контейнер `api` не запущен), а через `docker compose run --rm migrate` или `docker compose run --rm bot alembic upgrade head` с тем же `DATABASE_URL`, что в compose.
+
+- Сервис **`migrate`** — однократно `alembic upgrade head` до старта зависимых сервисов
 - Сервис **`bot`** — `python -m bot.main`
 - Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей)
 - **Postgres** и **Redis** поднимаются автоматически; `DATABASE_URL` / `REDIS_URL` в compose переопределены под сеть Docker.
