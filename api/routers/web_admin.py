@@ -1153,7 +1153,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg max-w-3xl">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
-        <p class="text-sm opacity-70">Сообщение уходит всем пользователям из БД (как «Рассылка всем» в боте). HTML: <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;i&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;a href&gt;</code> и т.д.</p>
+        <p class="text-sm opacity-70">Сообщение уходит всем пользователям из БД (как «Рассылка всем» в боте). В Telegram используется <strong>HTML</strong>, не Markdown: жирный — <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;текст&lt;/b&gt;</code> (закрывающий тег со слэшем: <code class="bg-base-300 px-1 rounded text-xs">&lt;/b&gt;</code>, не второй <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;</code>). Упрощённо: <code class="bg-base-300 px-1 rounded text-xs">**текст**</code> автоматически превращается в жирный; <code class="bg-base-300 px-1 rounded text-xs">__текст__</code> — в подчёркнутый. Также: <code class="bg-base-300 px-1 rounded text-xs">&lt;i&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;a href=&quot;…&quot;&gt;</code>.</p>
         <p class="text-xs opacity-60">Шаблоны: клик — вставить; <b>ПКМ</b> по кнопке — сохранить текущий текст в шаблон (хранится в браузере).</p>
         {alert}
         <div class="grid gap-2 md:grid-cols-3">

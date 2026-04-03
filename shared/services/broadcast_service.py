@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -50,6 +51,7 @@ async def broadcast_to_users(
     body = (text or "").strip()
     if not body:
         return 0, 0
+    body = apply_simple_formatting_for_broadcast(body)
     body = body[:MAX_MESSAGE_LEN]
 
     factory = get_session_factory()
