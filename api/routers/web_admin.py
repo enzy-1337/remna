@@ -2133,12 +2133,19 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         chat.scrollTop=chat.scrollHeight;
       }}
       async function load() {{
-        var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
-        if(!r.ok){{meta.textContent='Ошибка загрузки: '+r.status;return;}}
-        model=await r.json();
-        renderMeta(); renderUserPanel(); renderMgmt(); renderChat();
-        var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
-        assign.value=atg?String(atg):'';
+        try {{
+          var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
+          if(!r.ok){{meta.textContent='Ошибка загрузки: HTTP '+r.status;chat.innerHTML='<div class="text-error text-sm">HTTP '+r.status+'</div>';return;}}
+          var ct=(r.headers.get('content-type')||'');
+          if(ct.indexOf('application/json')===-1){{meta.textContent='Ответ не JSON (проверьте, что /api открыт на этом же домене)';chat.innerHTML='';return;}}
+          model=await r.json();
+          renderMeta(); renderUserPanel(); renderMgmt(); renderChat();
+          var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
+          assign.value=atg?String(atg):'';
+        }} catch(e) {{
+          meta.textContent='Ошибка разбора ответа: '+(e&&e.message?e.message:String(e));
+          chat.innerHTML='<div class="text-error text-sm opacity-90">Не удалось отобразить тикет. Откройте консоль браузера (F12) и вкладку Network для /api/tickets/'+ticketId+'.</div>';
+        }}
       }}
       async function sendJson(url, method, data) {{
         var r=await fetch(url,{{method:method,credentials:'include',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(data||{{}})}});
