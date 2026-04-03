@@ -127,6 +127,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
         "Подписки и устройства",
         [
             (
+                "TRIAL_ENABLED",
+                "Кнопка триала в боте",
+                lambda s: "true" if s.trial_enabled else "false",
+                "false — скрыть «Активировать триал» для всех пользователей.",
+            ),
+            (
                 "TRIAL_DURATION_DAYS",
                 "Длительность триала (дней)",
                 lambda s: str(s.trial_duration_days),

@@ -240,6 +240,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     if not t or str(t.get("status") or "") == "closed":
         return
 
+    photo_fid: str | None = message.photo[-1].file_id if message.photo else None
     await add_ticket_message(
         session,
         ticket_id=active_id,
@@ -248,6 +249,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         sender_telegram_id=int(message.from_user.id),
         text_body=txt,
         is_internal=False,
+        photo_file_id=photo_fid,
     )
     await bump_ticket_activity(session, ticket_id=active_id, status_to_in_progress=False)
 
@@ -265,12 +267,21 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     except Exception:
         topic_id = 0
     if topic_id:
-        await message.bot.send_message(
-            chat_id=config.support_group_id,
-            message_thread_id=topic_id,
-            text=topic_text,
-            disable_web_page_preview=True,
-        )
+        if message.photo:
+            await message.bot.send_photo(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                photo=message.photo[-1].file_id,
+                caption=topic_text[:1024],
+                parse_mode="HTML",
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                text=topic_text,
+                disable_web_page_preview=True,
+            )
 
     # В личку назначенному админу (если тикет уже кто-то взял).
     try:

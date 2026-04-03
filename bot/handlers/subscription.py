@@ -49,7 +49,6 @@ def _sub_main_keyboard(
         b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
         ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
         b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
-    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 

@@ -161,10 +161,7 @@ async def build_subscription_detail_caption(
     header = "🔑 " + bold("Подписка:")
     quote_lines = [
         status_human,
-        plain("🆔 ID в боте: ") + code(str(user.id)),
     ]
-    if user.remnawave_uuid:
-        quote_lines.append(plain("🖥️ UUID в панели: ") + code(str(user.remnawave_uuid)))
     quote_lines.extend(
         [
         plain("💎 Тариф: ") + bold(plan.name if plan else "—"),

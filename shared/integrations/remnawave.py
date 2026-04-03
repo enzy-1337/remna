@@ -334,9 +334,9 @@ class RemnaWaveClient:
         return []
 
     async def list_nodes_with_latency(
-        self, *, max_nodes: int = 50
+        self, *, max_nodes: int = 50, ping_each: bool = True
     ) -> tuple[list[dict[str, Any]], float | None, str | None]:
-        """Список нод из API + замер GET по каждой (мс). Возвращает (строки, мс списка, ошибка)."""
+        """Список нод из API; при ping_each=True — дополнительный GET по каждой ноде (мс)."""
         if self._s.remnawave_stub:
             return [
                 {
@@ -378,8 +378,11 @@ class RemnaWaveClient:
                     name = str(n.get("name") or n.get("tag") or n.get("address") or nu or "—")[:120]
                     st = str(n.get("status") or n.get("state") or "—")[:80]
                     if nu:
-                        pms, subp = await _ping_uuid(nu)
-                        note = f"{subp} · {pms} мс" if pms is not None else "детальный GET недоступен"
+                        if ping_each:
+                            pms, subp = await _ping_uuid(nu)
+                            note = f"{subp} · {pms} мс" if pms is not None else "детальный GET недоступен"
+                        else:
+                            pms, note = None, "без отдельного запроса"
                     else:
                         pms, note = None, "нет uuid в ответе"
                     rows_out.append(

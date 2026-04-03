@@ -351,7 +351,7 @@ async def cb_topup_provider(
         return
 
     try:
-        _txn, pay_url = await create_topup_payment(
+        txn, pay_url = await create_topup_payment(
             session,
             user=db_user,
             telegram_id=tg.id,
@@ -380,7 +380,7 @@ async def cb_topup_provider(
     if cq.message:
         if cq.message.photo:
             await cq.message.edit_caption(
-                caption=text, reply_markup=topup_invoice_keyboard(pay_url)
+                caption=text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id)
             )
         else:
-            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url))
+            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id))

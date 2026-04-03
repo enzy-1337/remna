@@ -197,6 +197,11 @@ class Settings(BaseSettings):
     )
 
     # Триал
+    trial_enabled: bool = Field(
+        default=True,
+        validation_alias="TRIAL_ENABLED",
+        description="Если false — кнопка триала скрыта для всех пользователей",
+    )
     trial_duration_days: int = Field(default=3, validation_alias="TRIAL_DURATION_DAYS")
     trial_traffic_gb: int = Field(default=1, validation_alias="TRIAL_TRAFFIC_GB")
 

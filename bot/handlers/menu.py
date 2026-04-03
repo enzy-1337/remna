@@ -60,7 +60,7 @@ async def cb_main_menu(
         return
     settings = get_settings()
     has_act = await get_active_subscription(session, db_user.id) is not None
-    show_trial = trial_eligible(db_user, has_act)
+    show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
     # Кнопка покупки всегда доступна, если подписки нет.
     cap = profile_caption(db_user, tg)
     kb = profile_main_keyboard(
@@ -127,7 +127,7 @@ async def cb_trial_activate(
     )
 
     has_act = await get_active_subscription(session, db_user.id) is not None
-    show_trial = trial_eligible(db_user, has_act)
+    show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
     # Кнопка покупки всегда доступна, если подписки нет.
     cap = join_lines(
         "🎉 " + bold("Триал активирован!"),
@@ -212,17 +212,7 @@ async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
     privacy = (settings.info_privacy_policy_url or "").strip()
     terms = (settings.info_terms_of_service_url or "").strip()
 
-    primary_admin_id: int | None = settings.admin_telegram_id
-    if primary_admin_id is None and settings.admin_telegram_ids:
-        primary_admin_id = settings.admin_telegram_ids[0]
-
-    help_line = plain("Нужна помощь — нажмите «Поддержка» ниже")
-    if primary_admin_id is not None:
-        help_line += plain(" или ") + link(
-            "написать администратору",
-            f"tg://user?id={primary_admin_id}",
-        )
-    help_line += plain(".")
+    help_line = plain("Нужна помощь — нажмите «Поддержка» ниже.")
 
     doc_privacy = (
         plain("🔒 ") + link("Политика конфиденциальности", privacy)

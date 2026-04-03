@@ -126,13 +126,14 @@ async def add_ticket_message(
     sender_telegram_id: int | None,
     text_body: str,
     is_internal: bool,
+    photo_file_id: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
     await session.execute(
         text(
             """
-            INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal)
-            VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal)
+            INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal, photo_file_id)
+            VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal, :photo)
             """
         ),
         {
@@ -143,6 +144,7 @@ async def add_ticket_message(
             "txt": text_body,
             "now": now,
             "internal": bool(is_internal),
+            "photo": photo_file_id,
         },
     )
 

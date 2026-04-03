@@ -22,11 +22,12 @@ from urllib.parse import quote_plus
 import httpx
 import re
 import redis.asyncio as redis_async
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import desc, distinct, extract, func, or_, select, text
+from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
 from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
 from shared.database import get_session_factory
@@ -52,10 +53,12 @@ from shared.services.subscription_service import (
     admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
+    get_base_subscription_plan,
     remove_hwid_device_from_panel,
     remove_device_slot,
     set_subscription_auto_renew,
     unlink_hwid_device_keep_slots,
+    update_rw_user_respecting_hwid_limit,
 )
 from shared.subscription_qr import subscription_url_qr_png
 
@@ -464,6 +467,7 @@ def _layout(
         {_sidebar_nav_item("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
         {_sidebar_nav_item("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
         {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
+        {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
       <div class="mt-auto border-t border-base-content/10 p-1.5">
@@ -495,6 +499,7 @@ def _layout(
       <a href="/admin/tickets" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tickets', cur)}"><i class="fa-solid fa-headset text-base"></i><span>Тикеты</span></a>
       <a href="/admin/subscriptions" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/subscriptions', cur)}"><i class="fa-solid fa-clock-rotate-left text-base"></i><span>Подписки</span></a>
       <a href="/admin/promos" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-base"></i><span>Промо</span></a>
+      <a href="/admin/broadcast" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/broadcast', cur)}"><i class="fa-solid fa-bullhorn text-base"></i><span>Рассыл.</span></a>
       <a href="/admin/settings" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-base"></i><span>Настр.</span></a>
       <a href="/admin/profile" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/profile', cur)}"><i class="fa-solid fa-user text-base"></i><span>Профиль</span></a>
       <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
@@ -736,7 +741,7 @@ def _layout(
         var u=new URL(window.location.href);
         var n=u.searchParams.get('n');
         var err=u.searchParams.get('err');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(err)window.remnaToast('error',err);
         if(n||err){
@@ -765,7 +770,7 @@ def _layout(
 {theme_script if show_nav and request is not None else ""}
 </body>
 </html>"""
-    return HTMLResponse(page)
+    return HTMLResponse(page, headers={"Cache-Control": "private, no-store"})
 
 
 def _is_logged(request: Request) -> bool:
@@ -1105,6 +1110,289 @@ async def admin_logout(request: Request):
     return RedirectResponse("/admin/login", status_code=303)
 
 
+async def _admin_broadcast_job(text: str) -> None:
+    from aiogram import Bot
+
+    from shared.services.broadcast_service import broadcast_to_users
+
+    settings = get_settings()
+    tok = (settings.bot_token or "").strip()
+    if not tok:
+        return
+    async with Bot(token=tok) as bot:
+        await broadcast_to_users(bot, text)
+
+
+@router.get("/broadcast")
+async def admin_broadcast_page(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    sp = request.query_params
+    alert = ""
+    if sp.get("started") == "1":
+        alert = (
+            "<div class='alert alert-success mb-4'><span>Рассылка поставлена в очередь на фоновую отправку. "
+            "Результат смотрите в логах API.</span></div>"
+        )
+    err = (sp.get("err") or "").strip()
+    if err == "empty":
+        alert = "<div class='alert alert-warning mb-4'><span>Введите текст сообщения.</span></div>"
+    elif err == "no_bot_token":
+        alert = "<div class='alert alert-error mb-4'><span>BOT_TOKEN не задан — рассылка невозможна.</span></div>"
+    body = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg max-w-3xl">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
+        <p class="text-sm opacity-70">Сообщение уходит всем пользователям из БД (как «Рассылка всем» в боте). HTML: <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;i&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;a href&gt;</code> и т.д.</p>
+        <p class="text-xs opacity-60">Шаблоны: клик — вставить; <b>ПКМ</b> по кнопке — сохранить текущий текст в шаблон (хранится в браузере).</p>
+        {alert}
+        <div class="grid gap-2 md:grid-cols-3">
+          <button type="button" class="btn btn-outline btn-sm" id="bc-s1">Шаблон 1</button>
+          <button type="button" class="btn btn-outline btn-sm" id="bc-s2">Шаблон 2</button>
+          <button type="button" class="btn btn-outline btn-sm" id="bc-s3">Шаблон 3</button>
+        </div>
+        <form method="post" action="/admin/broadcast" class="flex flex-col gap-3">
+          <textarea name="text" id="bc-text" class="textarea textarea-bordered min-h-[200px]" placeholder="Текст рассылки..." required></textarea>
+          <div class="flex flex-wrap gap-2">
+            <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить в фоне</button>
+            <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-preview">Предпросмотр (экранированный)</button>
+          </div>
+        </form>
+        <div id="bc-prev" class="hidden rounded-xl border border-base-content/10 bg-base-200/50 p-4 text-sm"></div>
+      </div>
+    </div>
+    <script>
+    (function(){{
+      var key='remna_broadcast_tpls';
+      var ta=document.getElementById('bc-text');
+      var prev=document.getElementById('bc-prev');
+      function load(){{
+        try{{ return JSON.parse(localStorage.getItem(key)||'[]'); }}catch(e){{ return []; }}
+      }}
+      function save(arr){{ localStorage.setItem(key, JSON.stringify(arr)); }}
+      var arr=load();
+      while(arr.length<3) arr.push('');
+      for(var i=1;i<=3;i++){{
+        (function(n){{
+          var b=document.getElementById('bc-s'+n);
+          if(!b) return;
+          b.addEventListener('click', function(){{
+            var a=load(); ta.value=a[n-1]||''; ta.focus();
+          }});
+          b.addEventListener('contextmenu', function(e){{
+            e.preventDefault();
+            var a=load(); a[n-1]=ta.value||''; save(a); alert('Шаблон '+n+' сохранён');
+          }});
+        }})(i);
+      }}
+      var pv=document.getElementById('bc-preview');
+      if(pv) pv.addEventListener('click', function(){{
+        var v=(ta.value||'').trim();
+        if(!v){{ prev.classList.add('hidden'); return; }}
+        prev.innerHTML='<div class="font-semibold mb-2 opacity-70\">Предпросмотр (как текст, теги экранированы)</div><div class="whitespace-pre-wrap break-words">'+v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div>';
+        prev.classList.remove('hidden');
+      }});
+    }})();
+    </script>
+    """
+    return _layout("Рассылка", body, request=request)
+
+
+@router.post("/broadcast")
+async def admin_broadcast_post(request: Request, background: BackgroundTasks, text: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = (text or "").strip()
+    if not body:
+        return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
+    settings = get_settings()
+    if not (settings.bot_token or "").strip():
+        return RedirectResponse("/admin/broadcast?err=no_bot_token", status_code=303)
+    background.add_task(_admin_broadcast_job, body)
+    return RedirectResponse("/admin/broadcast?started=1", status_code=303)
+
+
+async def _ticket_owner_user_id(session: AsyncSession, ticket_id: int) -> int | None:
+    r = (
+        await session.execute(text("SELECT user_id FROM tickets WHERE id = :tid"), {"tid": ticket_id})
+    ).mappings().first()
+    return int(r["user_id"]) if r else None
+
+
+@router.post("/tickets/{ticket_id}/user/add-balance")
+async def admin_ticket_user_add_balance(
+    request: Request, ticket_id: int, amount: str = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    raw = (amount or "").strip().replace(",", ".")
+    try:
+        amt = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Неверная сумма')}", status_code=303)
+    if amt <= 0:
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
+    wauth = request.session.get("wauth") or {}
+    admin_tg = int(wauth.get("telegram_id") or 0)
+    async with await _session() as session:
+        uid = await _ticket_owner_user_id(session, ticket_id)
+        if uid is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        u = await session.get(User, uid)
+        if u is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        admin_db_id = None
+        if admin_tg:
+            au = (await session.execute(select(User).where(User.telegram_id == admin_tg))).scalar_one_or_none()
+            if au is not None:
+                admin_db_id = au.id
+        u.balance += amt
+        session.add(
+            Transaction(
+                user_id=u.id,
+                type="admin_balance_add",
+                amount=amt,
+                currency="RUB",
+                payment_provider="admin",
+                payment_id=None,
+                status="completed",
+                description=f"Админ (web) добавил баланс: +{amt} ₽",
+                meta={"admin_id": admin_db_id, "source": "web_tickets"},
+            )
+        )
+        await session.commit()
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?n=bal_ok", status_code=303)
+
+
+@router.post("/tickets/{ticket_id}/user/add-days")
+async def admin_ticket_user_add_days(
+    request: Request, ticket_id: int, subscription_id: int = Form(...), days: int = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    if days < 1 or days > 3650:
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Дней: от 1 до 3650')}", status_code=303)
+    settings = get_settings()
+    async with await _session() as session:
+        uid = await _ticket_owner_user_id(session, ticket_id)
+        if uid is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        sub = (
+            await session.execute(
+                select(Subscription)
+                .options(selectinload(Subscription.plan))
+                .where(Subscription.id == subscription_id, Subscription.user_id == uid)
+            )
+        ).scalar_one_or_none()
+        if sub is None:
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
+        sub.expires_at = sub.expires_at + timedelta(days=days)
+        pl = sub.plan
+        if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+            bp = await get_base_subscription_plan(session)
+            if bp is not None:
+                sub.plan_id = bp.id
+        u = await session.get(User, uid)
+        if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+            rw = RemnaWaveClient(settings)
+            try:
+                await update_rw_user_respecting_hwid_limit(
+                    rw,
+                    str(u.remnawave_uuid),
+                    devices_limit_for_panel=sub.devices_count,
+                    expire_at=sub.expires_at,
+                    status="ACTIVE",
+                )
+            except RemnaWaveError:
+                pass
+        await session.commit()
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?n=days_ok", status_code=303)
+
+
+@router.post("/tickets/{ticket_id}/user/subscription/auto-renew")
+async def admin_ticket_user_sub_auto_renew(
+    request: Request, ticket_id: int, enabled: str = Form("0")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    want_on = (enabled or "").strip() == "1"
+    async with await _session() as session:
+        uid = await _ticket_owner_user_id(session, ticket_id)
+        if uid is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        ok, msg = await set_subscription_auto_renew(session, uid, want_on)
+        if ok:
+            await session.commit()
+            n = "ar_on" if want_on else "ar_off"
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?n={n}", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/tickets/{ticket_id}/user/subscription/disable")
+async def admin_ticket_user_sub_disable(
+    request: Request, ticket_id: int, subscription_id: int = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        uid = await _ticket_owner_user_id(session, ticket_id)
+        if uid is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        sub = await session.get(Subscription, subscription_id)
+        if sub is None or sub.user_id != uid:
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
+        ok, msg = await admin_disable_subscription_record(
+            session,
+            user_id=uid,
+            subscription_id=subscription_id,
+            settings=settings,
+        )
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?n=sub_off", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/tickets/{ticket_id}/user/subscription/enable")
+async def admin_ticket_user_sub_enable(
+    request: Request, ticket_id: int, subscription_id: int = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        uid = await _ticket_owner_user_id(session, ticket_id)
+        if uid is None:
+            return RedirectResponse("/admin/tickets", status_code=303)
+        sub = await session.get(Subscription, subscription_id)
+        if sub is None or sub.user_id != uid:
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
+        ok, msg = await admin_enable_subscription_record(
+            session,
+            user_id=uid,
+            subscription_id=subscription_id,
+            settings=settings,
+        )
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?n=sub_on", status_code=303)
+        await session.rollback()
+    err = str(msg).replace("\n", " ")[:400]
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus(err)}", status_code=303)
+
+
 @router.get("")
 async def admin_root():
     return RedirectResponse("/admin/dashboard", status_code=303)
@@ -1118,8 +1406,7 @@ async def admin_status(request: Request) -> HTMLResponse:
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
-    nodes_ok, nodes_msg = await rw.probe_nodes_api()
-    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency()
+    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency(ping_each=False)
     panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
     bot_ok = False
@@ -1202,10 +1489,10 @@ async def admin_status(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
         <h3 class="card-title text-lg"><i class="fa-solid fa-network-wired text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
-        <p class="text-sm opacity-60">{_esc(cat_note)}по каждой ноде — отдельный GET и время ответа в миллисекундах.</p>
+        <p class="text-sm opacity-60">{_esc(cat_note)}статус и UUID из списка нод панели; отдельный замер к каждой ноде отключён.</p>
         <div class="overflow-x-auto rounded-lg border border-base-content/10">
           <table class="table table-zebra table-sm">
-            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th><th>Запрос</th></tr></thead>
+            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th><th>Примечание</th></tr></thead>
             <tbody>{''.join(trs)}</tbody>
           </table>
         </div>
@@ -1217,12 +1504,11 @@ async def admin_status(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
       <div class="card-body gap-2">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
-        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод с замером мс, Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
+        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод (без отдельного запроса к каждой), Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
       </div>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {_status_service_card(title="Панель Remnawave (API)", icon="fa-solid fa-server", ok=panel_ok, detail=panel_msg, latency=panel_lat)}
-      {_status_service_card(title="Ноды (проба API)", icon="fa-solid fa-network-wired", ok=nodes_ok, detail=nodes_msg)}
       {_status_service_card(title="Telegram-бот", icon="fa-brands fa-telegram", ok=bot_ok, detail=bot_msg, latency=bot_lat)}
       {_status_service_card(title="База данных", icon="fa-solid fa-database", ok=db_ok, detail=db_msg, latency=db_lat)}
       {_status_service_card(title="Redis", icon="fa-solid fa-bolt", ok=redis_ok, detail=redis_msg, latency=redis_lat)}
@@ -1307,7 +1593,6 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
                 )
             )
         ).all()
-        devices_total = int((await session.execute(select(func.count()).select_from(Device))).scalar_one() or 0)
         hour_ht = literal_column(
             "EXTRACT(hour FROM TIMEZONE('Europe/Moscow', transactions.created_at))::int"
         )
@@ -1360,18 +1645,15 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             ca = ca.replace(tzinfo=timezone.utc)
         by_day[ca.astimezone(_MSK_TZ).date()] += Decimal(amount)
     today_msk = datetime.now(_MSK_TZ).date()
-    max_val = Decimal("1")
+    chart_day_labels: list[str] = []
+    chart_day_amounts: list[float] = []
     for i in range(13, -1, -1):
         d = today_msk - timedelta(days=i)
         val = by_day.get(d, Decimal("0"))
-        if val > max_val:
-            max_val = val
-    bars = []
-    for i in range(13, -1, -1):
-        d = today_msk - timedelta(days=i)
-        val = by_day.get(d, Decimal("0"))
-        width = int((val / max_val) * 30) if max_val > 0 else 0
-        bars.append(f"{d.strftime('%d.%m')} {'█' * max(1, width) if val > 0 else '·'} {val}")
+        chart_day_labels.append(d.strftime("%d.%m"))
+        chart_day_amounts.append(float(val))
+    chart_day_labels_json = json.dumps(chart_day_labels)
+    chart_day_amounts_json = json.dumps(chart_day_amounts)
     settings_dash = get_settings()
     rw_devices_online: int | None = None
     rw_dash_err = ""
@@ -1399,7 +1681,11 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     day_pct = int(min(100, round((safe_day / safe_month) * 100))) if safe_month > 0 else 0
     sub_pct = int(min(100, round((active_sub_users / users_count) * 100))) if users_count > 0 else 0
     body = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+    <style>
+    @keyframes remnaTileIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: none; }} }}
+    .remna-tile-in {{ animation: remnaTileIn 0.45s ease-out both; }}
+    </style>
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg remna-tile-in" style="animation-delay:0ms">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
         <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
@@ -1438,18 +1724,11 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
           </div>
         </div>
         <p class="text-sm opacity-60">Учитываются только платежи (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
-        <pre class="bg-base-300/80 rounded-xl p-4 text-xs overflow-x-auto font-mono border border-base-content/10">{_esc(chr(10).join(bars))}</pre>
+        <p class="text-sm opacity-70">Суммы по календарным дням (МСК) и распределение пополнений по часам — в одной секции графиков ниже (Chart.js).</p>
       </div>
     </div>
-    <div class="grid gap-4 sm:grid-cols-2 mt-4">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
-        <div class="card-body items-center text-center gap-2">
-          <p class="text-sm opacity-60">Устройства в базе бота</p>
-          <p class="text-3xl font-bold text-primary">{devices_total}</p>
-          <p class="text-xs opacity-50">Записи таблицы <code class="bg-base-300 px-1 rounded">devices</code></p>
-        </div>
-      </div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+    <div class="mt-4">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg remna-tile-in" style="animation-delay:70ms">
         <div class="card-body items-center text-center gap-2">
           <p class="text-sm opacity-60">Подключённых клиентов (сумма по API Remnawave)</p>
           {rw_tile}
@@ -1457,79 +1736,114 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         </div>
       </div>
     </div>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4 remna-tile-in" style="animation-delay:140ms">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-line text-primary mr-2" aria-hidden="true"></i>Активность по часам (МСК)</h2>
-        <p class="text-sm opacity-60">За последние 7 дней: <b>синяя</b> линия — успешные пополнения по часу суток; <b>зелёная</b> — число активностей устройств (по <code class="bg-base-300 px-1 rounded text-xs">last_used_at</code> в БД). Часовой пояс: <b>Europe/Moscow</b>.</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-line text-primary mr-2" aria-hidden="true"></i>Графики: дни и часы (МСК)</h2>
+        <p class="text-sm opacity-60">Одна библиотека Chart.js: столбцы — сумма успешных пополнений по дню (14 календарных дней по МСК); линии — за 7 дней: пополнения по часу суток и активность устройств по <code class="bg-base-300 px-1 rounded text-xs">last_used_at</code> в БД.</p>
+        <h3 class="text-lg font-semibold">Пополнения по дням (₽)</h3>
+        <div class="relative w-full min-h-[220px] rounded-xl border border-base-content/10 bg-base-200/40 p-4">
+          <canvas id="remnaDashDayChart" aria-label="Пополнения по дням"></canvas>
+        </div>
+        <h3 class="text-lg font-semibold mt-4">По часам суток</h3>
         <div class="relative w-full min-h-[280px] rounded-xl border border-base-content/10 bg-base-200/40 p-4">
           <canvas id="remnaDashHourChart" aria-label="График по часам"></canvas>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
         <script>
         (function() {{
+          var dayLabels = {chart_day_labels_json};
+          var dayAmt = {chart_day_amounts_json};
           var labels = {chart_labels_json};
           var topup = {chart_topup_json};
           var dev = {chart_dev_json};
-          var el = document.getElementById('remnaDashHourChart');
-          if (!el || typeof Chart === 'undefined') return;
           var cs = getComputedStyle(document.documentElement);
           var fg = cs.getPropertyValue('--bc').trim() || '#e5e7eb';
-          new Chart(el, {{
-            type: 'line',
-            data: {{
-              labels: labels,
-              datasets: [
-                {{
-                  label: 'Пополнения (шт.)',
-                  data: topup,
-                  borderColor: 'rgb(59, 130, 246)',
-                  backgroundColor: 'rgba(59, 130, 246, 0.12)',
-                  fill: true,
-                  tension: 0.35,
-                  pointRadius: 2,
-                  yAxisID: 'y1'
+          if (typeof Chart !== 'undefined') {{
+            var elD = document.getElementById('remnaDashDayChart');
+            if (elD) {{
+              new Chart(elD, {{
+                type: 'bar',
+                data: {{
+                  labels: dayLabels,
+                  datasets: [{{
+                    label: 'Пополнения (₽)',
+                    data: dayAmt,
+                    backgroundColor: 'rgba(59, 130, 246, 0.45)',
+                    borderColor: 'rgb(59, 130, 246)',
+                    borderWidth: 1
+                  }}]
                 }},
-                {{
-                  label: 'Активность устройств (событий)',
-                  data: dev,
-                  borderColor: 'rgb(34, 197, 94)',
-                  backgroundColor: 'rgba(34, 197, 94, 0.08)',
-                  fill: true,
-                  tension: 0.35,
-                  pointRadius: 2,
-                  yAxisID: 'y2'
+                options: {{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {{ legend: {{ labels: {{ color: fg }} }} }},
+                  scales: {{
+                    x: {{ ticks: {{ color: fg, maxRotation: 45 }}, grid: {{ color: 'rgba(128,128,128,0.12)' }} }},
+                    y: {{ ticks: {{ color: fg }}, grid: {{ color: 'rgba(128,128,128,0.12)' }} }}
+                  }}
                 }}
-              ]
-            }},
-            options: {{
-              responsive: true,
-              maintainAspectRatio: false,
-              interaction: {{ mode: 'index', intersect: false }},
-              plugins: {{
-                legend: {{ labels: {{ color: fg }} }}
-              }},
-              scales: {{
-                x: {{
-                  ticks: {{ color: fg, maxRotation: 0, autoSkip: true }},
-                  grid: {{ color: 'rgba(128,128,128,0.15)' }}
-                }},
-                y1: {{
-                  type: 'linear',
-                  position: 'left',
-                  title: {{ display: true, text: 'Пополнения', color: fg }},
-                  ticks: {{ color: fg }},
-                  grid: {{ color: 'rgba(128,128,128,0.12)' }}
-                }},
-                y2: {{
-                  type: 'linear',
-                  position: 'right',
-                  title: {{ display: true, text: 'Устройства', color: fg }},
-                  ticks: {{ color: fg }},
-                  grid: {{ drawOnChartArea: false }}
-                }}
-              }}
+              }});
             }}
-          }});
+            var el = document.getElementById('remnaDashHourChart');
+            if (el) {{
+              new Chart(el, {{
+                type: 'line',
+                data: {{
+                  labels: labels,
+                  datasets: [
+                    {{
+                      label: 'Пополнения (шт.)',
+                      data: topup,
+                      borderColor: 'rgb(59, 130, 246)',
+                      backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                      fill: true,
+                      tension: 0.35,
+                      pointRadius: 2,
+                      yAxisID: 'y1'
+                    }},
+                    {{
+                      label: 'Активность устройств (событий)',
+                      data: dev,
+                      borderColor: 'rgb(34, 197, 94)',
+                      backgroundColor: 'rgba(34, 197, 94, 0.08)',
+                      fill: true,
+                      tension: 0.35,
+                      pointRadius: 2,
+                      yAxisID: 'y2'
+                    }}
+                  ]
+                }},
+                options: {{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  interaction: {{ mode: 'index', intersect: false }},
+                  plugins: {{
+                    legend: {{ labels: {{ color: fg }} }}
+                  }},
+                  scales: {{
+                    x: {{
+                      ticks: {{ color: fg, maxRotation: 0, autoSkip: true }},
+                      grid: {{ color: 'rgba(128,128,128,0.15)' }}
+                    }},
+                    y1: {{
+                      type: 'linear',
+                      position: 'left',
+                      title: {{ display: true, text: 'Пополнения', color: fg }},
+                      ticks: {{ color: fg }},
+                      grid: {{ color: 'rgba(128,128,128,0.12)' }}
+                    }},
+                    y2: {{
+                      type: 'linear',
+                      position: 'right',
+                      title: {{ display: true, text: 'Устройства', color: fg }},
+                      ticks: {{ color: fg }},
+                      grid: {{ drawOnChartArea: false }}
+                    }}
+                  }}
+                }}
+              }});
+            }}
+          }}
         }})();
         </script>
       </div>
@@ -1672,6 +1986,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         <div class="card-body gap-3">
           <h2 class="card-title text-2xl"><i class="fa-solid fa-ticket text-primary mr-2" aria-hidden="true"></i>Тикет #{ticket_id}</h2>
           <div id="tk-meta" class="text-sm opacity-80">Загрузка...</div>
+          <div id="tk-user" class="text-sm border border-base-content/10 rounded-lg p-2 bg-base-200/30 mt-2 hidden"></div>
+          <div id="tk-mgmt" class="text-sm border border-warning/25 rounded-lg p-2 bg-base-200/40 mt-2 hidden"></div>
           <div class="grid gap-2">
             <label class="form-control">
               <span class="label-text text-xs opacity-70">Назначенный админ</span>
@@ -1706,6 +2022,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       var admins={admins_json};
       var stMap={{open:['badge-info','Открыт'],in_progress:['badge-warning','В работе'],closed:['badge-ghost','Закрыт']}};
       var meta=document.getElementById('tk-meta');
+      var user=document.getElementById('tk-user');
       var chat=document.getElementById('tk-chat');
       var txt=document.getElementById('tk-text');
       var assign=document.getElementById('tk-assign');
@@ -1732,11 +2049,71 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var b=stMap[st]||['badge-ghost',st];
         meta.innerHTML=''
           +'Статус: <span class="badge '+b[0]+' badge-sm">'+esc(b[1])+'</span><br>'
-          +'Пользователь: <a class="link link-primary" href="/admin/users/'+u+'">#'+u+'</a>'+(tg?(' · <a class="link" href="tg://user?id='+tg+'">tg://'+tg+'</a>'):'')+'<br>'
+          +'Пользователь: <a class="link link-primary" href="/admin/users/'+u+'">#'+u+'</a>'+(tg?(' · <a class="link" href="tg://user?id='+tg+'">tg://user?id='+tg+'</a>'):'')+'<br>'
           +'Создан: '+esc(t.created_at||'—')+'<br>'
           +'Последняя активность: '+esc(t.last_activity||'—')+'<br>'
           +'Закрыт: '+esc(t.closed_at||'—');
         compose.classList.toggle('hidden', st==='closed');
+      }}
+      function renderUserPanel() {{
+        if(!user) return;
+        var u=model&&model.user;
+        var s=model&&model.user_subscription;
+        if(!u){{ user.innerHTML=''; user.classList.add('hidden'); return; }}
+        user.classList.remove('hidden');
+        var name=((u.first_name||'')+' '+(u.last_name||'')).trim()||'—';
+        var un=u.username?('@'+u.username):'—';
+        var sub=s
+          ? '<p class="text-xs mt-1">Подписка: <span class="badge badge-success badge-sm">'+esc(s.status)+'</span> '+esc(s.plan_name||'')+' · до '+esc(s.expires_at||'')+'</p>'
+          : '<p class="text-xs opacity-60 mt-1">Активной подписки в боте нет</p>';
+        user.innerHTML='<div class="font-semibold">'+esc(name)+'</div>'
+          +'<p class="text-xs opacity-70">'+esc(un)+' · tg id '+esc(String(u.telegram_id))+'</p>'
+          +'<p class="text-xs">Баланс: <b>'+esc(String(u.balance))+' ₽</b>'
+          +(u.is_blocked?' · <span class="badge badge-error badge-sm">заблокирован</span>':'')
+          +' · <a class="link link-primary" href="/admin/users/'+u.id+'">Профиль</a></p>'
+          +sub;
+      }}
+      function renderMgmt() {{
+        var m=document.getElementById('tk-mgmt');
+        if(!m) return;
+        var u=model&&model.user;
+        var s=model&&model.user_subscription;
+        var lc=model&&model.last_cancelled_subscription_id;
+        if(!u||u.is_blocked){{ m.classList.add('hidden'); m.innerHTML=''; return; }}
+        m.classList.remove('hidden');
+        var base='/admin/tickets/'+ticketId+'/user';
+        var html='<div class="font-semibold text-warning">Управление пользователем</div>';
+        html+='<form method="post" action="'+base+'/add-balance" class="flex flex-wrap gap-2 items-end mt-2">'
+          +'<label class="form-control"><span class="label-text text-xs">Баланс +₽</span>'
+          +'<input type="text" name="amount" class="input input-bordered input-sm w-28" placeholder="0" required/></label>'
+          +'<button type="submit" class="btn btn-primary btn-sm">Пополнить</button>'
+          +'</form>';
+        if(s&&s.id){{
+          html+='<form method="post" action="'+base+'/add-days" class="flex flex-wrap gap-2 items-end mt-2">'
+            +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
+            +'<label class="form-control"><span class="label-text text-xs">Подписка +дн.</span>'
+            +'<input type="number" name="days" min="1" max="3650" class="input input-bordered input-sm w-24" value="30" required/></label>'
+            +'<button type="submit" class="btn btn-outline btn-sm">Добавить дни</button>'
+            +'</form>';
+          var ar=!!s.auto_renew;
+          var nxt=ar?'0':'1';
+          var lbl=ar?'Выключить авто-продление':'Включить авто-продление';
+          html+='<form method="post" action="'+base+'/subscription/auto-renew" class="mt-2">'
+            +'<input type="hidden" name="enabled" value="'+nxt+'"/>'
+            +'<button type="submit" class="btn btn-ghost btn-xs">'+esc(lbl)+'</button>'
+            +'</form>';
+          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" onsubmit="return confirm(\'Отключить подписку пользователя?\');">'
+            +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
+            +'<button type="submit" class="btn btn-error btn-outline btn-sm">Отключить подписку</button>'
+            +'</form>';
+        }}
+        if(!s&&lc){{
+          html+='<form method="post" action="'+base+'/subscription/enable" class="mt-2">'
+            +'<input type="hidden" name="subscription_id" value="'+lc+'"/>'
+            +'<button type="submit" class="btn btn-success btn-sm">Включить отключённую подписку</button>'
+            +'</form>';
+        }}
+        m.innerHTML=html;
       }}
       function renderChat() {{
         var msgs=(model&&model.messages)||[];
@@ -1747,13 +2124,14 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var left=m.sender_role==='user';
           var note=!!m.is_internal;
           var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
-          var side=left?'items-start':'items-end';
+          var row=left?'justify-start':'justify-end';
           var who=note?'Заметка':(left?'Пользователь':'Администратор');
           return ''
-            +'<div class="flex '+side+'">'
+            +'<div class="flex w-full '+row+'">'
             +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+'">'
             +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
             +'<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'
+            +(m.photo_file_id?'<div class="mt-2"><img src="/api/tickets/'+ticketId+'/messages/'+m.id+'/photo" alt="" class="max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30" loading="lazy"/></div>':'')
             +'</div></div>';
         }}).join('');
         chat.scrollTop=chat.scrollHeight;
@@ -1762,7 +2140,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
         if(!r.ok){{meta.textContent='Ошибка загрузки: '+r.status;return;}}
         model=await r.json();
-        renderMeta(); renderChat();
+        renderMeta(); renderUserPanel(); renderMgmt(); renderChat();
         var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
         assign.value=atg?String(atg):'';
       }}
@@ -1795,14 +2173,26 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
 
 
 @router.get("/users")
-async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLResponse:
+async def admin_users(
+    request: Request, q: str = "", page: int = 1, sub: str = "", blocked: str = ""
+) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     needle = q.strip()
+    sub_f = (sub or "").strip().lower()
+    blk_f = (blocked or "").strip()
     page = max(1, page)
     per_page = 15
     async with await _session() as session:
+        now_for_filter = datetime.now(timezone.utc)
+        active_sub_exists = exists().where(
+            and_(
+                Subscription.user_id == User.id,
+                Subscription.status.in_(("active", "trial")),
+                Subscription.expires_at > now_for_filter,
+            )
+        )
         query = select(User).order_by(desc(User.id))
         count_query = select(func.count()).select_from(User)
         if needle:
@@ -1818,6 +2208,18 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
                 )
                 query = query.where(search_filter)
                 count_query = count_query.where(search_filter)
+        if sub_f == "active":
+            query = query.where(active_sub_exists)
+            count_query = count_query.where(active_sub_exists)
+        elif sub_f == "none":
+            query = query.where(~active_sub_exists)
+            count_query = count_query.where(~active_sub_exists)
+        if blk_f == "1":
+            query = query.where(User.is_blocked.is_(True))
+            count_query = count_query.where(User.is_blocked.is_(True))
+        elif blk_f == "0":
+            query = query.where(User.is_blocked.is_(False))
+            count_query = count_query.where(User.is_blocked.is_(False))
         total_users = int((await session.execute(count_query)).scalar_one() or 0)
         total_pages = max(1, (total_users + per_page - 1) // per_page)
         if page > total_pages:
@@ -1850,13 +2252,44 @@ async def admin_users(request: Request, q: str = "", page: int = 1) -> HTMLRespo
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td></tr>"
         )
-    pager = _pagination_bar(page=page, total_pages=total_pages, base_path="/admin/users", query_extra={"q": needle})
+    pager = _pagination_bar(
+        page=page,
+        total_pages=total_pages,
+        base_path="/admin/users",
+        query_extra={"q": needle, "sub": sub_f, "blocked": blk_f},
+    )
+    sub_opts = (
+        '<option value=""'
+        + (" selected" if not sub_f else "")
+        + '>Все</option>'
+        + '<option value="active"'
+        + (" selected" if sub_f == "active" else "")
+        + '>С активной подпиской</option>'
+        + '<option value="none"'
+        + (" selected" if sub_f == "none" else "")
+        + '>Без активной</option>'
+    )
+    blk_opts = (
+        '<option value=""'
+        + (" selected" if not blk_f else "")
+        + '>Все</option>'
+        + '<option value="1"'
+        + (" selected" if blk_f == "1" else "")
+        + '>Заблокированные</option>'
+        + '<option value="0"'
+        + (" selected" if blk_f == "0" else "")
+        + '>Не заблокированные</option>'
+    )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
         f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
-        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Поиск</button></form>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
+        f"<select name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
+        f"<select name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
+        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
@@ -2003,9 +2436,6 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 )
             )
         ).scalar_one()
-        db_devices = list(
-            (await session.execute(select(Device).where(Device.user_id == user_id).order_by(Device.id))).scalars().all()
-        )
         active_sub = await get_active_subscription(session, user.id)
         n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
         last_cancelled_sub = (
@@ -2043,9 +2473,6 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         ]
         invited_tuples = [
             (u.id, u.first_name, u.username, u.telegram_id, u.created_at) for u in invited_list
-        ]
-        dev_tuples = [
-            (d.id, d.name, d.remnawave_client_id, d.created_at, d.last_used_at) for d in db_devices
         ]
         active_snap: dict | None = None
         if active_sub:
@@ -2304,16 +2731,6 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     elif not ud.remnawave_uuid:
         hwid_alert = "<p class='text-sm opacity-60'>Нет RemnaWave UUID — список HWID с панели недоступен.</p>"
 
-    dev_db_rows = []
-    for did, dname, dcid, dca, dla in dev_tuples:
-        dev_db_rows.append(
-            f"<tr><td>{did}</td><td>{_esc(dname)}</td><td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(dcid or '—')}</code></td>"
-            f"<td>{_fmt_dt_msk(dca)}</td><td>{_fmt_dt_msk(dla) if dla else '—'}</td>"
-            "<td class='text-right'>"
-            f"<button type='button' class='btn btn-warning btn-outline btn-sm h-9 min-h-9' data-remna-open-slot data-no-row-nav "
-            f'data-user-id="{user_id}" data-device-id="{did}">Снять слот</button></td></tr>'
-        )
-
     devices_block = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
@@ -2322,13 +2739,6 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th>Данные</th><th></th></tr></thead>
         <tbody>{''.join(hwid_rows) or '<tr><td colspan="5" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
         <p class="text-xs opacity-60">«Отвязать»: в модальном окне — только снять HWID с панели или также уменьшить оплаченный слот.</p>
-      </div>
-    </div>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
-      <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Устройства в БД</h3>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Имя</th><th>client_id</th><th>Создано</th><th>Последняя активность</th><th></th></tr></thead>
-        <tbody>{''.join(dev_db_rows) or '<tr><td colspan="6" class="opacity-50">Нет записей</td></tr>'}</tbody></table></div>
       </div>
     </div>
     """

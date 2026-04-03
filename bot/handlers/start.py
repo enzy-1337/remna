@@ -83,7 +83,7 @@ async def cmd_start(
         intro_lines.append(esc("С возвращением!"))
 
     has_act = await get_active_subscription(session, user.id) is not None
-    show_trial = trial_eligible(user, has_act)
+    show_trial = bool(settings.trial_enabled and trial_eligible(user, has_act))
     kb = profile_main_keyboard(
         has_active_sub=has_act,
         show_trial=show_trial,
@@ -166,7 +166,7 @@ async def cb_channel_check(
         return
 
     has_act = await get_active_subscription(session, db_user.id) is not None
-    show_trial = trial_eligible(db_user, has_act)
+    show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
     kb = profile_main_keyboard(
         has_active_sub=has_act,
         show_trial=show_trial,

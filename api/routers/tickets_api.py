@@ -5,14 +5,21 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from shared.database import get_session_factory
+from shared.models.plan import Plan
+from shared.models.subscription import Subscription
+from shared.models.user import User
 from tickets.config import config as tickets_config
 
 router = APIRouter(tags=["tickets-api"])
@@ -156,7 +163,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             await session.execute(
                 text(
                     """
-                    SELECT id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal
+                    SELECT id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id
                     FROM ticket_messages
                     WHERE ticket_id = :tid
                     ORDER BY id ASC
@@ -165,13 +172,105 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
                 {"tid": ticket_id},
             )
         ).mappings().all()
+        uid = int(t["user_id"])
+        now = datetime.now(timezone.utc)
+        urow = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        user_info: dict[str, object] | None = None
+        if urow is not None:
+            user_info = {
+                "id": urow.id,
+                "telegram_id": urow.telegram_id,
+                "username": urow.username,
+                "first_name": urow.first_name,
+                "last_name": urow.last_name,
+                "balance": str(urow.balance),
+                "is_blocked": bool(urow.is_blocked),
+            }
+        sub_row = (
+            await session.execute(
+                select(Subscription, Plan)
+                .join(Plan, Plan.id == Subscription.plan_id)
+                .where(
+                    Subscription.user_id == uid,
+                    Subscription.status.in_(("active", "trial")),
+                    Subscription.expires_at > now,
+                )
+                .order_by(Subscription.expires_at.desc())
+                .limit(1)
+            )
+        ).first()
+        user_subscription: dict[str, object] | None = None
+        if sub_row is not None:
+            sub, plan = sub_row
+            user_subscription = {
+                "id": sub.id,
+                "plan_name": plan.name,
+                "status": sub.status,
+                "expires_at": _to_iso(sub.expires_at),
+                "devices_count": sub.devices_count,
+                "auto_renew": bool(sub.auto_renew),
+            }
+        last_cancelled_sub_id: int | None = None
+        lc = (
+            await session.execute(
+                select(Subscription.id)
+                .where(Subscription.user_id == uid, Subscription.status == "cancelled")
+                .order_by(Subscription.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if lc is not None:
+            last_cancelled_sub_id = int(lc)
     return {
         "ticket": {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()},
         "messages": [
             {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
             for m in msgs
         ],
+        "user": user_info,
+        "user_subscription": user_subscription,
+        "last_cancelled_subscription_id": last_cancelled_sub_id,
     }
+
+
+def _tg_photo_mime(path: str) -> str:
+    p = (path or "").lower()
+    if p.endswith(".png"):
+        return "image/png"
+    if p.endswith(".webp"):
+        return "image/webp"
+    if p.endswith(".gif"):
+        return "image/gif"
+    return "image/jpeg"
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/photo")
+async def api_ticket_message_photo(request: Request, ticket_id: int, msg_id: int) -> Response:
+    """Прокси фото из Telegram (file_id бота тикетов), только для авторизованного веб-админа."""
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        row = (
+            await session.execute(
+                text("SELECT photo_file_id FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+                {"mid": msg_id, "tid": ticket_id},
+            )
+        ).mappings().first()
+    if not row or not row.get("photo_file_id"):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    fid = str(row["photo_file_id"])
+    async with Bot(token=tok) as bot:
+        f = await bot.get_file(fid)
+        fp = f.file_path
+        if not fp:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+    url = f"https://api.telegram.org/file/bot{tok}/{fp}"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(content=r.content, media_type=_tg_photo_mime(fp))
 
 
 @router.post("/tickets/{ticket_id}/reply")
@@ -207,8 +306,8 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
         await session.execute(
             text(
                 """
-                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
-                VALUES (:tid,:sid,'admin',:stg,:txt,:now,false)
+                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                VALUES (:tid,:sid,'admin',:stg,:txt,:now,false,NULL)
                 """
             ),
             {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
@@ -258,13 +357,17 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
 async def api_ticket_note(request: Request, ticket_id: int, body: TicketNoteIn) -> dict:
     _require_api_login(request)
     txt = (body.text or "").strip()
+    txt_html = html.escape(txt)
     if not txt:
         raise HTTPException(status_code=400, detail="text is required")
+    wauth = request.session.get("wauth") or {}
+    admin_label = html.escape(str(wauth.get("label") or "Администратор"))
     async with await _session() as session:
-        t = (await session.execute(text("SELECT id FROM tickets WHERE id=:tid"), {"tid": ticket_id})).first()
+        t = (
+            await session.execute(text("SELECT id, topic_id FROM tickets WHERE id=:tid"), {"tid": ticket_id})
+        ).mappings().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        wauth = request.session.get("wauth") or {}
         admin_tg = int(wauth.get("telegram_id") or 0)
         admin_uid = None
         if admin_tg:
@@ -274,8 +377,8 @@ async def api_ticket_note(request: Request, ticket_id: int, body: TicketNoteIn) 
         await session.execute(
             text(
                 """
-                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
-                VALUES (:tid,:sid,'admin',:stg,:txt,:now,true)
+                INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                VALUES (:tid,:sid,'admin',:stg,:txt,:now,true,NULL)
                 """
             ),
             {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
@@ -285,6 +388,23 @@ async def api_ticket_note(request: Request, ticket_id: int, body: TicketNoteIn) 
             {"now": now, "tid": ticket_id},
         )
         await session.commit()
+    if tickets_config.bot_token:
+        try:
+            topic_id = int(t["topic_id"] or 0)
+        except Exception:
+            topic_id = 0
+        if topic_id:
+            bot = Bot(token=tickets_config.bot_token)
+            try:
+                await bot.send_message(
+                    chat_id=tickets_config.support_group_id,
+                    message_thread_id=topic_id,
+                    text=f"<b>📝 Внутренняя заметка</b> — {admin_label}\n\n<blockquote>{txt_html}</blockquote>",
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+            finally:
+                await bot.session.close()
     return {"ok": True}
 
 
