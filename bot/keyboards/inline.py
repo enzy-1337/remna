@@ -66,12 +66,16 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
     """Быстрые суммы пополнения: сетка 100|200, 300|500, затем свои строки."""
     builder = InlineKeyboardBuilder()
     builder.row(
+        InlineKeyboardButton(text="10 ₽", callback_data="topup:amt:10"),
         InlineKeyboardButton(text="100 ₽", callback_data="topup:amt:100"),
-        InlineKeyboardButton(text="200 ₽", callback_data="topup:amt:200"),
     )
     builder.row(
+        InlineKeyboardButton(text="200 ₽", callback_data="topup:amt:200"),
         InlineKeyboardButton(text="300 ₽", callback_data="topup:amt:300"),
+    )
+    builder.row(
         InlineKeyboardButton(text="500 ₽", callback_data="topup:amt:500"),
+        InlineKeyboardButton(text="1000 ₽", callback_data="topup:amt:1000"),
     )
     builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
     builder.row(InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"))

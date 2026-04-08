@@ -148,15 +148,6 @@ async def msg_promo_code(
                     f"Бонус: +{bold(str(meta['value']))}%",
                     plain("Сработает 1 раз на первое пополнение после активации."),
                 ]
-            elif mt == "subscription_days":
-                fb = meta.get("fallback")
-                lines = [
-                    f"Код: {code(meta['code'])}",
-                    "Тип: " + code(meta["type"]),
-                    f"Награда: +{bold(str(meta['value']))} дн. к подписке",
-                ]
-                if fb is not None:
-                    lines.append(f"Фолбэк при отсутствии подписки: +{bold(str(fb))} ₽")
             else:
                 lines = [
                     f"Код: {code(meta['code'])}",

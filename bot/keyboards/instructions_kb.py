@@ -32,8 +32,6 @@ def build_instructions_markup(
             b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
         if settings.instruction_ios_url:
             b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
-        if settings.instruction_windows_url:
-            b.row(InlineKeyboardButton(text="🪟 Windows", url=settings.instruction_windows_url))
         if settings.instruction_macos_url:
             b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
     b.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))

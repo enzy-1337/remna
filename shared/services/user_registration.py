@@ -57,6 +57,7 @@ async def register_user(
         if ref_user and ref_user.telegram_id != tg_user.id:
             referrer_id = ref_user.id
 
+    settings = get_settings()
     referral_code = await _generate_unique_referral_code(session)
     now = datetime.now(timezone.utc)
     user = User(
@@ -69,11 +70,11 @@ async def register_user(
         referral_code=referral_code,
         is_subscribed_channel=True,
         last_activity_at=now,
+        billing_mode="hybrid" if settings.billing_v2_enabled else "legacy",
     )
     session.add(user)
     await session.flush()
 
-    settings = get_settings()
     bonus = settings.referral_signup_bonus_rub
     invited_bonus: Decimal | None = None
     if referrer_id is not None and bonus > 0:

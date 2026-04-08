@@ -49,6 +49,9 @@ from shared.services.expiry_notify_service import subscription_expiry_notify_loo
 from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_sync import sync_loop
 from shared.services.schema_patches import ensure_promo_columns, ensure_subscription_expiry_notify_columns
+from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
+from shared.services.billing_v2.negative_balance_notify_loop import negative_balance_notify_loop
+from shared.services.billing_v2.transition_service import legacy_transition_loop
 
 
 async def main() -> None:
@@ -104,6 +107,9 @@ async def main() -> None:
     backup_task: asyncio.Task | None = None
     autorenew_task: asyncio.Task | None = None
     expiry_notify_task: asyncio.Task | None = None
+    billing_cleanup_task: asyncio.Task | None = None
+    negative_notify_task: asyncio.Task | None = None
+    legacy_transition_task: asyncio.Task | None = None
     if settings.remnawave_sync_enabled and not settings.remnawave_stub:
         sync_task = asyncio.create_task(sync_loop(settings, stop_event))
     if settings.admin_report_enabled:
@@ -112,6 +118,11 @@ async def main() -> None:
         backup_task = asyncio.create_task(backup_loop(settings, stop_event))
     autorenew_task = asyncio.create_task(subscription_autorenew_loop(settings, stop_event))
     expiry_notify_task = asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event))
+    if settings.billing_v2_enabled:
+        billing_cleanup_task = asyncio.create_task(billing_cleanup_loop(settings, stop_event))
+        if settings.billing_negative_notify_enabled:
+            negative_notify_task = asyncio.create_task(negative_balance_notify_loop(settings, stop_event))
+        legacy_transition_task = asyncio.create_task(legacy_transition_loop(settings, stop_event))
     try:
         boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S")
         sent = await notify_admin_plain(
@@ -145,6 +156,18 @@ async def main() -> None:
             expiry_notify_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await expiry_notify_task
+        if billing_cleanup_task is not None:
+            billing_cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await billing_cleanup_task
+        if negative_notify_task is not None:
+            negative_notify_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await negative_notify_task
+        if legacy_transition_task is not None:
+            legacy_transition_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await legacy_transition_task
 
 
 if __name__ == "__main__":

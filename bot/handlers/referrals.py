@@ -15,6 +15,7 @@ from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
     list_invited_users,
+    list_referrer_rewards,
     sum_referrer_bonus_days,
     sum_referrer_bonus_rub,
 )
@@ -93,6 +94,7 @@ def _referrals_main_body(
 
 def _referrals_main_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="💸 История начислений", callback_data="ref:rewards"))
     b.row(InlineKeyboardButton(text="📋 Список приглашённых", callback_data="ref:list"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
@@ -163,6 +165,42 @@ async def cb_ref_list(
     await answer_callback_with_photo_screen(
         cq,
         caption=body,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "ref:rewards")
+async def cb_ref_rewards(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    rows = await list_referrer_rewards(session, db_user.id, limit=25)
+    if not rows:
+        text = join_lines("💸 " + bold("История начислений"), "", plain("Начислений пока нет."))
+    else:
+        lines: list[str] = ["💸 " + bold("История начислений"), ""]
+        for idx, row in enumerate(rows, start=1):
+            applied = row.applied_at.strftime("%d.%m.%Y %H:%M") if row.applied_at else "—"
+            lines.append(
+                plain(f"{idx}. ")
+                + bold(str(row.bonus_rub))
+                + plain(" ₽ · ")
+                + code(row.source)
+                + plain(" · ")
+                + plain(applied)
+            )
+        text = join_lines(*lines)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
         reply_markup=b.as_markup(),
         settings=settings,
     )

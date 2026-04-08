@@ -31,6 +31,10 @@ class User(Base):
 
     language_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), server_default="0")
+    billing_mode: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    lifetime_exempt_flag: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    risk_notified_24h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    risk_notified_1h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     referred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

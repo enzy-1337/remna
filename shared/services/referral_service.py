@@ -71,6 +71,21 @@ async def list_invited_users(
     return list(r.scalars().all())
 
 
+async def list_referrer_rewards(
+    session: AsyncSession,
+    referrer_user_id: int,
+    *,
+    limit: int = 30,
+) -> list[ReferralReward]:
+    r = await session.execute(
+        select(ReferralReward)
+        .where(ReferralReward.referrer_id == referrer_user_id, ReferralReward.status == "applied")
+        .order_by(ReferralReward.id.desc())
+        .limit(limit)
+    )
+    return list(r.scalars().all())
+
+
 def first_paid_plan_referrer_rewards(
     plan: Plan,
     settings: Settings,
@@ -208,3 +223,63 @@ async def grant_referrer_reward_first_paid_plan(
             subject_user=buyer,
             session=session,
         )
+
+
+async def grant_referrer_reward_from_topup(
+    session: AsyncSession,
+    *,
+    referred_user: User,
+    topup_amount_rub: Decimal,
+    settings: Settings,
+) -> Decimal:
+    if topup_amount_rub <= 0 or referred_user.referred_by is None:
+        return Decimal("0")
+    if settings.referral_topup_percent <= 0:
+        return Decimal("0")
+    referrer = await session.get(User, referred_user.referred_by)
+    if referrer is None or referrer.is_blocked or referrer.id == referred_user.id:
+        return Decimal("0")
+
+    bonus = (topup_amount_rub * settings.referral_topup_percent / Decimal("100")).quantize(Decimal("0.01"))
+    if bonus <= 0:
+        return Decimal("0")
+
+    referrer.balance += bonus
+    session.add(
+        ReferralReward(
+            referrer_id=referrer.id,
+            referred_id=referred_user.id,
+            plan_id=None,
+            bonus_days=0,
+            bonus_rub=bonus,
+            source="topup_percent",
+            status="applied",
+            applied_at=datetime.now(timezone.utc),
+        )
+    )
+    session.add(
+        Transaction(
+            user_id=referrer.id,
+            type="referral_topup_percent",
+            amount=bonus,
+            currency="RUB",
+            payment_provider="referral",
+            payment_id=None,
+            status="completed",
+            description=f"Реферал: {settings.referral_topup_percent}% от пополнения user #{referred_user.id}",
+            meta={"referred_id": referred_user.id, "topup_amount_rub": str(topup_amount_rub)},
+        )
+    )
+    await send_telegram_message(
+        referrer.telegram_id,
+        join_lines(
+            "🎁 " + bold("Реферальное начисление"),
+            plain("Ваш реферал пополнил баланс: +")
+            + bold(str(bonus))
+            + plain(" ₽ (")
+            + bold(str(settings.referral_topup_percent))
+            + plain("%)."),
+        ),
+        settings=settings,
+    )
+    return bonus

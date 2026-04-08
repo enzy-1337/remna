@@ -25,6 +25,7 @@ import redis.asyncio as redis_async
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
+from sqlalchemy import case
 from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -41,8 +42,12 @@ from shared.integrations.rw_traffic import (
 )
 from shared.integrations.rw_hwid_devices import format_rw_device_datetime_local, hwid_device_title, normalize_hwid_devices_list
 from shared.models.device import Device
+from shared.models.billing_daily_summary import BillingDailySummary
+from shared.models.billing_ledger_entry import BillingLedgerEntry
+from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoUsage
+from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
@@ -808,8 +813,12 @@ def _promo_reward_caption(promo: PromoCode) -> str:
     v = promo.value
     if promo.type in ("balance_rub", "bonus_rub"):
         return f"+{v} ₽"
-    if promo.type == "subscription_days":
-        return f"+{v} дн."
+    if promo.type == "discount_percent":
+        return f"-{v}% на покупку"
+    if promo.type == "extra_gb":
+        return f"+{v} ГБ"
+    if promo.type == "extra_devices":
+        return f"+{v} устройств"
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
     return f"+{v}"
@@ -1565,6 +1574,90 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         ).scalar_one()
         users_count = int((await session.execute(select(func.count()).select_from(User))).scalar_one() or 0)
         promos_count = (await session.execute(select(func.count()).select_from(PromoCode))).scalar_one()
+        risk_1h_users = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(User).where(User.risk_notified_1h_at.is_not(None))
+                )
+            ).scalar_one()
+            or 0
+        )
+        risk_24h_users = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(User).where(
+                        User.risk_notified_24h_at.is_not(None),
+                        User.risk_notified_1h_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        webhook_ok_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                        RemnawaveWebhookEvent.received_at >= day_ago,
+                        RemnawaveWebhookEvent.signature_valid.is_(True),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        webhook_dup_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                        RemnawaveWebhookEvent.received_at >= day_ago,
+                        RemnawaveWebhookEvent.status == "duplicate",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        webhook_invalid_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                        RemnawaveWebhookEvent.received_at >= day_ago,
+                        RemnawaveWebhookEvent.signature_valid.is_(False),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        rating_events_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(BillingUsageEvent).where(
+                        BillingUsageEvent.created_at >= day_ago
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        ledger_rejects_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(BillingLedgerEntry).where(
+                        BillingLedgerEntry.created_at >= day_ago,
+                        BillingLedgerEntry.entry_type == "reject",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        transitions_24h = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(Transaction).where(
+                        Transaction.created_at >= day_ago,
+                        Transaction.type == "billing_transition",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
         active_sub_users = int(
             (
                 await session.execute(
@@ -1725,6 +1818,26 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             <div class="card-body justify-center text-center">
               <p class="text-sm opacity-60 mb-2">Промокодов в базе</p>
               <p class="text-2xl font-bold text-accent">{promos_count}</p>
+            </div>
+          </div>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body justify-center text-center gap-2">
+              <p class="text-sm opacity-60">Риск минуса</p>
+              <p class="text-base"><span class="badge badge-error badge-sm mr-2">1ч: {risk_1h_users}</span><span class="badge badge-warning badge-sm">24ч: {risk_24h_users}</span></p>
+              <a class="link link-primary text-xs" href="/admin/users?risk=1h">Открыть критичных</a>
+            </div>
+          </div>
+          <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
+            <div class="card-body justify-center text-center gap-2">
+              <p class="text-sm opacity-60">Observability (24ч)</p>
+              <p class="text-xs">
+                <span class="badge badge-success badge-xs mr-1">webhook ok: {webhook_ok_24h}</span>
+                <span class="badge badge-warning badge-xs mr-1">dup: {webhook_dup_24h}</span>
+                <span class="badge badge-error badge-xs">invalid: {webhook_invalid_24h}</span>
+              </p>
+              <p class="text-xs">
+                rating: <b>{rating_events_24h}</b> · rejects: <b>{ledger_rejects_24h}</b> · transitions: <b>{transitions_24h}</b>
+              </p>
             </div>
           </div>
         </div>
@@ -2186,7 +2299,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
 
 @router.get("/users")
 async def admin_users(
-    request: Request, q: str = "", page: int = 1, sub: str = "", blocked: str = ""
+    request: Request, q: str = "", page: int = 1, sub: str = "", blocked: str = "", risk: str = ""
 ) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -2194,6 +2307,7 @@ async def admin_users(
     needle = q.strip()
     sub_f = (sub or "").strip().lower()
     blk_f = (blocked or "").strip()
+    risk_f = (risk or "").strip().lower()
     page = max(1, page)
     per_page = 15
     async with await _session() as session:
@@ -2205,7 +2319,12 @@ async def admin_users(
                 Subscription.expires_at > now_for_filter,
             )
         )
-        query = select(User).order_by(desc(User.id))
+        risk_priority = case(
+            (User.risk_notified_1h_at.is_not(None), 2),
+            (User.risk_notified_24h_at.is_not(None), 1),
+            else_=0,
+        )
+        query = select(User).order_by(desc(risk_priority), desc(User.id))
         count_query = select(func.count()).select_from(User)
         if needle:
             if needle.isdigit():
@@ -2232,6 +2351,12 @@ async def admin_users(
         elif blk_f == "0":
             query = query.where(User.is_blocked.is_(False))
             count_query = count_query.where(User.is_blocked.is_(False))
+        if risk_f == "24h":
+            query = query.where(User.risk_notified_24h_at.is_not(None))
+            count_query = count_query.where(User.risk_notified_24h_at.is_not(None))
+        elif risk_f == "1h":
+            query = query.where(User.risk_notified_1h_at.is_not(None))
+            count_query = count_query.where(User.risk_notified_1h_at.is_not(None))
         total_users = int((await session.execute(count_query)).scalar_one() or 0)
         total_pages = max(1, (total_users + per_page - 1) // per_page)
         if page > total_pages:
@@ -2257,18 +2382,24 @@ async def admin_users(
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
         av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
+        risk_badge = "<span class='badge badge-ghost badge-xs'>—</span>"
+        if u.risk_notified_1h_at is not None:
+            risk_badge = "<span class='badge badge-error badge-xs'>1ч</span>"
+        elif u.risk_notified_24h_at is not None:
+            risk_badge = "<span class='badge badge-warning badge-xs'>24ч</span>"
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
-            f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td></tr>"
+            f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td>"
+            f"<td>{risk_badge}</td></tr>"
         )
     pager = _pagination_bar(
         page=page,
         total_pages=total_pages,
         base_path="/admin/users",
-        query_extra={"q": needle, "sub": sub_f, "blocked": blk_f},
+        query_extra={"q": needle, "sub": sub_f, "blocked": blk_f, "risk": risk_f},
     )
     sub_opts = (
         '<option value=""'
@@ -2292,6 +2423,17 @@ async def admin_users(
         + (" selected" if blk_f == "0" else "")
         + '>Не заблокированные</option>'
     )
+    risk_opts = (
+        '<option value=""'
+        + (" selected" if not risk_f else "")
+        + '>Все</option>'
+        + '<option value="24h"'
+        + (" selected" if risk_f == "24h" else "")
+        + '>Риск 24ч</option>'
+        + '<option value="1h"'
+        + (" selected" if risk_f == "1h" else "")
+        + '>Риск 1ч</option>'
+    )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
@@ -2301,10 +2443,12 @@ async def admin_users(
         f"<select name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
         f"<select name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Риск минуса</span>"
+        f"<select name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
         "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
     )
     return _layout("Web-admin Users", body, request=request)
@@ -2450,6 +2594,33 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         ).scalar_one()
         active_sub = await get_active_subscription(session, user.id)
         n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
+        today = datetime.now(UTC).date()
+        spend_rows = list(
+            (
+                await session.execute(
+                    select(BillingDailySummary).where(
+                        BillingDailySummary.user_id == user.id,
+                        BillingDailySummary.day >= today - timedelta(days=3),
+                        BillingDailySummary.day <= today,
+                    )
+                )
+            ).scalars()
+        )
+        avg_daily_spend = Decimal("0")
+        if spend_rows:
+            total_spend = Decimal("0")
+            uniq_days: set[date] = set()
+            for row in spend_rows:
+                total_spend += row.total_amount_rub
+                uniq_days.add(row.day)
+            if uniq_days:
+                avg_daily_spend = (total_spend / Decimal(len(uniq_days))).quantize(Decimal("0.01"))
+        remain_to_floor = (user.balance - settings.billing_balance_floor_rub).quantize(Decimal("0.01"))
+        eta_to_floor_hours: float | None = None
+        if avg_daily_spend > 0 and remain_to_floor > 0:
+            hourly = avg_daily_spend / Decimal("24")
+            if hourly > 0:
+                eta_to_floor_hours = float(remain_to_floor / hourly)
         last_cancelled_sub = (
             await session.execute(
                 select(Subscription)
@@ -2470,6 +2641,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             remnawave_uuid=user.remnawave_uuid,
             is_blocked=user.is_blocked,
             created_at=user.created_at,
+            billing_mode=user.billing_mode,
+            risk_notified_24h_at=user.risk_notified_24h_at,
+            risk_notified_1h_at=user.risk_notified_1h_at,
+            avg_daily_spend=avg_daily_spend,
+            eta_to_floor_hours=eta_to_floor_hours,
         )
         referrer_sn = (
             SimpleNamespace(id=referrer.id, first_name=referrer.first_name, username=referrer.username)
@@ -2647,6 +2823,44 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     if uinf:
         sub_url_rw = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
 
+    risk_badge = "badge-ghost"
+    risk_text = "Недостаточно данных"
+    eta_txt = "—"
+    if isinstance(ud.eta_to_floor_hours, float):
+        if ud.eta_to_floor_hours <= 0:
+            risk_badge = "badge-error"
+            risk_text = "Порог уже достигнут"
+            eta_txt = "0 ч"
+        else:
+            eta_delta = timedelta(hours=ud.eta_to_floor_hours)
+            hh = int(eta_delta.total_seconds() // 3600)
+            mm = int((eta_delta.total_seconds() % 3600) // 60)
+            eta_txt = f"{hh} ч {mm} мин"
+            if ud.eta_to_floor_hours <= 1.5:
+                risk_badge = "badge-error"
+                risk_text = "Высокий риск (< 1.5ч)"
+            elif ud.eta_to_floor_hours <= 26:
+                risk_badge = "badge-warning"
+                risk_text = "Риск в горизонте суток"
+            else:
+                risk_badge = "badge-success"
+                risk_text = "Риск вне ближайших суток"
+    risk_24 = _fmt_dt_msk(ud.risk_notified_24h_at) if ud.risk_notified_24h_at else "—"
+    risk_1 = _fmt_dt_msk(ud.risk_notified_1h_at) if ud.risk_notified_1h_at else "—"
+    negative_risk_block = f"""
+    <div class="rounded-2xl border border-warning/30 bg-base-200/30 p-4">
+      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Риск ухода в минус</h3>
+      <div class="grid gap-2 text-sm sm:grid-cols-2">
+        <p>Режим биллинга: <b>{_esc(ud.billing_mode)}</b></p>
+        <p>Статус: <span class="badge {risk_badge} badge-sm">{_esc(risk_text)}</span></p>
+        <p>Средний расход/день (3д): <b>{_esc(ud.avg_daily_spend)} ₽</b></p>
+        <p>ETA до {_esc(str(settings.billing_balance_floor_rub))} ₽: <b>{_esc(eta_txt)}</b></p>
+        <p>Последнее уведомление 24ч: <b>{_esc(risk_24)}</b></p>
+        <p>Последнее уведомление 1ч: <b>{_esc(risk_1)}</b></p>
+      </div>
+    </div>
+    """
+
     vpn_link_card = ""
     if sub_url_rw:
         vpn_link_card = f"""
@@ -2780,6 +2994,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <p>Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
+          {negative_risk_block}
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
           {ref_block}
@@ -3295,13 +3510,15 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
             <input class="input input-bordered input-sm h-9 min-h-9 font-mono text-sm uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="promo_type">
-            <option value="subscription_days" {'selected' if p and p.type == 'subscription_days' else ''}>subscription_days</option>
+            <option value="discount_percent" {'selected' if p and p.type == 'discount_percent' else ''}>discount_percent</option>
             <option value="balance_rub" {'selected' if p and p.type == 'balance_rub' else ''}>balance_rub</option>
             <option value="topup_bonus_percent" {'selected' if p and p.type == 'topup_bonus_percent' else ''}>topup_bonus_percent</option>
+            <option value="extra_gb" {'selected' if p and p.type == 'extra_gb' else ''}>extra_gb</option>
+            <option value="extra_devices" {'selected' if p and p.type == 'extra_devices' else ''}>extra_devices</option>
           </select></label>
           <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="value" value="{_esc(p.value if p else '')}" /></label>
-          <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (для subscription_days)</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (устарело, не используется)</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
@@ -3346,17 +3563,13 @@ async def admin_promos_new_post(
         c = code.strip().upper()
         if not c:
             raise ValueError("Код обязателен")
-        if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
+        if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
             raise ValueError("Неверный тип")
         val = Decimal(value.strip().replace(",", "."))
         if val <= 0:
             raise ValueError("Награда должна быть > 0")
-        fb: Decimal | None = None
-        if promo_type == "subscription_days":
-            fb_raw = fallback_value_rub.strip().replace(",", ".")
-            fb = Decimal(fb_raw) if fb_raw else None
-            if fb is None or fb <= 0:
-                raise ValueError("Для subscription_days нужен fallback > 0")
+        if promo_type == "discount_percent" and (val <= 0 or val >= 100):
+            raise ValueError("discount_percent должен быть в диапазоне (0,100)")
         mu: int | None = None
         if max_uses.strip() != "-":
             if not max_uses.strip().isdigit():
@@ -3378,7 +3591,7 @@ async def admin_promos_new_post(
             code=c,
             type=promo_type,
             value=val,
-            fallback_value_rub=fb if promo_type == "subscription_days" else None,
+            fallback_value_rub=None,
             max_uses=mu,
             expires_at=exp,
             is_active=active,
@@ -3488,17 +3701,13 @@ async def admin_promos_edit_post(
                 back_href="/admin/promos",
             )
         try:
-            if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
+            if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
                 raise ValueError("Неверный тип")
             val = Decimal(value.strip().replace(",", "."))
             if val <= 0:
                 raise ValueError("Награда должна быть > 0")
-            fb: Decimal | None = None
-            if promo_type == "subscription_days":
-                fb_raw = fallback_value_rub.strip().replace(",", ".")
-                fb = Decimal(fb_raw) if fb_raw else None
-                if fb is None or fb <= 0:
-                    raise ValueError("Для subscription_days нужен fallback > 0")
+            if promo_type == "discount_percent" and (val <= 0 or val >= 100):
+                raise ValueError("discount_percent должен быть в диапазоне (0,100)")
             mu: int | None = None
             if max_uses.strip() != "-":
                 if not max_uses.strip().isdigit():
@@ -3517,7 +3726,7 @@ async def admin_promos_edit_post(
             )
         promo.type = promo_type
         promo.value = val
-        promo.fallback_value_rub = fb if promo_type == "subscription_days" else None
+        promo.fallback_value_rub = None
         promo.max_uses = mu
         promo.expires_at = exp
         promo.is_active = active

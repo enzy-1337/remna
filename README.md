@@ -84,18 +84,11 @@ docker compose build --no-cache
 docker compose up -d --build
 ```
 
-То же в PowerShell / CMD:
-
-```powershell
-docker compose up -d --build
-```
-
 **Однострочник из корня** (обёртка с проверкой `.env`):
 
-- **Windows:** `.\start.bat` или `.\start.ps1`
 - **Linux/macOS:** `chmod +x start.sh && ./start.sh`
 
-Опции скриптов: `-NoBuild` / `--no-build` (без `--build`), `-Foreground` / `--foreground` (логи в консоли), `-Down` / `--down` (остановка). Отдельно прогнать только миграции: `docker compose run --rm migrate` или `.\start.ps1 -Migrate` / `./start.sh --migrate`.
+Опции скриптов: `--no-build` (без `--build`), `--foreground` (логи в консоли), `--down` (остановка), `--phase1-check` (preflight перед rollout). Отдельно прогнать только миграции: `docker compose run --rm migrate` или `./start.sh --migrate`.
 
 **Если `migrate` падает с `exit 1`:** посмотрите текст ошибки (лог одноразового контейнера):
 
@@ -108,10 +101,21 @@ docker compose run --rm migrate
 Частые причины: неверный пароль к Postgres (том `pgdata` создан с другими `POSTGRES_*`, чем в текущем `docker-compose.yml`), конфликт ревизий Alembic, недоступен `postgres`. Починить миграции **не** через `docker compose exec api alembic` (если контейнер `api` не запущен), а через `docker compose run --rm migrate` или `docker compose run --rm bot alembic upgrade head` с тем же `DATABASE_URL`, что в compose.
 
 - Сервис **`migrate`** — однократно `alembic upgrade head` до старта зависимых сервисов
-- Сервис **`bot`** — `python -m bot.main`
+- Сервис **`bot`** — `python -m bot.main` (опционально через **proxychains4**, см. ниже)
 - Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей)
 - **Postgres** и **Redis** поднимаются автоматически; `DATABASE_URL` / `REDIS_URL` в compose переопределены под сеть Docker.
 - Порты **5432** и **6379** на хост **не пробрасываются** (чтобы не конфликтовать с уже установленным PostgreSQL/Redis на VPS). Подключение к БД из контейнеров идёт по имени `postgres` / `redis`. Нужен доступ с хоста — см. `docker-compose.override.example.yml`.
+
+#### Бот через VPN (proxychains4)
+
+Если Telegram и прочие внешние запросы бота должны идти через SOCKS5 на хосте (типичный сценарий: на сервере поднят VPN-клиент с локальным прокси `127.0.0.1:1080`):
+
+1. В `.env`: `BOT_PROXYCHAINS_ENABLED=true`, при необходимости `PROXYCHAINS_SOCKS5_HOST` / `PROXYCHAINS_SOCKS5_PORT` (в Docker по умолчанию хост — `host.docker.internal`, порт `1080`).
+2. Пересоберите образ (`docker compose build bot`) и перезапустите сервис `bot`.
+
+В `scripts/bot-entrypoint.sh` заданы `localnet` для частных подсетей, чтобы **Postgres/Redis в Docker** не уводились в SOCKS. Сервис **`api`** по умолчанию **не** оборачивается в proxychains (вебхуки платежей обычно должны быть доступны напрямую).
+
+Без Docker (только процесс на Linux): `BOT_PROXYCHAINS_ENABLED=1 ./scripts/bot-entrypoint.sh python -m bot.main` (нужен установленный `proxychains4`).
 
 ### Интерфейс (фото + профиль)
 
@@ -185,8 +189,25 @@ sudo certbot --nginx -d admin.your-domain.com
 - **Шаг 8** — покупка/продление тарифа с баланса (синхронизация Remnawave, продление от `max(now, expires_at)`), при нехватке средств — запись в корзину и **авто-покупка после пополнения** (`try_apply_smart_cart_after_topup`), устройства (2–10 слотов, платное добавление, `EXTRA_DEVICE_PRICE_RUB`), экраны «Моя подписка» и «Устройства» (`bot/handlers/subscription.py`, `devices.py`), `subscription_service` + `RemnaWaveClient.update_user`.
 - **Шаг 9** — рефералы: deep-link `ref_CODE` (регистрация), опционально **бонус пригласившему при регистрации друга** (`REFERRAL_SIGNUP_BONUS_RUB`, транзакция `referral_signup`), плюс **однократная награда пригласившему** при первой **платной** покупке приглашённого (`grant_referrer_reward_first_paid_plan`, запись `referral_rewards`, транзакция `referral_reward`), опционально **+дни** к активной подписке пригласившего + синхронизация Remnawave; уникальный частичный индекс `0002_referral_uq`; экран «Рефералы» (`bot/handlers/referrals.py`), переменные `REFERRAL_INVITER_BONUS_RUB` / `REFERRAL_INVITER_BONUS_DAYS`.
 - **Шаг 10** — промокоды: экран ввода в боте (`bot/handlers/promo.py`, FSM), применение в `promo_service` с проверками `is_active`/`expires_at`/`max_uses`, запрет повторного использования одним пользователем (`0003_promo_usage_uq`), начисление в `balance` или `bonus_balance` (типы `balance_rub` / `bonus_rub`) и запись транзакции.
-- **Шаг 11** — инструкции: экран «📖 Инструкции» теперь берёт ссылки из `.env` (`INSTRUCTION_ANDROID_URL`, `INSTRUCTION_IOS_URL`, `INSTRUCTION_WINDOWS_URL`, `INSTRUCTION_MACOS_URL`) и показывает кнопки по платформам; если ссылки не заданы — бот подсказывает, что нужно заполнить переменные.
+- **Шаг 11** — инструкции: экран «📖 Инструкции» теперь берёт ссылки из `.env` (`INSTRUCTION_ANDROID_URL`, `INSTRUCTION_IOS_URL`, `INSTRUCTION_MACOS_URL`) и показывает кнопки по платформам; если ссылки не заданы — бот подсказывает, что нужно заполнить переменные.
 - **Шаг 12** — админ-уведомления: `ADMIN_LOG_CHAT_ID` / опционально `ADMIN_LOG_TOPIC_ID` (тема форума), сервис `shared/services/admin_notify.py` + расширенный `send_telegram_message` (`message_thread_id`). События: пополнение, покупка тарифа с баланса, триал, реферальный бонус, промокод, покупка слота устройства. Дублирование в `notifications_log` (`type=admin:*`, статусы `sent` / `failed` / `skipped_no_admin_chat`).
+
+## Rollout гибридного биллинга (Phase 1)
+
+Пошаговый прод-руководство: `docs/phase1-rollout.md`.
+
+В runbook включены:
+- порядок включения фич-флагов;
+- smoke-checklist;
+- наблюдаемость и rollback-процедура.
+
+Перед включением в прод можно выполнить preflight:
+
+```bash
+python -m scripts.release_check_phase1
+# или через обёртку:
+./start.sh --phase1-check
+```
 
 ## Переменные Remnawave
 

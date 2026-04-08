@@ -172,7 +172,6 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
         and not (
             settings.instruction_android_url
             or settings.instruction_ios_url
-            or settings.instruction_windows_url
             or settings.instruction_macos_url
         )
     ):

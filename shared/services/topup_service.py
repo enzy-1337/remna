@@ -19,6 +19,9 @@ from shared.payments.registry import get_payment_provider
 from shared.database import get_session_factory
 from shared.services.smart_cart import clear_cart, get_cart
 from shared.services.telegram_notify import send_telegram_message
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.models.subscription import Subscription
+from shared.services.referral_service import grant_referrer_reward_from_topup
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,8 @@ async def create_topup_payment(
     """
     Создаёт транзакцию pending и счёт у провайдера. Возвращает (txn, pay_url).
     """
+    if amount_rub < settings.billing_min_topup_rub:
+        raise ValueError(f"Минимальная сумма пополнения: {settings.billing_min_topup_rub} ₽")
     prov = get_payment_provider(provider_name, settings)
     txn = Transaction(
         user_id=user.id,
@@ -215,6 +220,72 @@ async def apply_topup_from_webhook(
     txn.meta = meta
 
     tg_id = int(meta.get("telegram_id") or 0)
+
+    # Приветственный бонус на первом пополнении пользователя без активной подписки:
+    # отмечаем в транзакциях и пробуем дать +5 ГБ в Remnawave, если аккаунт уже существует.
+    first_topup = (
+        await session.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user.id,
+                Transaction.type == "topup",
+                Transaction.status == "completed",
+                Transaction.id != txn.id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is None
+    has_active_sub = (
+        await session.execute(
+            select(Subscription.id)
+            .where(
+                Subscription.user_id == user.id,
+                Subscription.status.in_(("active", "trial")),
+                Subscription.expires_at > datetime.now(timezone.utc),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    if first_topup and not has_active_sub:
+        bonus_payment_id = f"welcome_gb_bonus:{user.id}"
+        already_bonus = (
+            await session.execute(
+                select(Transaction.id)
+                .where(Transaction.user_id == user.id, Transaction.payment_id == bonus_payment_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if already_bonus is None:
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="welcome_gb_bonus",
+                    amount=Decimal("0"),
+                    currency="RUB",
+                    payment_provider="billing_v2",
+                    payment_id=bonus_payment_id,
+                    status="completed",
+                    description="Стартовый бонус 5 ГБ после первого пополнения",
+                    meta={"bonus_gb": 5},
+                )
+            )
+            if user.remnawave_uuid is not None:
+                rw = RemnaWaveClient(settings)
+                try:
+                    uinfo = await rw.get_user(str(user.remnawave_uuid))
+                    current = int(uinfo.get("trafficLimitBytes") or 0)
+                    new_limit = current + 5 * (1024**3)
+                    await rw.update_user(str(user.remnawave_uuid), traffic_limit_bytes=new_limit)
+                except RemnaWaveError:
+                    logger.warning("welcome 5GB bonus: failed to update rw user user_id=%s", user.id)
+
+    await grant_referrer_reward_from_topup(
+        session,
+        referred_user=user,
+        topup_amount_rub=credited,
+        settings=settings,
+    )
+
     await session.flush()
 
     credited_total = credited + promo_bonus_total

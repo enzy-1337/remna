@@ -75,8 +75,12 @@ def _promo_reward_caption(promo: PromoCode) -> str:
     v = promo.value
     if promo.type in ("balance_rub", "bonus_rub"):
         return f"+{v} ₽"
-    if promo.type == "subscription_days":
-        return f"+{v} дн. (если есть подписка)"
+    if promo.type == "discount_percent":
+        return f"-{v}% на покупку тарифа"
+    if promo.type == "extra_gb":
+        return f"+{v} ГБ"
+    if promo.type == "extra_devices":
+        return f"+{v} устройств"
     if promo.type == "topup_bonus_percent":
         return f"+{v}% к первому пополнению"
     return f"+{v}"
@@ -111,14 +115,6 @@ def _promo_details_lines(promo: PromoCode, created_by: User | None) -> list[str]
     else:
         base.append(plain("Создал админ: —"))
 
-    if promo.type == "subscription_days":
-        fb = promo.fallback_value_rub
-        base.append(
-            plain("Фолбэк (деньги при отсутствии подписки): ")
-            + bold(str(fb or Decimal("0")))
-            + plain(" ₽")
-        )
-
     return base
 
 
@@ -127,8 +123,12 @@ def _list_button_label(promo: PromoCode) -> str:
     exp = _format_expires(promo)
     limit = "∞" if promo.max_uses is None else str(promo.max_uses)
     v = promo.value
-    if promo.type == "subscription_days":
-        r = f"{v}дн"
+    if promo.type == "discount_percent":
+        r = f"{v}% скидка"
+    elif promo.type == "extra_gb":
+        r = f"{v}ГБ"
+    elif promo.type == "extra_devices":
+        r = f"{v}dev"
     elif promo.type == "topup_bonus_percent":
         r = f"{v}%"
     else:
@@ -151,8 +151,20 @@ def _type_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="📆 Дни подписки + фолбэк деньгами",
-            callback_data=f"{prefix}:type:subscription_days",
+            text="🏷 Скидка на покупку тарифа (%)",
+            callback_data=f"{prefix}:type:discount_percent",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="📊 Дополнительные ГБ",
+            callback_data=f"{prefix}:type:extra_gb",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="🖥 Дополнительные устройства",
+            callback_data=f"{prefix}:type:extra_devices",
         )
     )
     b.row(
@@ -390,7 +402,7 @@ async def cb_promos_create_type(
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]
-    if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
+    if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
         await cq.answer("Неверный тип.", show_alert=True)
         return
     await state.update_data(create_type=promo_type)
@@ -400,18 +412,32 @@ async def cb_promos_create_type(
         # Удаляем сообщение "Выберите тип промокода", чтобы шаги были чистыми.
         await delete_message_safe(cq.message)
         cancel_kb = _cancel_keyboard("admin:promos")
-        if promo_type == "subscription_days":
-            await _send_and_track(
-                state,
-                cq.message,
-                "Введите количество дней (целое число, например 5).",
-                reply_markup=cancel_kb,
-            )
-        elif promo_type == "balance_rub":
+        if promo_type == "balance_rub":
             await _send_and_track(
                 state,
                 cq.message,
                 "Введите сумму в ₽ (например 100 или 10.5).",
+                reply_markup=cancel_kb,
+            )
+        elif promo_type == "discount_percent":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите скидку в % на следующую покупку тарифа (например 10).",
+                reply_markup=cancel_kb,
+            )
+        elif promo_type == "extra_gb":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите дополнительные ГБ (целое число, например 5).",
+                reply_markup=cancel_kb,
+            )
+        elif promo_type == "extra_devices":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите количество дополнительных устройств (целое число, например 1).",
                 reply_markup=cancel_kb,
             )
         else:
@@ -440,21 +466,21 @@ async def msg_promos_create_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type == "subscription_days":
+    if promo_type in {"extra_gb", "extra_devices"}:
         if not raw.isdigit():
-            await _send_and_track(state, message, "Нужно целое число дней.")
+            await _send_and_track(state, message, "Нужно целое число.")
             return
-        days = int(raw)
-        if days <= 0:
-            await _send_and_track(state, message, "Дни должны быть > 0.")
+        val_int = int(raw)
+        if val_int <= 0:
+            await _send_and_track(state, message, "Значение должно быть > 0.")
             return
-        await state.update_data(create_value=Decimal(days))
-        await state.set_state(AdminPromoStates.create_waiting_fallback)
+        await state.update_data(create_value=Decimal(val_int))
+        await state.set_state(AdminPromoStates.create_waiting_expires_at)
         cancel_kb = _cancel_keyboard("admin:promos")
         await _send_and_track(
             state,
             message,
-            "Если подписки не будет: введите фолбэк-сумму на баланс в ₽ (например 100).",
+            "Введите срок действия до (YYYY-MM-DD или DD.MM.YYYY), или '-' чтобы без срока.",
             reply_markup=cancel_kb,
         )
         return
@@ -468,44 +494,10 @@ async def msg_promos_create_value(
         await _send_and_track(state, message, "Значение должно быть > 0.")
         return
 
+    if promo_type == "discount_percent" and (val <= 0 or val >= 100):
+        await _send_and_track(state, message, "Скидка должна быть в диапазоне (0, 100).")
+        return
     await state.update_data(create_value=val)
-    await state.set_state(AdminPromoStates.create_waiting_expires_at)
-    cancel_kb = _cancel_keyboard("admin:promos")
-    await _send_and_track(
-        state,
-        message,
-        "Введите срок действия до (YYYY-MM-DD или DD.MM.YYYY), или '-' чтобы без срока.",
-        reply_markup=cancel_kb,
-    )
-
-
-@router.message(AdminPromoStates.create_waiting_fallback, F.text)
-async def msg_promos_create_fallback(
-    message: Message,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-    data = await state.get_data()
-    promo_type = data.get("create_type")
-    if promo_type != "subscription_days":
-        await state.clear()
-        return
-
-    raw = (message.text or "").strip().replace(",", ".")
-    prompt_mid = data.get("prompt_mid")
-    await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
-    await delete_message_safe(message)
-
-    try:
-        fb = Decimal(raw)
-    except InvalidOperation:
-        await _send_and_track(state, message, "Введите число (например 100).")
-        return
-    if fb <= 0:
-        await _send_and_track(state, message, "Фолбэк должен быть > 0.")
-        return
-
-    await state.update_data(create_fallback=fb)
     await state.set_state(AdminPromoStates.create_waiting_expires_at)
     cancel_kb = _cancel_keyboard("admin:promos")
     await _send_and_track(
@@ -605,7 +597,7 @@ async def cb_promos_create_active(
         code=promo_code,
         type=promo_type,
         value=promo_value,
-        fallback_value_rub=(promo_fallback if promo_type == "subscription_days" else None),
+        fallback_value_rub=None,
         expires_at=promo_expires_at,
         max_uses=promo_max_uses,
         is_active=is_active,
@@ -866,13 +858,25 @@ async def cb_promos_edit_field(
     cancel_kb = _cancel_keyboard("admin:promos")
     if field == "value":
         await state.set_state(AdminPromoStates.edit_waiting_value)
-        if promo.type == "subscription_days":
-            await _send_and_track(state, cq.message, "Введите дни подписки (целое число).", reply_markup=cancel_kb)
-        elif promo.type == "balance_rub":
+        if promo.type == "balance_rub":
             await _send_and_track(
                 state,
                 cq.message,
                 "Введите сумму в ₽ (например 100 или 10.5).",
+                reply_markup=cancel_kb,
+            )
+        elif promo.type == "discount_percent":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите скидку в % на следующую покупку тарифа (например 10).",
+                reply_markup=cancel_kb,
+            )
+        elif promo.type in {"extra_gb", "extra_devices"}:
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите целое число (например 5).",
                 reply_markup=cancel_kb,
             )
         else:
@@ -929,7 +933,7 @@ async def cb_promos_edit_type(
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]
-    if promo_type not in {"subscription_days", "balance_rub", "topup_bonus_percent"}:
+    if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
         await cq.answer("Неверный тип.", show_alert=True)
         return
     data = await state.get_data()
@@ -950,15 +954,22 @@ async def cb_promos_edit_type(
     if cq.message:
         await delete_message_safe(cq.message)
         cancel_kb = _cancel_keyboard("admin:promos")
-        if promo_type == "subscription_days":
-            await _send_and_track(state, cq.message, "Введите дни подписки (целое число).", reply_markup=cancel_kb)
-        elif promo_type == "balance_rub":
+        if promo_type == "balance_rub":
             await _send_and_track(
                 state,
                 cq.message,
                 "Введите сумму в ₽ (например 100 или 10.5).",
                 reply_markup=cancel_kb,
             )
+        elif promo_type == "discount_percent":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите скидку в % на следующую покупку тарифа (например 10).",
+                reply_markup=cancel_kb,
+            )
+        elif promo_type in {"extra_gb", "extra_devices"}:
+            await _send_and_track(state, cq.message, "Введите целое число.", reply_markup=cancel_kb)
         else:
             await _send_and_track(
                 state,
@@ -987,33 +998,28 @@ async def msg_promos_edit_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type == "subscription_days":
+    if promo_type in {"extra_gb", "extra_devices"}:
         if not raw.isdigit():
-            await _send_and_track(state, message, "Нужно целое число дней.")
+            await _send_and_track(state, message, "Нужно целое число.")
             return
-        days_i = int(raw)
-        if days_i <= 0:
-            await _send_and_track(state, message, "Дни должны быть > 0.")
+        val_int = int(raw)
+        if val_int <= 0:
+            await _send_and_track(state, message, "Значение должно быть > 0.")
             return
-        await state.update_data(edit_value=Decimal(days_i))
-        await state.set_state(AdminPromoStates.edit_waiting_fallback)
-        cancel_kb = _cancel_keyboard("admin:promos")
-        await _send_and_track(
-            state,
-            message,
-            "Фолбэк (деньги при отсутствии подписки): введите сумму ₽.",
-            reply_markup=cancel_kb,
-        )
-        return
+        val = Decimal(val_int)
+    else:
+        try:
+            val = Decimal(raw)
+        except InvalidOperation:
+            await _send_and_track(state, message, "Введите число (например 100 или 10.5).")
+            return
+        if val <= 0:
+            await _send_and_track(state, message, "Значение должно быть > 0.")
+            return
+        if promo_type == "discount_percent" and (val <= 0 or val >= 100):
+            await _send_and_track(state, message, "Скидка должна быть в диапазоне (0, 100).")
+            return
 
-    try:
-        val = Decimal(raw)
-    except InvalidOperation:
-        await _send_and_track(state, message, "Введите число (например 100 или 10.5).")
-        return
-    if val <= 0:
-        await _send_and_track(state, message, "Значение должно быть > 0.")
-        return
 
     promo = await session.get(PromoCode, promo_id)
     if promo is None:
@@ -1024,62 +1030,7 @@ async def msg_promos_edit_value(
     await state.update_data(edit_value=val)
     promo.type = promo_type if edit_mode == "type" else promo.type
     promo.value = val
-    if promo.type != "subscription_days":
-        promo.fallback_value_rub = None
-    try:
-        await session.flush()
-    except Exception as e:
-        msg = strip_for_popup_alert(str(e))
-        await _send_and_track(state, message, msg[:200])
-        return
-    await state.clear()
-    await message.answer(
-        esc("Награда обновлена."),
-        reply_markup=_promo_view_back_keyboard(promo_id),
-    )
-
-
-@router.message(AdminPromoStates.edit_waiting_fallback, F.text)
-async def msg_promos_edit_fallback(
-    message: Message,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-    data = await state.get_data()
-    promo_type = data.get("edit_type")
-    promo_id = data.get("edit_promo_id")
-    if promo_type != "subscription_days":
-        await state.clear()
-        return
-    if not isinstance(promo_id, int):
-        await state.clear()
-        return
-    raw = (message.text or "").strip().replace(",", ".")
-    prompt_mid = data.get("prompt_mid")
-    await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
-    await delete_message_safe(message)
-
-    try:
-        fb = Decimal(raw)
-    except InvalidOperation:
-        await _send_and_track(state, message, "Введите число (например 100).")
-        return
-    if fb <= 0:
-        await _send_and_track(state, message, "Фолбэк должен быть > 0.")
-        return
-    promo = await session.get(PromoCode, promo_id)
-    if promo is None:
-        await state.clear()
-        await _send_and_track(state, message, "Промокод не найден.")
-        return
-    edit_value = data.get("edit_value")
-    if not isinstance(edit_value, Decimal):
-        await state.clear()
-        await _send_and_track(state, message, "Ошибка данных. Повторите редактирование.")
-        return
-    promo.type = "subscription_days"
-    promo.value = edit_value
-    promo.fallback_value_rub = fb
+    promo.fallback_value_rub = None
     try:
         await session.flush()
     except Exception as e:

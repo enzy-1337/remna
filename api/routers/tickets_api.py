@@ -21,6 +21,7 @@ from shared.tickets_db_compat import ticket_messages_has_photo_file_id_column
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.billing_v2.detail_service import get_month_summaries, get_today_summary, summarize_month_total
 from tickets.config import config as tickets_config
 
 router = APIRouter(tags=["tickets-api"])
@@ -72,6 +73,38 @@ class TicketStatusIn(BaseModel):
 class TicketAssignIn(BaseModel):
     assigned_admin_id: int | None = None
     telegram_assigned_admin_id: int | None = None
+
+
+@router.get("/billing/{user_id}/detail/today")
+async def api_billing_detail_today(request: Request, user_id: int) -> dict:
+    _require_api_login(request)
+    async with await _session() as session:
+        row = await get_today_summary(session, user_id=user_id)
+    if row is None:
+        return {"day": None, "items": None, "total_rub": "0.00"}
+    return {
+        "day": row.day.isoformat(),
+        "items": {
+            "gb_units": row.gb_units,
+            "device_units": row.device_units,
+            "mobile_gb_units": row.mobile_gb_units,
+            "gb_amount_rub": str(row.gb_amount_rub),
+            "device_amount_rub": str(row.device_amount_rub),
+            "mobile_amount_rub": str(row.mobile_amount_rub),
+        },
+        "total_rub": str(row.total_amount_rub),
+    }
+
+
+@router.get("/billing/{user_id}/detail/month")
+async def api_billing_detail_month(request: Request, user_id: int) -> dict:
+    _require_api_login(request)
+    async with await _session() as session:
+        rows = await get_month_summaries(session, user_id=user_id)
+    return {
+        "days": [{"day": r.day.isoformat(), "total_rub": str(r.total_amount_rub)} for r in rows],
+        "total_rub": str(summarize_month_total(rows)),
+    }
 
 
 @router.get("/tickets")

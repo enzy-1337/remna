@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -216,6 +220,7 @@ async def cb_dev_add(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    state: FSMContext,
     is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -224,7 +229,73 @@ async def cb_dev_add(
     parts = cq.data.split(":")
     ctx = parts[2] if len(parts) > 2 else CTX_MAIN
     settings = get_settings()
-    ok, msg = await add_paid_device_slot(session, user=db_user, settings=settings)
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        dev_add_confirm_token=token,
+        dev_add_confirm_ctx=ctx,
+        dev_add_confirm_expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"dev:addconfirm:{ctx}:{token}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"dev:list:{ctx}"))
+    cap = join_lines(
+        "🧾 " + bold("Подтверждение"),
+        "",
+        plain("Добавить 1 слот устройства за ")
+        + bold(str(settings.extra_device_price_rub))
+        + plain(" ₽?"),
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("dev:addconfirm:"))
+async def cb_dev_add_confirm(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    state: FSMContext,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    parts = cq.data.split(":")
+    if len(parts) < 4:
+        await cq.answer("Ошибка подтверждения", show_alert=True)
+        return
+    ctx = parts[2]
+    token = parts[3]
+    data = await state.get_data()
+    valid_token = data.get("dev_add_confirm_token")
+    valid_ctx = data.get("dev_add_confirm_ctx")
+    exp_raw = data.get("dev_add_confirm_expires_at")
+    if not isinstance(valid_token, str) or token != valid_token or valid_ctx != ctx:
+        await cq.answer("Подтверждение уже использовано или устарело.", show_alert=True)
+        return
+    if isinstance(exp_raw, str):
+        try:
+            if datetime.now(timezone.utc) > datetime.fromisoformat(exp_raw):
+                await cq.answer("Время подтверждения истекло.", show_alert=True)
+                return
+        except ValueError:
+            pass
+    await state.update_data(
+        dev_add_confirm_token=None,
+        dev_add_confirm_ctx=None,
+        dev_add_confirm_expires_at=None,
+    )
+    settings = get_settings()
+    ok, msg = await add_paid_device_slot(
+        session,
+        user=db_user,
+        settings=settings,
+        idempotency_key=f"devadd:{db_user.id}:{token}",
+    )
     if ok:
         await notify_admin(
             settings,

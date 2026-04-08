@@ -602,9 +602,9 @@ class RemnaWaveClient:
                 {
                     "hwid": "stub_hwid_1",
                     "userUuid": user_uuid,
-                    "platform": "Windows",
-                    "osVersion": "25H2",
-                    "deviceModel": "Windows 11 Pro",
+                    "platform": "Android",
+                    "osVersion": "14",
+                    "deviceModel": "Pixel 8",
                     "userAgent": "koala-clash/1.1.0",
                     "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                     "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),

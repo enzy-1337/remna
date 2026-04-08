@@ -24,6 +24,8 @@ from shared.models.user import User
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username_from_db_user
 from shared.services.smart_cart import set_cart_plan
+from shared.services.billing_v2.device_service import add_device_history_event
+from shared.services.promo_service import get_pending_purchase_discount_percent
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +62,38 @@ def plan_tariff_button_label(plan: Plan) -> str:
     price = plan.price_rub
     price_s = str(int(price)) if price == price.to_integral_value() else str(price)
     disc = plan.discount_percent
+    suffix = ""
+    if plan.is_package_monthly:
+        dev = f"{plan.device_limit}" if plan.device_limit is not None else "∞"
+        gb = f"{plan.monthly_gb_limit}" if plan.monthly_gb_limit is not None else "∞"
+        suffix = f" · {dev} устр / {gb} ГБ"
     if disc and disc > 0:
         d = int(disc) if disc == disc.to_integral_value() else float(disc)
-        return f"{name} — {price_s} ₽ (-{d:g}%)"
-    return f"{name} — {price_s} ₽"
+        return f"{name} — {price_s} ₽ (-{d:g}%){suffix}"
+    return f"{name} — {price_s} ₽{suffix}"
+
+
+def plan_tariff_button_label_with_discount(plan: Plan, discount_percent: Decimal) -> str:
+    base = plan_tariff_button_label(plan)
+    if discount_percent <= 0:
+        return base
+    original = plan.price_rub
+    discount_amount = (original * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
+    final = (original - discount_amount).quantize(Decimal("0.01"))
+    if final < 0:
+        final = Decimal("0")
+    return f"{base} → {final} ₽"
+
+
+def calculate_discounted_plan_price(plan: Plan, discount_percent: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    original = plan.price_rub
+    if discount_percent <= 0:
+        return original, Decimal("0"), original
+    discount_amount = (original * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
+    final = (original - discount_amount).quantize(Decimal("0.01"))
+    if final < 0:
+        final = Decimal("0")
+    return original, discount_amount, final
 
 
 BASE_SUBSCRIPTION_PLAN_NAME = "Базовый"
@@ -172,11 +202,28 @@ async def purchase_plan_with_balance(
     telegram_id: int,
     settings: Settings,
     save_to_cart_if_insufficient: bool = True,
+    idempotency_key: str | None = None,
 ) -> tuple[bool, str, str]:
     """
     Покупка тарифа с баланса.
     Возвращает (ok, message, kind) где kind: success | insufficient | error
     """
+    if idempotency_key:
+        existing_txn = (
+            await session.execute(
+                select(Transaction)
+                .where(
+                    Transaction.user_id == user.id,
+                    Transaction.type == "subscription",
+                    Transaction.payment_id == idempotency_key,
+                    Transaction.status == "completed",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_txn is not None:
+            return True, plain("Покупка уже была подтверждена ранее."), "success"
+
     plan = await session.get(Plan, plan_id)
     if not plan or plan.price_rub <= 0 or not plan.is_active:
         return False, plain("Тариф не найден или недоступен."), "error"
@@ -188,15 +235,21 @@ async def purchase_plan_with_balance(
     if base_plan is None:
         return False, plain("В БД не настроен тариф «Базовый» (seed планов)."), "error"
 
-    price = purchased_plan.price_rub
-    if user.balance < price:
+    original_price = purchased_plan.price_rub
+    price = original_price
+    discount_usage, discount_percent = await get_pending_purchase_discount_percent(session, user_id=user.id)
+    discount_amount = Decimal("0")
+    if discount_percent > 0:
+        discount_amount = (price * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
+        price = (price - discount_amount).quantize(Decimal("0.01"))
+    if user.balance - price < settings.billing_balance_floor_rub:
         if save_to_cart_if_insufficient:
             await set_cart_plan(telegram_id, plan_id=plan.id, amount_rub=price, settings=settings)
-        need = price - user.balance
+        need = (price - user.balance).quantize(Decimal("0.01"))
         return (
             False,
             join_lines(
-                plain("Недостаточно средств: нужно ")
+                plain("Недостаточно доступного лимита: нужно ")
                 + bold(str(price))
                 + plain(" ₽, не хватает ")
                 + bold(str(need))
@@ -268,13 +321,17 @@ async def purchase_plan_with_balance(
             amount=price,
             currency="RUB",
             payment_provider="balance",
-            payment_id=None,
+            payment_id=idempotency_key,
             status="completed",
             description=f"Тариф «{purchased_plan.name}»",
             meta={
                 "plan_id": purchased_plan.id,
                 "purchased_plan_id": purchased_plan.id,
                 "storage_plan_id": base_plan.id,
+                "original_price_rub": str(original_price),
+                "final_price_rub": str(price),
+                "discount_percent": str(discount_percent),
+                "discount_amount_rub": str(discount_amount),
             },
         )
     )
@@ -308,6 +365,8 @@ async def purchase_plan_with_balance(
             )
 
     await ensure_placeholder_devices(session, sub)
+    if discount_usage is not None:
+        discount_usage.topup_bonus_applied_at = datetime.now(timezone.utc)
     await session.flush()
 
     sub_url = ""
@@ -326,6 +385,18 @@ async def purchase_plan_with_balance(
         plain("Действует до: ")
         + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
     )
+    if discount_percent > 0 and discount_amount > 0:
+        msg = join_lines(
+            msg,
+            plain("Промокод скидки: ")
+            + bold(str(discount_percent))
+            + plain("% (−")
+            + bold(str(discount_amount))
+            + plain(" ₽)."),
+            plain("Цена без скидки: ")
+            + bold(str(original_price))
+            + plain(" ₽."),
+        )
     if sub_url:
         msg += "\n\n" + link("Ссылка подписки", sub_url)
 
@@ -370,7 +441,24 @@ async def add_paid_device_slot(
     *,
     user: User,
     settings: Settings,
+    idempotency_key: str | None = None,
 ) -> tuple[bool, str]:
+    if idempotency_key:
+        existing_txn = (
+            await session.execute(
+                select(Transaction)
+                .where(
+                    Transaction.user_id == user.id,
+                    Transaction.type == "manual_add",
+                    Transaction.payment_id == idempotency_key,
+                    Transaction.status == "completed",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_txn is not None:
+            return True, plain("Слот уже был добавлен ранее по этому подтверждению.")
+
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Сначала оформите подписку.")
@@ -378,7 +466,7 @@ async def add_paid_device_slot(
         return False, plain("Уже максимум слотов: ") + bold(str(MAX_DEVICES)) + plain(".")
 
     price = settings.extra_device_price_rub
-    if user.balance < price:
+    if user.balance - price < settings.billing_balance_floor_rub:
         return (
             False,
             plain("Нужно ")
@@ -417,7 +505,7 @@ async def add_paid_device_slot(
             amount=price,
             currency="RUB",
             payment_provider="balance",
-            payment_id=None,
+            payment_id=idempotency_key,
             status="completed",
             description="Дополнительное устройство",
             meta={"subscription_id": sub.id},
@@ -465,6 +553,16 @@ async def unlink_hwid_device_keep_slots(
     )
     for row in r.scalars().all():
         await session.delete(row)
+    await add_device_history_event(
+        session,
+        user_id=user.id,
+        subscription_id=sub.id,
+        device_hwid=hwid,
+        event_type="device.detached",
+        event_ts=datetime.now(timezone.utc),
+        is_active=False,
+        meta={"source": "unlink_hwid_device_keep_slots"},
+    )
     await session.flush()
     return True, join_lines(
         plain("Устройство отвязано от панели."),
@@ -521,6 +619,16 @@ async def remove_hwid_device_from_panel(
     )
     for row in r.scalars().all():
         await session.delete(row)
+    await add_device_history_event(
+        session,
+        user_id=user.id,
+        subscription_id=sub.id,
+        device_hwid=hwid,
+        event_type="device.detached",
+        event_ts=datetime.now(timezone.utc),
+        is_active=False,
+        meta={"source": "remove_hwid_device_from_panel"},
+    )
     await session.flush()
     return True, join_lines(
         plain("Устройство отвязано."),

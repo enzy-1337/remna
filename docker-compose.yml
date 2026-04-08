@@ -33,12 +33,18 @@ services:
 
   bot:
     build: .
+    entrypoint: ["/app/scripts/bot-entrypoint.sh"]
     command: ["python", "-m", "bot.main"]
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
       REDIS_URL: redis://redis:6379/0
+      BOT_PROXYCHAINS_ENABLED: ${BOT_PROXYCHAINS_ENABLED:-false}
+      PROXYCHAINS_SOCKS5_HOST: ${PROXYCHAINS_SOCKS5_HOST:-host.docker.internal}
+      PROXYCHAINS_SOCKS5_PORT: ${PROXYCHAINS_SOCKS5_PORT:-1080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1

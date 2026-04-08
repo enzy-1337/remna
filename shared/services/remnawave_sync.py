@@ -270,6 +270,11 @@ async def sync_once(settings: Settings) -> None:
 
 async def sync_loop(settings: Settings, stop_event: asyncio.Event) -> None:
     interval = max(60, int(settings.remnawave_sync_interval_sec))
+    if not settings.remnawave_sync_run_immediately:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
     while not stop_event.is_set():
         try:
             await sync_once(settings)

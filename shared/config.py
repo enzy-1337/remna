@@ -54,10 +54,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="INSTRUCTION_IOS_URL",
     )
-    instruction_windows_url: str | None = Field(
-        default=None,
-        validation_alias="INSTRUCTION_WINDOWS_URL",
-    )
     instruction_macos_url: str | None = Field(
         default=None,
         validation_alias="INSTRUCTION_MACOS_URL",
@@ -175,6 +171,11 @@ class Settings(BaseSettings):
     )
     remnawave_request_timeout: float = Field(default=10.0, validation_alias="REMNAWAVE_REQUEST_TIMEOUT")
     remnawave_sync_enabled: bool = Field(default=True, validation_alias="REMNAWAVE_SYNC_ENABLED")
+    remnawave_sync_run_immediately: bool = Field(
+        default=False,
+        validation_alias="REMNAWAVE_SYNC_RUN_IMMEDIATELY",
+        description="Если false — первый цикл sync стартует только после интервала, без массовой проверки сразу после boot.",
+    )
     remnawave_sync_interval_sec: int = Field(
         default=1800,
         validation_alias="REMNAWAVE_SYNC_INTERVAL_SEC",
@@ -194,6 +195,52 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="REMNAWAVE_STUB",
         description="Не ходить в API; для локальных тестов",
+    )
+    remnawave_webhooks_enabled: bool = Field(default=False, validation_alias="REMNAWAVE_WEBHOOKS_ENABLED")
+    remnawave_webhook_secret: str = Field(default="", validation_alias="REMNAWAVE_WEBHOOK_SECRET")
+    remnawave_webhook_signature_ttl_sec: int = Field(
+        default=300,
+        ge=30,
+        validation_alias="REMNAWAVE_WEBHOOK_SIGNATURE_TTL_SEC",
+    )
+    remnawave_webhook_background_process: bool = Field(
+        default=True,
+        validation_alias="REMNAWAVE_WEBHOOK_BACKGROUND_PROCESS",
+    )
+    billing_v2_enabled: bool = Field(default=False, validation_alias="BILLING_V2_ENABLED")
+    billing_v2_for_new_users_only: bool = Field(default=True, validation_alias="BILLING_V2_FOR_NEW_USERS_ONLY")
+    billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
+    billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
+    billing_mobile_gb_extra_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_MOBILE_GB_EXTRA_RUB")
+    billing_balance_floor_rub: Decimal = Field(default=Decimal("-50"), validation_alias="BILLING_BALANCE_FLOOR_RUB")
+    billing_min_topup_rub: Decimal = Field(default=Decimal("1"), validation_alias="BILLING_MIN_TOPUP_RUB")
+    billing_legacy_lifetime_cutoff_year: int = Field(
+        default=2099,
+        ge=2030,
+        validation_alias="BILLING_LEGACY_LIFETIME_CUTOFF_YEAR",
+    )
+    billing_transition_base_month_rub: Decimal = Field(
+        default=Decimal("130"),
+        validation_alias="BILLING_TRANSITION_BASE_MONTH_RUB",
+    )
+    billing_transition_fee_percent: Decimal = Field(
+        default=Decimal("10"),
+        validation_alias="BILLING_TRANSITION_FEE_PERCENT",
+    )
+    billing_transition_check_interval_sec: int = Field(
+        default=30,
+        ge=5,
+        validation_alias="BILLING_TRANSITION_CHECK_INTERVAL_SEC",
+    )
+    billing_detail_retention_days: int = Field(default=183, ge=30, validation_alias="BILLING_DETAIL_RETENTION_DAYS")
+    billing_negative_notify_enabled: bool = Field(
+        default=True,
+        validation_alias="BILLING_NEGATIVE_NOTIFY_ENABLED",
+    )
+    billing_negative_notify_interval_sec: int = Field(
+        default=900,
+        ge=120,
+        validation_alias="BILLING_NEGATIVE_NOTIFY_INTERVAL_SEC",
     )
 
     # Триал
@@ -258,6 +305,11 @@ class Settings(BaseSettings):
             "REFERRAL_INVITER_BONUS_DAYS",
         ),
         description="Там же: дней к активной подписке пригласившего на каждые 30 дн. периода (0 = выкл.)",
+    )
+    referral_topup_percent: Decimal = Field(
+        default=Decimal("10"),
+        validation_alias="REFERRAL_TOPUP_PERCENT",
+        description="Реферальное начисление от пополнений приглашённого пользователя, в процентах.",
     )
 
     maintenance_mode: bool = Field(default=False, validation_alias="MAINTENANCE_MODE")

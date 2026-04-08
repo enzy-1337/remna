@@ -20,6 +20,7 @@ from shared.md2 import bold, esc, join_lines, plain
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.user_registration import register_user
+from shared.services.billing_v2.transition_service import maybe_switch_to_hybrid
 
 router = Router(name="start")
 
@@ -52,6 +53,7 @@ async def cmd_start(
 
     payload = extract_start_payload(message)
     user, created, invited_signup_bonus = await register_user(session, message.from_user, payload)
+    await maybe_switch_to_hybrid(session, user=user, now=None, settings=settings)
 
     if await reject_if_blocked(message, user):
         return
@@ -91,7 +93,14 @@ async def cmd_start(
         is_admin=is_bot_admin,
     )
     profile_block = profile_caption(user, tg)
-    body = join_lines(*intro_lines, "", profile_block)
+    no_sub_hint = ""
+    if not has_act:
+        no_sub_hint = join_lines(
+            "",
+            "💡 " + bold("Для старта пополните баланс на 10 ₽."),
+            plain("После первого успешного пополнения начислим стартовый бонус 5 ГБ."),
+        )
+    body = join_lines(*intro_lines, "", profile_block, no_sub_hint)
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
@@ -136,6 +145,7 @@ async def cb_channel_check(
     invited_signup_bonus = None
     if db_user is None:
         db_user, created, invited_signup_bonus = await register_user(session, tg_user, None)
+    await maybe_switch_to_hybrid(session, user=db_user, now=None, settings=settings)
 
     if await reject_if_blocked(cq, db_user):
         return
@@ -174,7 +184,14 @@ async def cb_channel_check(
         is_admin=is_bot_admin,
     )
     cap = profile_caption(db_user, tg_user)
-    caption = join_lines(*intro_lines, "", cap) if intro_lines else cap
+    no_sub_hint = ""
+    if not has_act:
+        no_sub_hint = join_lines(
+            "",
+            "💡 " + bold("Для старта пополните баланс на 10 ₽."),
+            plain("После первого успешного пополнения начислим стартовый бонус 5 ГБ."),
+        )
+    caption = join_lines(*intro_lines, "", cap, no_sub_hint) if intro_lines else join_lines(cap, no_sub_hint)
     await send_profile_screen(
         cq.bot,
         chat_id=cq.message.chat.id,

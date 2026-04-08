@@ -215,7 +215,7 @@ async def cb_topup_custom(
         cq,
         caption=join_lines(
             plain("Введите сумму в рублях (целое число), от ")
-            + bold("50")
+            + bold(str(int(get_settings().billing_min_topup_rub)))
             + plain(" до ")
             + bold("100000")
             + plain(":"),
@@ -285,10 +285,11 @@ async def msg_topup_custom_amount(
             await bot.send_message(chat_id, "Укажите целое число рублей.")
         return
     amt = int(d)
-    if amt < 50 or amt > 100_000:
+    min_topup = int(get_settings().billing_min_topup_rub)
+    if amt < min_topup or amt > 100_000:
         await _cleanup_input()
         if bot:
-            await bot.send_message(chat_id, "Допустимо от 50 до 100000 ₽.")
+            await bot.send_message(chat_id, f"Допустимо от {min_topup} до 100000 ₽.")
         return
 
     await state.clear()

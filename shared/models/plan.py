@@ -26,6 +26,9 @@ class Plan(Base):
         Numeric(5, 2), default=Decimal("0"), server_default="0"
     )
     traffic_limit_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    device_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    monthly_gb_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_package_monthly: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
