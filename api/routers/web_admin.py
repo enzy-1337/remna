@@ -2134,6 +2134,9 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         </div>
       </div>
     </div>
+    <div id="tk-photo-lb" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6 cursor-zoom-out" role="dialog" aria-modal="true" aria-label="Просмотр вложения">
+      <img id="tk-photo-lb-img" src="" alt="" class="max-h-[90vh] max-w-[min(95vw,1280px)] w-auto h-auto object-contain rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" decoding="async"/>
+    </div>
     <script>
     (function(){{
       var ticketId={ticket_id};
@@ -2142,6 +2145,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       var meta=document.getElementById('tk-meta');
       var user=document.getElementById('tk-user');
       var chat=document.getElementById('tk-chat');
+      var lb=document.getElementById('tk-photo-lb');
+      var lbImg=document.getElementById('tk-photo-lb-img');
       var txt=document.getElementById('tk-text');
       var assign=document.getElementById('tk-assign');
       var compose=document.getElementById('tk-compose');
@@ -2249,10 +2254,43 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+'">'
             +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
             +'<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'
-            +(m.photo_file_id?'<div class="mt-2"><img src="/api/tickets/'+ticketId+'/messages/'+m.id+'/photo" alt="" class="max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30" loading="lazy"/></div>':'')
+            +(m.photo_file_id?'<div class="mt-2"><img src="/api/tickets/'+ticketId+'/messages/'+m.id+'/photo" alt="" title="Нажмите, чтобы открыть крупно" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/></div>':'')
             +'</div></div>';
         }}).join('');
         chat.scrollTop=chat.scrollHeight;
+      }}
+      function closePhotoLb() {{
+        if(!lb) return;
+        lb.classList.add('hidden');
+        if(lbImg) lbImg.removeAttribute('src');
+        document.body.classList.remove('overflow-hidden');
+      }}
+      function openPhotoLb(src) {{
+        if(!lb||!lbImg||!src) return;
+        lbImg.src=src;
+        lb.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+      }}
+      if(lb&&lbImg){{
+        lb.addEventListener('click', function(e) {{
+          if(e.target===lbImg) return;
+          closePhotoLb();
+        }});
+        lbImg.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+      }}
+      document.addEventListener('keydown', function(e) {{
+        if(e.key!=='Escape') return;
+        if(lb&&!lb.classList.contains('hidden')) closePhotoLb();
+      }});
+      if(chat){{
+        chat.addEventListener('click', function(e) {{
+          var t=e.target;
+          if(!t||!t.closest) return;
+          var img=t.closest('img.tk-ticket-thumb');
+          if(!img||!chat.contains(img)) return;
+          e.preventDefault();
+          openPhotoLb(img.getAttribute('src')||'');
+        }});
       }}
       async function load() {{
         try {{
