@@ -14,11 +14,17 @@ if [[ "${BOT_PROXYCHAINS_ENABLED:-}" == "true" || "${BOT_PROXYCHAINS_ENABLED:-}"
       exit 1
     fi
   fi
+  # proxy_dns по умолчанию выкл.: иначе DNS идёт через SOCKS и ломается резолв имён Docker (postgres/redis).
+  # Включить только если нужен DNS через прокси: PROXYCHAINS_PROXY_DNS=true
+  PROXY_DNS_BLOCK=""
+  if [[ "${PROXYCHAINS_PROXY_DNS:-}" == "true" || "${PROXYCHAINS_PROXY_DNS:-}" == "1" ]]; then
+    PROXY_DNS_BLOCK="proxy_dns
+remote_dns_subnet 224"
+  fi
   cat >/etc/proxychains4.conf <<EOF
 # Сгенерировано scripts/bot-entrypoint.sh (не править вручную в контейнере)
 strict_chain
-proxy_dns
-remote_dns_subnet 224
+${PROXY_DNS_BLOCK}
 tcp_read_time_out 15000
 tcp_connect_time_out 8000
 # Не проксировать локальные/докер-сети: иначе postgres/redis в compose не достучаться.

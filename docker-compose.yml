@@ -43,6 +43,7 @@ services:
       BOT_PROXYCHAINS_ENABLED: ${BOT_PROXYCHAINS_ENABLED:-false}
       PROXYCHAINS_SOCKS5_HOST: ${PROXYCHAINS_SOCKS5_HOST:-host.docker.internal}
       PROXYCHAINS_SOCKS5_PORT: ${PROXYCHAINS_SOCKS5_PORT:-1080}
+      PROXYCHAINS_PROXY_DNS: ${PROXYCHAINS_PROXY_DNS:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     sysctls:
