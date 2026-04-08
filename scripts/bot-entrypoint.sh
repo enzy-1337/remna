@@ -6,6 +6,14 @@ set -euo pipefail
 if [[ "${BOT_PROXYCHAINS_ENABLED:-}" == "true" || "${BOT_PROXYCHAINS_ENABLED:-}" == "1" ]]; then
   HOST="${PROXYCHAINS_SOCKS5_HOST:-127.0.0.1}"
   PORT="${PROXYCHAINS_SOCKS5_PORT:-1080}"
+  # proxychains4 в [ProxyList] требует числовой IPv4; имён (host.docker.internal) не принимает.
+  if [[ ! "${HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    HOST="$(getent hosts "${HOST}" | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $1; exit }')"
+    if [[ -z "${HOST}" ]]; then
+      echo "bot-entrypoint: не удалось разрешить PROXYCHAINS_SOCKS5_HOST в IPv4 (нужен для proxychains4)" >&2
+      exit 1
+    fi
+  fi
   cat >/etc/proxychains4.conf <<EOF
 # Сгенерировано scripts/bot-entrypoint.sh (не править вручную в контейнере)
 strict_chain
