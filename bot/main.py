@@ -134,7 +134,7 @@ async def main() -> None:
         boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S")
         sent = await notify_admin_plain(
             settings,
-            text=f"🚀 Бот запущен\n{boot_ts} (МСК)",
+            text=f"🚀 Основной бот запущен\n{boot_ts} (МСК)",
             topic=AdminLogTopic.BOOT,
             event_type="bot_startup",
         )
