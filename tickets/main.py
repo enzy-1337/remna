@@ -45,10 +45,10 @@ def main() -> None:
         await scheduler.start()
         try:
             settings = get_settings()
-            boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S")
+            boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
             sent = await notify_admin_plain(
                 settings,
-                text=f"🛟 Бот поддержки запущен\n{boot_ts} (МСК)",
+                text=f"🛟 Бот поддержки запущен\n{boot_ts}",
                 topic=AdminLogTopic.BOOT,
                 event_type="tickets_bot_startup",
             )

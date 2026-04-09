@@ -131,10 +131,10 @@ async def main() -> None:
             negative_notify_task = asyncio.create_task(negative_balance_notify_loop(settings, stop_event))
         legacy_transition_task = asyncio.create_task(legacy_transition_loop(settings, stop_event))
     try:
-        boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S")
+        boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
         sent = await notify_admin_plain(
             settings,
-            text=f"🚀 Основной бот запущен\n{boot_ts} (МСК)",
+            text=f"🚀 Основной бот запущен\n{boot_ts}",
             topic=AdminLogTopic.BOOT,
             event_type="bot_startup",
         )
