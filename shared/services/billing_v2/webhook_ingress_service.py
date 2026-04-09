@@ -43,7 +43,7 @@ def telegram_id_from_payload(payload: dict) -> int | None:
 
 
 def _parse_webhook_unix_ts(ts_header: str) -> int | None:
-    """Секунды Unix; панель может слать миллисекунды (13 цифр)."""
+    """Секунды Unix; панель может слать миллисекунды (13 цифр) или float."""
     raw = (ts_header or "").strip()
     if not raw:
         return None
@@ -51,20 +51,35 @@ def _parse_webhook_unix_ts(ts_header: str) -> int | None:
         ts = int(raw)
     except (TypeError, ValueError):
         try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return int(dt.timestamp())
-        except Exception:
-            return None
+            f = float(raw)
+            if f > 10_000_000_000:
+                f /= 1000.0
+            ts = int(f)
+        except (TypeError, ValueError):
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return int(dt.timestamp())
+            except Exception:
+                return None
     if ts > 10_000_000_000:
         ts //= 1000
     return ts
 
 
+def _normalize_signature_hex_header(signature_header: str) -> str:
+    """Сравнение без учёта регистра hex (панель может слать A-F)."""
+    sig = signature_header.strip()
+    low = sig.lower()
+    if low.startswith("sha256="):
+        return "sha256=" + low[7:]
+    return low
+
+
 def _hmac_sha256_hex_matches(*, secret: bytes, message: bytes, signature_header: str) -> bool:
     digest = hmac.new(secret, message, hashlib.sha256).hexdigest()
-    sig = signature_header.strip()
+    sig = _normalize_signature_hex_header(signature_header)
     if hmac.compare_digest(f"sha256={digest}", sig):
         return True
     return hmac.compare_digest(digest, sig)
@@ -77,37 +92,43 @@ def verify_remnawave_signature(
     signature_header: str,
     settings: Settings,
 ) -> bool:
-    secret = (settings.remnawave_webhook_secret or "").encode("utf-8")
+    secret_raw = (settings.remnawave_webhook_secret or "").strip()
+    secret = secret_raw.encode("utf-8")
     if not secret:
         return False
     sig = (signature_header or "").strip()
     if not sig:
         return False
 
-    has_ts = bool((ts_header or "").strip())
+    raw_ts_header = (ts_header or "").strip()
+    has_ts = bool(raw_ts_header)
     ts_norm = _parse_webhook_unix_ts(ts_header) if has_ts else None
-    if has_ts and ts_norm is None:
-        return False
+    # Непарсящийся timestamp не блокирует HMAC: в docs.rw TS-пример проверяет только подпись.
     now_ts = int(datetime.now(timezone.utc).timestamp())
     if ts_norm is not None and abs(now_ts - ts_norm) > settings.remnawave_webhook_signature_ttl_sec:
         return False
 
-    # 1) Как в docs.rw (Python): HMAC от сырого тела.
+    # 1) Как в Go-примере docs.rw: HMAC от сырого тела.
     if _hmac_sha256_hex_matches(secret=secret, message=body, signature_header=sig):
         return True
-    # 2) Тот же JSON, но без лишних пробелов (если панель подписывает канонический JSON).
+    # 2) Канонический JSON (как при повторной сериализации; ensure_ascii как в JS по умолчанию).
     try:
-        obj = json.loads(body.decode("utf-8"))
+        text = body.decode("utf-8")
+        if text.startswith("\ufeff"):
+            text = text[1:]
+        obj = json.loads(text)
         for sk in (False, True):
-            compact = json.dumps(obj, separators=(",", ":"), sort_keys=sk, ensure_ascii=False).encode("utf-8")
-            if _hmac_sha256_hex_matches(secret=secret, message=compact, signature_header=sig):
-                return True
+            for ascii_flag in (True, False):
+                compact = json.dumps(obj, separators=(",", ":"), sort_keys=sk, ensure_ascii=ascii_flag).encode("utf-8")
+                if _hmac_sha256_hex_matches(secret=secret, message=compact, signature_header=sig):
+                    return True
     except Exception:
         pass
     # 3) Старый вариант: "{unix}." + сырое тело (совместимость).
-    if has_ts and ts_norm is not None:
-        raw_ts = (ts_header or "").strip()
-        for prefix in (f"{raw_ts}.", f"{ts_norm}."):
+    if has_ts:
+        for prefix in (f"{raw_ts_header}.", f"{ts_norm}." if ts_norm is not None else None):
+            if prefix is None:
+                continue
             msg = prefix.encode("utf-8") + body
             if _hmac_sha256_hex_matches(secret=secret, message=msg, signature_header=sig):
                 return True

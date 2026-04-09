@@ -95,6 +95,23 @@ class RemnawaveWebhookSignatureTests(unittest.TestCase):
             )
         )
 
+    def test_signature_valid_raw_body_despite_unparseable_timestamp(self) -> None:
+        """Непарсящийся X-Remnawave-Timestamp не должен блокировать проверку HMAC."""
+        body = b'{"scope":"service","event":"service.panel_started"}'
+        digest = hmac.new(
+            _SettingsStub.remnawave_webhook_secret.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertTrue(
+            verify_remnawave_signature(
+                body=body,
+                ts_header="not-a-unix-nor-iso",
+                signature_header=digest.upper(),
+                settings=_SettingsStub(),  # type: ignore[arg-type]
+            )
+        )
+
     def test_signature_empty_secret(self) -> None:
         self.assertFalse(
             verify_remnawave_signature(
