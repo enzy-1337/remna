@@ -83,6 +83,10 @@ def _fmt_dt_msk(dt: datetime | None) -> str:
 _AVATAR_CACHE: dict[int, tuple[float, bytes, str]] = {}
 _AVATAR_TTL_SEC = 3600.0
 _avatar_fetch_locks: dict[int, asyncio.Lock] = {}
+_DASHBOARD_HTML_CACHE: tuple[float, str] | None = None
+_DASHBOARD_HTML_TTL_SEC = 20.0
+_USERS_HTML_CACHE: dict[tuple[str, int, str, str, str], tuple[float, str]] = {}
+_USERS_HTML_TTL_SEC = 15.0
 
 
 def _avatar_fetch_lock(user_id: int) -> asyncio.Lock:
@@ -278,6 +282,52 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
   </script>
   <style>
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+    .remna-loading-overlay {{
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: color-mix(in oklab, var(--b1) 72%, transparent);
+      backdrop-filter: blur(2px);
+    }}
+    .remna-loading-overlay.is-active {{ display: flex; }}
+    .remna-loading-box {{
+      display: inline-flex;
+      align-items: center;
+      gap: .6rem;
+      border: 1px solid color-mix(in oklab, var(--bc) 14%, transparent);
+      background: color-mix(in oklab, var(--b1) 88%, transparent);
+      border-radius: .9rem;
+      padding: .7rem .9rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,.18);
+    }}
+    .remna-spinner {{
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid color-mix(in oklab, var(--bc) 20%, transparent);
+      border-top-color: var(--p);
+      border-radius: 9999px;
+      animation: remna-spin .8s linear infinite;
+    }}
+    @keyframes remna-spin {{ to {{ transform: rotate(360deg); }} }}
+    .remna-avatar-img {{
+      opacity: 0;
+      transition: opacity .18s ease-out;
+      background: linear-gradient(90deg, color-mix(in oklab, var(--b3) 70%, transparent) 0%, color-mix(in oklab, var(--b2) 80%, transparent) 50%, color-mix(in oklab, var(--b3) 70%, transparent) 100%);
+      background-size: 240% 100%;
+      animation: remna-avatar-shimmer 1.2s linear infinite;
+    }}
+    .remna-avatar-img.is-loaded {{
+      opacity: 1;
+      background: transparent;
+      animation: none;
+    }}
+    @keyframes remna-avatar-shimmer {{
+      0% {{ background-position: 100% 0; }}
+      100% {{ background-position: -100% 0; }}
+    }}
     .remna-admin-avatar-ring .rounded-full {{
       aspect-ratio: 1 / 1;
     }}
@@ -478,7 +528,7 @@ def _layout(
       <div class="mt-auto border-t border-base-content/10 p-1.5">
         <div class="flex w-full min-h-10 items-center gap-1">
           <a href="/admin/profile" class="shrink-0 rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
-            <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover" width="36" height="36" />
+            <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
           <a href="/admin/profile" class="nav-label min-w-0 flex-1 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
           <form method="post" action="/admin/logout" class="nav-label shrink-0 opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
@@ -514,6 +564,12 @@ def _layout(
         nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_nav + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
+    <div id="remna-loading-overlay" class="remna-loading-overlay" aria-hidden="true">
+      <div class="remna-loading-box">
+        <span class="remna-spinner" aria-hidden="true"></span>
+        <span class="text-sm font-medium">Загрузка…</span>
+      </div>
+    </div>
     <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative overflow-hidden">
         <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="hwid" aria-label="Закрыть">✕</button>
@@ -591,6 +647,19 @@ def _layout(
       syncIcon();
     };
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncIcon);else syncIcon();
+    var remnaLoadOverlay=document.getElementById('remna-loading-overlay');
+    window.remnaShowLoading=function(){
+      if(!remnaLoadOverlay)return;
+      remnaLoadOverlay.classList.add('is-active');
+      remnaLoadOverlay.setAttribute('aria-hidden','false');
+    };
+    window.remnaHideLoading=function(){
+      if(!remnaLoadOverlay)return;
+      remnaLoadOverlay.classList.remove('is-active');
+      remnaLoadOverlay.setAttribute('aria-hidden','true');
+    };
+    window.addEventListener('pageshow',window.remnaHideLoading);
+    window.addEventListener('load',window.remnaHideLoading);
   })();
   document.addEventListener('click',function(e){
     var el=e.target&&e.target.closest&&e.target.closest('[data-copy]');
@@ -603,6 +672,15 @@ def _layout(
     });
   });
   document.addEventListener('click',function(e){
+    var nav=e.target&&e.target.closest&&e.target.closest('a[href]');
+    if(nav){
+      var href=(nav.getAttribute('href')||'').trim();
+      if(href && !href.startsWith('#') && !nav.hasAttribute('data-no-loading')){
+        if(!(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) && nav.getAttribute('target')!=='_blank'){
+          window.remnaShowLoading&&window.remnaShowLoading();
+        }
+      }
+    }
     var tr=e.target&&e.target.closest&&e.target.closest('tr.remna-row-link');
     if(!tr)return;
     if(e.target.closest('a,button,input,textarea,select,label,[data-no-row-nav]'))return;
@@ -741,6 +819,18 @@ def _layout(
     document.addEventListener('keydown',function(e){
       if(e.key==='Escape')window.remnaCloseAllModals();
     });
+    document.addEventListener('submit',function(e){
+      var f=e.target;
+      if(!f || !(f instanceof HTMLFormElement))return;
+      if(f.hasAttribute('data-no-loading'))return;
+      window.remnaShowLoading&&window.remnaShowLoading();
+    },true);
+    document.addEventListener('load',function(e){
+      var img=e.target;
+      if(!(img instanceof HTMLImageElement))return;
+      if(!img.matches('.remna-avatar-img,[data-remna-avatar]'))return;
+      img.classList.add('is-loaded');
+    },true);
     function remnaConsumeUrlNotify(){
       try{
         var u=new URL(window.location.href);
@@ -917,7 +1007,7 @@ def _avatar_with_fallback(user: User, *, px: int, ring_tw: str, ring_offset: str
         f"<span class=\"remna-admin-avatar-ring relative inline-flex shrink-0 items-center justify-center rounded-full p-0.5 ring-2 {ring_offset} ring-offset-base-100 {ring_tw}\">"
         f"<span class=\"relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-base-300\" "
         f"style=\"width:{px}px;height:{px}px;min-width:{px}px;min-height:{px}px\">"
-        f"<img src=\"{_esc(url)}\" alt=\"\" width=\"{px}\" height=\"{px}\" class=\"h-full w-full object-cover\" "
+        f"<img src=\"{_esc(url)}\" alt=\"\" width=\"{px}\" height=\"{px}\" class=\"h-full w-full object-cover remna-avatar-img\" loading=\"lazy\" decoding=\"async\" data-remna-avatar=\"1\" "
         "onerror=\"this.classList.add('hidden');this.nextElementSibling.classList.remove('hidden')\" />"
         f"<span class=\"hidden absolute inset-0 flex items-center justify-center text-sm font-bold leading-none\" "
         f'style="{st}">{_esc(ch)}</span></span></span>'
@@ -1541,151 +1631,143 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    global _DASHBOARD_HTML_CACHE
+    now_m = time.monotonic()
+    if _DASHBOARD_HTML_CACHE is not None and now_m - _DASHBOARD_HTML_CACHE[0] < _DASHBOARD_HTML_TTL_SEC:
+        return _layout("Web-admin Dashboard", _DASHBOARD_HTML_CACHE[1], request=request)
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_ago = now - timedelta(days=1)
     async with await _session() as session:
-        total_income = (
+        metrics_row = (
             await session.execute(
-                select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                    Transaction.type == "topup",
-                    Transaction.status == "completed",
-                )
-            )
-        ).scalar_one()
-        month_income = (
-            await session.execute(
-                select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                    Transaction.type == "topup",
-                    Transaction.status == "completed",
-                    Transaction.created_at >= month_start,
-                )
-            )
-        ).scalar_one()
-        day_income = (
-            await session.execute(
-                select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                    Transaction.type == "topup",
-                    Transaction.status == "completed",
-                    Transaction.created_at >= day_start,
-                )
-            )
-        ).scalar_one()
-        users_count = int((await session.execute(select(func.count()).select_from(User))).scalar_one() or 0)
-        promos_count = (await session.execute(select(func.count()).select_from(PromoCode))).scalar_one()
-        risk_1h_users = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(User).where(User.risk_notified_1h_at.is_not(None))
-                )
-            ).scalar_one()
-            or 0
-        )
-        risk_24h_users = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(User).where(
+                select(
+                    select(func.coalesce(func.sum(Transaction.amount), 0))
+                    .where(
+                        Transaction.type == "topup",
+                        Transaction.status == "completed",
+                    )
+                    .scalar_subquery()
+                    .label("total_income"),
+                    select(func.coalesce(func.sum(Transaction.amount), 0))
+                    .where(
+                        Transaction.type == "topup",
+                        Transaction.status == "completed",
+                        Transaction.created_at >= month_start,
+                    )
+                    .scalar_subquery()
+                    .label("month_income"),
+                    select(func.coalesce(func.sum(Transaction.amount), 0))
+                    .where(
+                        Transaction.type == "topup",
+                        Transaction.status == "completed",
+                        Transaction.created_at >= day_start,
+                    )
+                    .scalar_subquery()
+                    .label("day_income"),
+                    select(func.count()).select_from(User).scalar_subquery().label("users_count"),
+                    select(func.count()).select_from(PromoCode).scalar_subquery().label("promos_count"),
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.risk_notified_1h_at.is_not(None))
+                    .scalar_subquery()
+                    .label("risk_1h_users"),
+                    select(func.count())
+                    .select_from(User)
+                    .where(
                         User.risk_notified_24h_at.is_not(None),
                         User.risk_notified_1h_at.is_(None),
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        webhook_ok_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    .scalar_subquery()
+                    .label("risk_24h_users"),
+                    select(func.count())
+                    .select_from(RemnawaveWebhookEvent)
+                    .where(
                         RemnawaveWebhookEvent.received_at >= day_ago,
                         RemnawaveWebhookEvent.signature_valid.is_(True),
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        webhook_dup_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    .scalar_subquery()
+                    .label("webhook_ok_24h"),
+                    select(func.count())
+                    .select_from(RemnawaveWebhookEvent)
+                    .where(
                         RemnawaveWebhookEvent.received_at >= day_ago,
                         RemnawaveWebhookEvent.status == "duplicate",
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        webhook_invalid_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    .scalar_subquery()
+                    .label("webhook_dup_24h"),
+                    select(func.count())
+                    .select_from(RemnawaveWebhookEvent)
+                    .where(
                         RemnawaveWebhookEvent.received_at >= day_ago,
                         RemnawaveWebhookEvent.signature_valid.is_(False),
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        rating_events_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(BillingUsageEvent).where(
-                        BillingUsageEvent.created_at >= day_ago
-                    )
-                )
-            ).scalar_one()
-            or 0
-        )
-        ledger_rejects_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(BillingLedgerEntry).where(
+                    .scalar_subquery()
+                    .label("webhook_invalid_24h"),
+                    select(func.count())
+                    .select_from(BillingUsageEvent)
+                    .where(BillingUsageEvent.created_at >= day_ago)
+                    .scalar_subquery()
+                    .label("rating_events_24h"),
+                    select(func.count())
+                    .select_from(BillingLedgerEntry)
+                    .where(
                         BillingLedgerEntry.created_at >= day_ago,
                         BillingLedgerEntry.entry_type == "reject",
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        transitions_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(Transaction).where(
+                    .scalar_subquery()
+                    .label("ledger_rejects_24h"),
+                    select(func.count())
+                    .select_from(Transaction)
+                    .where(
                         Transaction.created_at >= day_ago,
                         Transaction.type == "billing_transition",
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        active_sub_users = int(
-            (
-                await session.execute(
-                    select(func.count(distinct(Subscription.user_id))).where(
+                    .scalar_subquery()
+                    .label("transitions_24h"),
+                    select(func.count(distinct(Subscription.user_id)))
+                    .where(
                         Subscription.status.in_(("active", "trial")),
                         Subscription.expires_at > now,
                     )
-                )
-            ).scalar_one()
-            or 0
-        )
-        subs_rows_total = int((await session.execute(select(func.count()).select_from(Subscription))).scalar_one() or 0)
-        users_blocked = int(
-            (await session.execute(select(func.count()).select_from(User).where(User.is_blocked.is_(True)))).scalar_one()
-            or 0
-        )
-        topups_24h = int(
-            (
-                await session.execute(
-                    select(func.count()).select_from(Transaction).where(
+                    .scalar_subquery()
+                    .label("active_sub_users"),
+                    select(func.count()).select_from(Subscription).scalar_subquery().label("subs_rows_total"),
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.is_blocked.is_(True))
+                    .scalar_subquery()
+                    .label("users_blocked"),
+                    select(func.count())
+                    .select_from(Transaction)
+                    .where(
                         Transaction.type == "topup",
                         Transaction.status == "completed",
                         Transaction.created_at >= day_ago,
                     )
+                    .scalar_subquery()
+                    .label("topups_24h"),
                 )
-            ).scalar_one()
-            or 0
-        )
+            )
+        ).one()
+        total_income = metrics_row.total_income
+        month_income = metrics_row.month_income
+        day_income = metrics_row.day_income
+        users_count = int(metrics_row.users_count or 0)
+        promos_count = int(metrics_row.promos_count or 0)
+        risk_1h_users = int(metrics_row.risk_1h_users or 0)
+        risk_24h_users = int(metrics_row.risk_24h_users or 0)
+        webhook_ok_24h = int(metrics_row.webhook_ok_24h or 0)
+        webhook_dup_24h = int(metrics_row.webhook_dup_24h or 0)
+        webhook_invalid_24h = int(metrics_row.webhook_invalid_24h or 0)
+        rating_events_24h = int(metrics_row.rating_events_24h or 0)
+        ledger_rejects_24h = int(metrics_row.ledger_rejects_24h or 0)
+        transitions_24h = int(metrics_row.transitions_24h or 0)
+        active_sub_users = int(metrics_row.active_sub_users or 0)
+        subs_rows_total = int(metrics_row.subs_rows_total or 0)
+        users_blocked = int(metrics_row.users_blocked or 0)
+        topups_24h = int(metrics_row.topups_24h or 0)
         tx_last_14 = (
             await session.execute(
                 select(Transaction.created_at, Transaction.amount).where(
@@ -1967,6 +2049,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
       </div>
     </div>
     """
+    _DASHBOARD_HTML_CACHE = (time.monotonic(), body)
     return _layout("Web-admin Dashboard", body, request=request)
 
 
@@ -2022,6 +2105,8 @@ async def admin_tickets(request: Request) -> HTMLResponse:
       var q=document.getElementById('tk-q');
       var sort=document.getElementById('tk-sort');
       var apply=document.getElementById('tk-apply');
+      var debounceTimer=null;
+      var inFlight=null;
       function esc(s){return String(s||'').replace(/[&<>\"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]||ch;});}
       function statusBadge(s){
         if(s==='open')return '<span class=\"badge badge-info badge-sm\">Открыт</span>';
@@ -2032,7 +2117,13 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         var uid=u&&u.id?u.id:'0';
         var nm=((u&&u.first_name)||'user');
         var initials=(nm[0]||'?').toUpperCase();
-        return '<div class=\"avatar placeholder\"><div class=\"bg-base-300 text-base-content rounded-full w-10\"><span>'+esc(initials)+'</span></div></div>';
+        return ''
+          +'<div class=\"avatar placeholder\">'
+          +'<div class=\"bg-base-300 text-base-content rounded-full w-10 h-10 overflow-hidden relative\">'
+          +'<img src=\"/admin/users/'+uid+'/telegram-photo\" alt=\"\" loading=\"lazy\" decoding=\"async\" class=\"w-10 h-10 object-cover remna-avatar-img\" '
+          +'onerror=\"this.remove();this.nextElementSibling.classList.remove(\\'hidden\\')\" />'
+          +'<span class=\"hidden absolute inset-0 flex items-center justify-center\">'+esc(initials)+'</span>'
+          +'</div></div>';
       }
       function card(t){
         var u=t.user||{};
@@ -2055,6 +2146,8 @@ async def admin_tickets(request: Request) -> HTMLResponse:
           +'</div></div>';
       }
       async function loadTickets(){
+        if(inFlight){ try{ inFlight.abort(); }catch(e){} }
+        inFlight=new AbortController();
         var p=new URLSearchParams();
         if(st.value)p.set('status',st.value);
         if(df.value)p.set('date_from',df.value);
@@ -2062,16 +2155,30 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         if((q.value||'').trim())p.set('q',q.value.trim());
         p.set('sort',sort.value||'desc');
         p.set('limit','200');
-        var res=await fetch('/api/tickets?'+p.toString(),{credentials:'include'});
-        if(!res.ok){grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки: '+res.status+'</span></div>';empty.classList.add('hidden');return;}
-        var data=await res.json();
-        var items=(data&&data.items)||[];
-        if(!items.length){grid.innerHTML='';empty.classList.remove('hidden');return;}
-        empty.classList.add('hidden');
-        grid.innerHTML=items.map(card).join('');
+        try{
+          var res=await fetch('/api/tickets?'+p.toString(),{credentials:'include',signal:inFlight.signal});
+          if(!res.ok){grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки: '+res.status+'</span></div>';empty.classList.add('hidden');return;}
+          var data=await res.json();
+          var items=(data&&data.items)||[];
+          if(!items.length){grid.innerHTML='';empty.classList.remove('hidden');return;}
+          empty.classList.add('hidden');
+          grid.innerHTML=items.map(card).join('');
+        }catch(e){
+          if(e && e.name==='AbortError')return;
+          grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки списка тикетов.</span></div>';
+          empty.classList.add('hidden');
+        }
       }
       apply.addEventListener('click',function(){loadTickets();});
       q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();loadTickets();}});
+      q.addEventListener('input',function(){
+        if(debounceTimer)clearTimeout(debounceTimer);
+        debounceTimer=setTimeout(function(){loadTickets();},320);
+      });
+      st.addEventListener('change',loadTickets);
+      df.addEventListener('change',loadTickets);
+      dt.addEventListener('change',loadTickets);
+      sort.addEventListener('change',loadTickets);
       loadTickets();
     })();
     </script>
@@ -2309,6 +2416,15 @@ async def admin_users(
     blk_f = (blocked or "").strip()
     risk_f = (risk or "").strip().lower()
     page = max(1, page)
+    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f)
+    now_m = time.monotonic()
+    cached_users = _USERS_HTML_CACHE.get(cache_key)
+    if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
+        return _layout("Web-admin Users", cached_users[1], request=request)
+    if len(_USERS_HTML_CACHE) > 128:
+        stale_keys = [k for k, v in _USERS_HTML_CACHE.items() if now_m - v[0] >= _USERS_HTML_TTL_SEC]
+        for k in stale_keys:
+            _USERS_HTML_CACHE.pop(k, None)
     per_page = 15
     async with await _session() as session:
         now_for_filter = datetime.now(timezone.utc)
@@ -2437,20 +2553,31 @@ async def admin_users(
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
-        "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
+        "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2'>"
+        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
-        f"<select name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
+        f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
-        f"<select name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
+        f"<select id='us-blocked' name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Риск минуса</span>"
-        f"<select name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
-        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
+        f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
+        "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
+        "<script>(function(){"
+        "var form=document.getElementById('us-form'); if(!form)return;"
+        "var q=document.getElementById('us-q'); var sub=document.getElementById('us-sub'); var blk=document.getElementById('us-blocked'); var risk=document.getElementById('us-risk');"
+        "var timer=null;"
+        "function submitLater(ms){ if(timer)clearTimeout(timer); timer=setTimeout(function(){ form.submit(); }, ms); }"
+        "if(q){ q.addEventListener('input', function(){ submitLater(320); }); q.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); form.submit(); } }); }"
+        "if(sub)sub.addEventListener('change', function(){ form.submit(); });"
+        "if(blk)blk.addEventListener('change', function(){ form.submit(); });"
+        "if(risk)risk.addEventListener('change', function(){ form.submit(); });"
+        "})();</script>"
     )
+    _USERS_HTML_CACHE[cache_key] = (time.monotonic(), body)
     return _layout("Web-admin Users", body, request=request)
 
 
@@ -2518,12 +2645,20 @@ async def admin_user_telegram_photo(request: Request, user_id: int) -> Response:
     now_m = time.monotonic()
     hit = _AVATAR_CACHE.get(user_id)
     if hit is not None and now_m - hit[0] < _AVATAR_TTL_SEC:
-        return Response(content=hit[1], media_type=hit[2])
+        return Response(
+            content=hit[1],
+            media_type=hit[2],
+            headers={"Cache-Control": "private, max-age=300, stale-while-revalidate=120"},
+        )
     async with _avatar_fetch_lock(user_id):
         now_m = time.monotonic()
         hit = _AVATAR_CACHE.get(user_id)
         if hit is not None and now_m - hit[0] < _AVATAR_TTL_SEC:
-            return Response(content=hit[1], media_type=hit[2])
+            return Response(
+                content=hit[1],
+                media_type=hit[2],
+                headers={"Cache-Control": "private, max-age=300, stale-while-revalidate=120"},
+            )
         loaded = await _load_telegram_profile_photo(user)
         if loaded is None and user.username:
             loaded = await _fetch_telegram_public_userpic(user.username)
@@ -2531,7 +2666,11 @@ async def admin_user_telegram_photo(request: Request, user_id: int) -> Response:
             return Response(status_code=404)
         body_b, mime = loaded
         _AVATAR_CACHE[user_id] = (time.monotonic(), body_b, mime)
-        return Response(content=body_b, media_type=mime)
+        return Response(
+            content=body_b,
+            media_type=mime,
+            headers={"Cache-Control": "private, max-age=300, stale-while-revalidate=120"},
+        )
 
 
 @router.get("/users/{user_id}")
@@ -3248,6 +3387,17 @@ async def admin_profile(request: Request) -> HTMLResponse:
     ties = "\n".join(parts)
 
     linked = await _linked_bot_user_for_admin(request)
+    profile_notice = ""
+    ncode = (request.query_params.get("n") or "").strip()
+    err = (request.query_params.get("err") or "").strip()
+    if ncode == "bal_ok":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Баланс успешно пополнен.</span></div>"
+    elif err:
+        profile_notice = (
+            "<div class='alert alert-error shadow-sm'><span>"
+            + _esc(err)
+            + "</span></div>"
+        )
     uinf_p: dict | None = None
     sub_url_p: str | None = None
     if linked is not None and linked.remnawave_uuid is not None:
@@ -3259,6 +3409,33 @@ async def admin_profile(request: Request) -> HTMLResponse:
             pass
 
     vpn_block = ""
+    profile_balance_block = ""
+    if linked is not None:
+        profile_balance_block = f"""
+    <div class="card bg-base-100 border border-primary/25 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-primary mr-2" aria-hidden="true"></i>Баланс в боте</h3>
+        <p class="text-sm opacity-75">Привязанный профиль: <b>#{linked.id}</b> · Telegram ID: <code class="bg-base-300 px-1 rounded text-xs">{linked.telegram_id}</code></p>
+        <p class="text-base">Текущий баланс: <b class="text-primary text-xl">{_esc(linked.balance)} ₽</b></p>
+        <form method="post" action="/admin/profile/add-balance" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Сумма пополнения, ₽</span>
+            <input type="text" name="amount" required class="input input-bordered input-sm h-9 min-h-9 w-40" placeholder="100" />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-plus" aria-hidden="true"></i>Пополнить
+          </button>
+        </form>
+      </div>
+    </div>"""
+    elif kind == "telegram":
+        profile_balance_block = """
+    <div class="card bg-base-100 border border-warning/30 shadow-lg">
+      <div class="card-body gap-2">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-warning mr-2" aria-hidden="true"></i>Баланс в боте</h3>
+        <p class="text-sm opacity-80">Не найден связанный пользователь бота. Нажмите <b>/start</b> в боте и обновите страницу.</p>
+      </div>
+    </div>"""
     if sub_url_p:
         conn_lines = ""
         if uinf_p is not None:
@@ -3309,6 +3486,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
 
     body = f"""
     <div class="mx-auto flex max-w-3xl flex-col gap-6">
+    {profile_notice}
     <div class="relative overflow-hidden rounded-2xl border border-base-content/10 bg-base-100 shadow-xl">
       <div class="pointer-events-none absolute -right-4 -top-8 h-40 w-60 rotate-12 rounded-3xl bg-gradient-to-br from-secondary/50 via-primary/45 to-accent/35 blur-sm" aria-hidden="true"></div>
       <div class="absolute right-4 top-4 z-10">
@@ -3328,10 +3506,59 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
     </div>
+    {profile_balance_block}
     {vpn_block}
     </div>
     """
     return _layout("Мой профиль", body, request=request, back_href="/admin/dashboard")
+
+
+@router.post("/profile/add-balance")
+async def admin_profile_add_balance(request: Request, amount: str = Form(...)) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse(
+            f"/admin/profile?err={quote_plus('Связанный пользователь бота не найден')}",
+            status_code=303,
+        )
+    raw = (amount or "").strip().replace(",", ".")
+    try:
+        amt = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return RedirectResponse(f"/admin/profile?err={quote_plus('Неверная сумма')}", status_code=303)
+    if amt <= 0:
+        return RedirectResponse(f"/admin/profile?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
+    wauth = request.session.get("wauth") or {}
+    admin_tg = int(wauth.get("telegram_id") or 0)
+    async with await _session() as session:
+        u = await session.get(User, linked.id)
+        if u is None:
+            return RedirectResponse(f"/admin/profile?err={quote_plus('Пользователь не найден')}", status_code=303)
+        admin_db_id = None
+        if admin_tg:
+            au = (await session.execute(select(User).where(User.telegram_id == admin_tg))).scalar_one_or_none()
+            if au is not None:
+                admin_db_id = au.id
+        u.balance += amt
+        session.add(
+            Transaction(
+                user_id=u.id,
+                type="admin_balance_add",
+                amount=amt,
+                currency="RUB",
+                payment_provider="admin",
+                payment_id=None,
+                status="completed",
+                description=f"Админ (web profile) добавил баланс: +{amt} ₽",
+                meta={"admin_id": admin_db_id, "source": "web_profile"},
+            )
+        )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse("/admin/profile?n=bal_ok", status_code=303)
 
 
 @router.get("/settings")
@@ -3586,7 +3813,21 @@ async def admin_promos_new_post(
             request=request,
             back_href="/admin/promos",
         )
+    auth = request.session.get("wauth") or {}
+    raw_tg_id = auth.get("id") or auth.get("telegram_id")
+    admin_db_id: int | None = None
+    try:
+        tg_id = int(raw_tg_id) if raw_tg_id is not None else 0
+    except (TypeError, ValueError):
+        tg_id = 0
+
     async with await _session() as session:
+        if tg_id > 0:
+            admin_user = (
+                await session.execute(select(User).where(User.telegram_id == tg_id).limit(1))
+            ).scalar_one_or_none()
+            if admin_user is not None:
+                admin_db_id = int(admin_user.id)
         promo = PromoCode(
             code=c,
             type=promo_type,
@@ -3595,6 +3836,7 @@ async def admin_promos_new_post(
             max_uses=mu,
             expires_at=exp,
             is_active=active,
+            created_by_user_id=admin_db_id,
         )
         session.add(promo)
         await session.commit()

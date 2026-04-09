@@ -26,7 +26,11 @@ from shared.config import get_settings
 from shared.md2 import bold, code, esc, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.services.topup_service import create_topup_payment
+from shared.services.topup_service import (
+    create_topup_payment,
+    manual_check_and_apply_topup,
+    notify_topup_success,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ def _ru_payment_provider(name: str | None) -> str:
     key = name.strip().lower()
     mapping = {
         "cryptobot": plain("CryptoBot"),
-        "platega": plain("Platega (карта / СБП)"),
+        "platega": plain("Platega (СБП)"),
     }
     return mapping.get(key, esc(name))
 
@@ -104,15 +108,20 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
     return lines
 
 
-def _balance_caption(user: User, history: list[str]) -> str:
+def _balance_caption(user: User) -> str:
     bal = f"{user.balance:.2f}"
-    hist_block = "\n".join(history)
     return join_lines(
         "💰 " + bold("Баланс"),
         "",
         plain("На счёте: ") + bold(bal) + plain(" ₽"),
+    )
+
+
+def _history_caption(history: list[str]) -> str:
+    return join_lines(
+        "🧾 " + bold("История пополнений"),
         "",
-        bold("История пополнений и бонусов:") + "\n" + hist_block,
+        "\n".join(history),
     )
 
 
@@ -140,8 +149,7 @@ async def cb_balance_home(
         return
     assert db_user is not None
     settings = get_settings()
-    hist = await _history_lines(session, db_user.id)
-    cap = _balance_caption(db_user, hist)
+    cap = _balance_caption(db_user)
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
@@ -159,21 +167,37 @@ async def cb_topup_back_amt(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    hist = await _history_lines(session, db_user.id)
     await cq.answer()
     settings = get_settings()
     if cq.message and cq.message.photo:
         await cq.message.edit_caption(
-            caption=_balance_caption(db_user, hist),
+            caption=_balance_caption(db_user),
             reply_markup=topup_amounts_keyboard(),
         )
     else:
         await answer_callback_with_photo_screen(
             cq,
-            caption=_balance_caption(db_user, hist),
+            caption=_balance_caption(db_user),
             reply_markup=topup_amounts_keyboard(),
             settings=settings,
         )
+
+
+@router.callback_query(F.data == "topup:history")
+async def cb_topup_history(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    await cq.answer()
+    rows = await _history_lines(session, db_user.id, limit=20)
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
+    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"))
+    await _edit_or_send_balance(cq, caption=_history_caption(rows), reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("topup:amt:"))
@@ -235,18 +259,17 @@ async def cb_topup_cancel_fsm(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    hist = await _history_lines(session, db_user.id)
     await cq.answer()
     settings = get_settings()
     if cq.message and cq.message.photo:
         await cq.message.edit_caption(
-            caption=_balance_caption(db_user, hist),
+            caption=_balance_caption(db_user),
             reply_markup=topup_amounts_keyboard(),
         )
     else:
         await answer_callback_with_photo_screen(
             cq,
-            caption=_balance_caption(db_user, hist),
+            caption=_balance_caption(db_user),
             reply_markup=topup_amounts_keyboard(),
             settings=settings,
         )
@@ -379,6 +402,11 @@ async def cb_topup_provider(
         plain("После оплаты баланс обновится автоматически (обычно в течение минуты)."),
     )
     if cq.message:
+        # Сохраняем message_id экрана счёта, чтобы после оплаты (webhook) можно было удалить его и не спамить.
+        meta = dict(txn.meta or {})
+        meta["invoice_message_id"] = int(cq.message.message_id)
+        txn.meta = meta
+        await session.flush()
         if cq.message.photo:
             await cq.message.edit_caption(
                 caption=text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id)
@@ -418,14 +446,31 @@ async def cb_topup_check(
         await cq.answer("Некорректная операция", show_alert=True)
         return
     await session.refresh(txn)
+    settings = get_settings()
     if txn.status != "completed":
-        await cq.answer(
-            "Платёж ещё не получен. Обычно зачисление за 1–3 мин после оплаты.",
-            show_alert=True,
+        status, credited_total, promo_bonus, should_notify = await manual_check_and_apply_topup(
+            session,
+            txn_id=txn.id,
+            settings=settings,
         )
-        return
+        await session.commit()
+        if status != "completed":
+            await cq.answer(
+                "Платёж ещё не получен. Обычно зачисление за 1–3 мин после оплаты.",
+                show_alert=True,
+            )
+            return
+        if should_notify and credited_total is not None:
+            # Отдельное уведомление пользователю (как при вебхуке).
+            await notify_topup_success(
+                telegram_id=int(db_user.telegram_id),
+                amount_rub=credited_total,
+                promo_bonus_rub=promo_bonus,
+                settings=settings,
+                user_id=int(db_user.id),
+                provider_name=str(txn.payment_provider or ""),
+            )
     await session.refresh(db_user)
-    hist = await _history_lines(session, db_user.id)
-    cap = _balance_caption(db_user, hist)
+    cap = _balance_caption(db_user)
     await cq.answer("Баланс обновлён")
     await _edit_or_send_balance(cq, caption=cap, reply_markup=topup_amounts_keyboard())

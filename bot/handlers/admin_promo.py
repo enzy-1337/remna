@@ -264,13 +264,14 @@ async def _render_promos_list(
         b.row(InlineKeyboardButton(text=_list_button_label(p), callback_data=f"admin:promos:view:{p.id}"))
 
     total_pages = max(1, (int(total) + PAGE_SIZE - 1) // PAGE_SIZE) if total else 1
-    left = InlineKeyboardButton(text="⬅️", callback_data="admin:promos:page:0")
-    right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{total_pages-1}")
-    if page > 0:
-        left = InlineKeyboardButton(text="⬅️", callback_data=f"admin:promos:page:{page-1}")
-    if page + 1 < total_pages:
-        right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{page+1}")
-    b.row(left, right)
+    if int(total) > 9 and total_pages > 1:
+        left = InlineKeyboardButton(text="⬅️", callback_data="admin:promos:page:0")
+        right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{total_pages-1}")
+        if page > 0:
+            left = InlineKeyboardButton(text="⬅️", callback_data=f"admin:promos:page:{page-1}")
+        if page + 1 < total_pages:
+            right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{page+1}")
+        b.row(left, InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin:promos:noop"), right)
 
     b.row(InlineKeyboardButton(text="➕ Создать", callback_data="admin:promos:create"))
     b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
@@ -333,6 +334,11 @@ async def cb_promos_page(
     except Exception:
         page = 0
     await _render_promos_list(cq, session, page=page)
+
+
+@router.callback_query(F.data == "admin:promos:noop")
+async def cb_promos_noop(cq: CallbackQuery) -> None:
+    await cq.answer()
 
 
 @router.callback_query(F.data == "admin:promos:cancel")
@@ -660,7 +666,6 @@ async def _render_promos_view(
         )
     )
     b.row(InlineKeyboardButton(text="⬅️ Список", callback_data=page_back))
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
 
     await answer_callback_with_photo_screen(
         cq,

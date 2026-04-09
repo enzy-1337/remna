@@ -1,8 +1,8 @@
-"""Подписка: детальный экран, тарифы, покупка, авто-продление."""
+"""Подписка: детальный экран, тарифы, меню продления."""
 
 from __future__ import annotations
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -31,7 +31,6 @@ from shared.services.subscription_service import (
     purchase_plan_with_balance,
     set_subscription_auto_renew,
 )
-from datetime import datetime, timedelta, timezone
 
 from shared.services.billing_v2.detail_service import (
     get_month_summaries,
@@ -46,7 +45,6 @@ router = Router(name="subscription")
 def _sub_main_keyboard(
     *,
     has_active: bool,
-    auto_renew: bool,
     subscription_url: str | None = None,
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
@@ -61,9 +59,7 @@ def _sub_main_keyboard(
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
         b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
-        b.row(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="sub:extend"))
-        ar_text = "⏸ Авто-продление: вкл" if auto_renew else "▶️ Авто-продление: выкл"
-        b.row(InlineKeyboardButton(text=ar_text, callback_data="sub:toggle_ar"))
+        b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
@@ -90,7 +86,6 @@ async def _show_subscription_main(
     sub = await get_active_subscription(session, db_user.id)
     kb = _sub_main_keyboard(
         has_active=sub is not None,
-        auto_renew=sub.auto_renew if sub else False,
         subscription_url=sub_url,
     ).as_markup()
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
@@ -197,7 +192,6 @@ async def cb_plans_or_extend(
             )
         )
     back_cb = "menu:sub_main" if has_act else "menu:main"
-    b.row(InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
     await answer_callback_with_photo_screen(
         cq,
@@ -319,7 +313,6 @@ async def cb_buy_plan_confirm(
         sub = await get_active_subscription(session, db_user.id)
         kb = _sub_main_keyboard(
             has_active=sub is not None,
-            auto_renew=sub.auto_renew if sub else False,
             subscription_url=sub_url,
         ).as_markup()
         await answer_callback_with_photo_screen(
@@ -389,12 +382,44 @@ async def cb_sub_instructions(
     )
 
 
-@router.callback_query(F.data == "sub:toggle_ar")
-async def cb_toggle_ar(
+@router.callback_query(F.data == "sub:renewal_menu")
+async def cb_renewal_menu(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
-    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    sub = await get_active_subscription(session, db_user.id)
+    if not sub:
+        await cq.answer("Нет активной подписки.", show_alert=True)
+        return
+    auto_text = "включено ✅" if sub.auto_renew else "выключено ⏸"
+    cap = join_lines(
+        "🔄 " + bold("Продление подписки"),
+        "",
+        plain("Здесь можно продлить подписку или переключить автопродление."),
+        plain("Текущее автопродление: ") + bold(auto_text),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="💳 Продлить подписку", callback_data="sub:extend"))
+    toggle_text = "⏸ Выключить автопродление" if sub.auto_renew else "▶️ Включить автопродление"
+    b.row(InlineKeyboardButton(text=toggle_text, callback_data="sub:renewal_toggle"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "sub:renewal_toggle")
+async def cb_renewal_toggle(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
@@ -408,7 +433,7 @@ async def cb_toggle_ar(
     if not ok:
         await cq.answer(strip_for_popup_alert(tip)[:200], show_alert=True)
         return
-    await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)
+    await cb_renewal_menu(cq, session, db_user)
 
 
 @router.callback_query(F.data == "sub:detail:menu")

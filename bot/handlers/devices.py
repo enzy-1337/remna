@@ -141,13 +141,11 @@ async def _render_devices(
     denom_unlimited = is_bot_admin or (uinf is not None and is_rw_hwid_devices_unlimited(uinf))
     denom = bold("∞") if denom_unlimited else bold(str(sub.devices_count))
     slots_line = plain("📟 Слоты: ") + bold(str(used)) + plain(" / ") + denom
-    bound_line = plain("📱 Привязанные устройства: ") + bold(str(used))
 
     lines = join_lines(
         "🖥 " + bold("Устройства"),
         "",
         slots_line,
-        bound_line,
         "",
         plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
     )

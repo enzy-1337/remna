@@ -300,6 +300,7 @@ async def notify_topup_success(
     settings: Settings,
     user_id: int | None = None,
     provider_name: str | None = None,
+    internal_transaction_id: int | None = None,
 ) -> None:
     tg: int | None = int(telegram_id) if telegram_id else None
     if (tg is None or tg <= 0) and user_id is not None:
@@ -310,8 +311,20 @@ async def notify_topup_success(
                 tg = int(u0.telegram_id)
 
     extra: str | None = None
+    invoice_mid: int | None = None
     factory = get_session_factory()
     async with factory() as session:
+        if internal_transaction_id is not None:
+            try:
+                txn = await session.get(Transaction, int(internal_transaction_id))
+                if txn is not None and txn.meta and txn.user_id == user_id:
+                    im = txn.meta.get("invoice_message_id")
+                    if isinstance(im, int):
+                        invoice_mid = im
+                    elif isinstance(im, str) and im.isdigit():
+                        invoice_mid = int(im)
+            except Exception:
+                logger.debug("notify_topup_success: cannot load invoice message id", exc_info=True)
         if tg is not None and tg > 0:
             extra = await try_apply_smart_cart_after_topup(session, tg, settings)
         else:
@@ -326,7 +339,21 @@ async def notify_topup_success(
     if promo_bonus_rub is not None and promo_bonus_rub > 0:
         text += f"\n\n🎁 Промокод бонус: +{bold(str(promo_bonus_rub))} ₽."
     if tg is not None and tg > 0:
-        await send_telegram_message(tg, text, settings=settings)
+        if invoice_mid is not None:
+            from shared.services.telegram_notify import delete_telegram_message
+
+            _ = await delete_telegram_message(tg, invoice_mid, settings=settings)
+        await send_telegram_message(
+            tg,
+            text,
+            settings=settings,
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "🏠 Главное меню", "callback_data": "menu:main"}],
+                    [{"text": "💰 Баланс", "callback_data": "menu:balance"}],
+                ]
+            },
+        )
 
     if user_id is not None:
         from shared.services.admin_notify import notify_admin

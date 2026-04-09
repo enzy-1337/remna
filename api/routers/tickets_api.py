@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import time
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -26,6 +27,8 @@ from tickets.config import config as tickets_config
 
 router = APIRouter(tags=["tickets-api"])
 _MSK_TZ = ZoneInfo("Europe/Moscow")
+_TICKETS_LIST_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_TICKETS_LIST_CACHE_TTL_SEC = 8.0
 
 
 def _is_api_logged(request: Request) -> bool:
@@ -39,6 +42,10 @@ def _require_api_login(request: Request) -> None:
 
 async def _session() -> AsyncSession:
     return get_session_factory()()
+
+
+def _invalidate_tickets_list_cache() -> None:
+    _TICKETS_LIST_CACHE.clear()
 
 
 def _to_iso(dt: Any) -> str | None:
@@ -118,6 +125,21 @@ async def api_tickets_list(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
     _require_api_login(request)
+    wauth = request.session.get("wauth") or {}
+    admin_key = int(wauth.get("telegram_id") or 0)
+    cache_key = (
+        admin_key,
+        (status or "").strip(),
+        (date_from or "").strip(),
+        (date_to or "").strip(),
+        (q or "").strip(),
+        (sort or "desc").strip().lower(),
+        int(limit),
+    )
+    now_m = time.monotonic()
+    cached = _TICKETS_LIST_CACHE.get(cache_key)
+    if cached is not None and now_m - cached[0] < _TICKETS_LIST_CACHE_TTL_SEC:
+        return cached[1]
     where: list[str] = ["1=1"]
     params: dict[str, Any] = {"lim": int(limit)}
     if status:
@@ -179,7 +201,13 @@ async def api_tickets_list(
                 "preview": r["first_text"] or "",
             }
         )
-    return {"items": items, "count": len(items)}
+    payload = {"items": items, "count": len(items)}
+    _TICKETS_LIST_CACHE[cache_key] = (time.monotonic(), payload)
+    if len(_TICKETS_LIST_CACHE) > 512:
+        stale_keys = [k for k, v in _TICKETS_LIST_CACHE.items() if now_m - v[0] >= _TICKETS_LIST_CACHE_TTL_SEC]
+        for k in stale_keys:
+            _TICKETS_LIST_CACHE.pop(k, None)
+    return payload
 
 
 @router.get("/tickets/{ticket_id}")
@@ -387,6 +415,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
             {"aid": admin_uid, "atg": admin_tg or None, "now": now, "tid": ticket_id},
         )
         await session.commit()
+    _invalidate_tickets_list_cache()
 
     if tickets_config.bot_token:
         bot = Bot(token=tickets_config.bot_token)
@@ -461,6 +490,7 @@ async def api_ticket_note(request: Request, ticket_id: int, body: TicketNoteIn) 
             {"now": now, "tid": ticket_id},
         )
         await session.commit()
+    _invalidate_tickets_list_cache()
     if tickets_config.bot_token:
         try:
             topic_id = int(t["topic_id"] or 0)
@@ -509,6 +539,7 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
             {"st": st, "now": now, "tid": ticket_id},
         )
         await session.commit()
+    _invalidate_tickets_list_cache()
     if tickets_config.bot_token:
         bot = Bot(token=tickets_config.bot_token)
         try:
@@ -572,6 +603,7 @@ async def api_ticket_assign(request: Request, ticket_id: int, body: TicketAssign
             {"aid": body.assigned_admin_id, "atg": body.telegram_assigned_admin_id, "now": now, "tid": ticket_id},
         )
         await session.commit()
+    _invalidate_tickets_list_cache()
     return {"ok": True}
 
 

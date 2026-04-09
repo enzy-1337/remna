@@ -4,12 +4,20 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import html
 from datetime import datetime, timezone
 
-from tickets.keyboards import active_ticket_keyboard, rating_keyboard, start_keyboard, topic_ticket_keyboard
+from tickets.keyboards import (
+    active_ticket_keyboard,
+    rating_keyboard,
+    start_keyboard,
+    ticket_cancel_keyboard,
+    ticket_view_keyboard,
+    topic_ticket_keyboard,
+)
 from tickets.states import TicketStates
 from tickets.services import (
     add_ticket_message,
@@ -27,6 +35,17 @@ from tickets.config import config
 router = Router(name="tickets_user")
 
 
+def _status_emoji(status: str) -> str:
+    st = (status or "").lower()
+    if st == "open":
+        return "🟢"
+    if st == "in_progress":
+        return "🟡"
+    if st == "closed":
+        return "✅"
+    return "⚪"
+
+
 @router.message(CommandStart(deep_link=False))
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
@@ -34,11 +53,27 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
     await state.clear()
     db_user = await ensure_db_user(session, message.from_user)
     active_id = await get_active_ticket_id(session, user_id=db_user.id)
-    kb = start_keyboard(has_active_ticket=active_id is not None, active_ticket_id=active_id)
-    text = (
-        "👋 Добро пожаловать в поддержку Flux Network.\n\n"
-        "Здесь вы можете создать тикет и получить ответ администратора."
+    active_label = None
+    if active_id is not None:
+        brief = await get_ticket_brief(session, ticket_id=active_id)
+        st = str((brief or {}).get("status") or "open")
+        active_label = f"{_status_emoji(st)} Тикет #{active_id}"
+    kb = start_keyboard(
+        has_active_ticket=active_id is not None,
+        active_ticket_id=active_id,
+        active_ticket_label=active_label,
     )
+    if active_id is not None:
+        text = (
+            "📮 Активные тикеты:\n\n"
+            f"• {active_label or f'Тикет #{active_id}'}\n\n"
+            "Нажмите тикет, чтобы посмотреть статус или закрыть."
+        )
+    else:
+        text = (
+            "👋 Добро пожаловать в поддержку.\n\n"
+            "Здесь вы можете создать тикет и получить ответ администратора."
+        )
     await message.answer(text, reply_markup=kb)
 
 
@@ -55,11 +90,27 @@ async def cb_home(cq: CallbackQuery, session: AsyncSession, state: FSMContext) -
     await state.clear()
     db_user = await ensure_db_user(session, cq.from_user)
     active_id = await get_active_ticket_id(session, user_id=db_user.id)
-    kb = start_keyboard(has_active_ticket=active_id is not None, active_ticket_id=active_id)
-    text = (
-        "👋 Добро пожаловать в поддержку Flux Network.\n\n"
-        "Здесь вы можете создать тикет и получить ответ администратора."
+    active_label = None
+    if active_id is not None:
+        brief = await get_ticket_brief(session, ticket_id=active_id)
+        st = str((brief or {}).get("status") or "open")
+        active_label = f"{_status_emoji(st)} Тикет #{active_id}"
+    kb = start_keyboard(
+        has_active_ticket=active_id is not None,
+        active_ticket_id=active_id,
+        active_ticket_label=active_label,
     )
+    if active_id is not None:
+        text = (
+            "📮 Активные тикеты:\n\n"
+            f"• {active_label or f'Тикет #{active_id}'}\n\n"
+            "Нажмите тикет, чтобы посмотреть статус или закрыть."
+        )
+    else:
+        text = (
+            "👋 Добро пожаловать в поддержку.\n\n"
+            "Здесь вы можете создать тикет и получить ответ администратора."
+        )
     await cq.answer()
     if cq.message:
         await cq.message.edit_text(text, reply_markup=kb)
@@ -79,11 +130,27 @@ async def cb_create_ticket(cq: CallbackQuery, session: AsyncSession, state: FSMC
     await state.set_state(TicketStates.waiting_problem_text)
     await cq.answer()
     if cq.message:
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
         prompt = (
             "🎫 Создание тикета\n\n"
             "Опишите проблему одним сообщением. Это сообщение будет основным управляющим экраном."
         )
-        await cq.message.answer(prompt)
+        sent = await cq.message.answer(prompt, reply_markup=ticket_cancel_keyboard())
+        await state.update_data(ticket_prompt_mid=sent.message_id)
+
+
+@router.callback_query(F.data == "tickets:create_cancel")
+async def cb_create_cancel(cq: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await cq.answer("Создание тикета отменено")
+    if cq.message:
+        await cq.message.edit_text(
+            "Создание тикета отменено.",
+            reply_markup=start_keyboard(has_active_ticket=False),
+        )
 
 
 @router.message(TicketStates.waiting_problem_text, F.text)
@@ -97,8 +164,26 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
     active_id = await get_active_ticket_id(session, user_id=db_user.id)
     if active_id is not None:
         await state.clear()
-        await message.answer(f"У вас уже есть активный тикет #{active_id}.")
+        brief = await get_ticket_brief(session, ticket_id=active_id)
+        st = str((brief or {}).get("status") or "open")
+        label = f"{_status_emoji(st)} Тикет #{active_id}"
+        await message.answer(
+            f"У вас уже есть активный тикет #{active_id}.",
+            reply_markup=active_ticket_keyboard(active_id, label=label),
+        )
         return
+    data = await state.get_data()
+    prompt_mid = data.get("ticket_prompt_mid")
+    if message.bot:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        if isinstance(prompt_mid, int):
+            try:
+                await message.bot.delete_message(message.chat.id, prompt_mid)
+            except Exception:
+                pass
 
     ticket_id = await create_ticket(
         session,
@@ -136,8 +221,89 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
     await state.clear()
     await message.answer(
         f"✅ Ваш тикет #{ticket_id} создан. Ожидайте ответа от администратора.",
-        reply_markup=active_ticket_keyboard(ticket_id),
+        reply_markup=active_ticket_keyboard(ticket_id, label=f"🟢 Тикет #{ticket_id}"),
     )
+
+
+@router.callback_query(F.data.startswith("tickets:view:"))
+async def cb_view_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None:
+        await cq.answer()
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) < 3:
+        await cq.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        ticket_id = int(parts[2])
+    except Exception:
+        await cq.answer("Некорректные данные", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден", show_alert=True)
+        return
+    if int(t.get("telegram_user_id") or 0) != int(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    details = (
+        await session.execute(
+            text(
+                """
+                SELECT t.created_at,
+                       t.status,
+                       t.telegram_assigned_admin_id,
+                       t.assigned_admin_id,
+                       u.first_name AS admin_first_name,
+                       u.username AS admin_username,
+                       m.text AS initial_text
+                FROM tickets t
+                LEFT JOIN users u ON u.id = t.assigned_admin_id
+                LEFT JOIN LATERAL (
+                  SELECT text FROM ticket_messages
+                  WHERE ticket_id = t.id AND sender_role = 'user' AND COALESCE(is_internal,false)=false
+                  ORDER BY id ASC
+                  LIMIT 1
+                ) m ON TRUE
+                WHERE t.id = :tid
+                """
+            ),
+            {"tid": ticket_id},
+        )
+    ).mappings().first()
+    if not details:
+        await cq.answer("Тикет не найден", show_alert=True)
+        return
+    status = str(details.get("status") or "unknown")
+    st_emoji = _status_emoji(status)
+    opened = details.get("created_at")
+    opened_s = opened.strftime("%d.%m.%Y %H:%M UTC") if opened is not None else "—"
+    assigned_tg = int(details.get("telegram_assigned_admin_id") or 0)
+    admin_db_id = details.get("assigned_admin_id")
+    adm_first = str(details.get("admin_first_name") or "").strip()
+    adm_un = str(details.get("admin_username") or "").strip()
+    if admin_db_id:
+        admin_line = f"#{int(admin_db_id)} {adm_first or ('@' + adm_un if adm_un else '')}".strip()
+    elif assigned_tg > 0:
+        admin_line = f"tg://user?id={assigned_tg}"
+    else:
+        admin_line = "не назначен"
+    initial_text = str(details.get("initial_text") or "—").strip()
+    text_view = (
+        f"{st_emoji} <b>Тикет #{ticket_id}</b>\n\n"
+        f"Статус: <b>{status}</b>\n"
+        f"Админ: {admin_line}\n"
+        f"Открыт: {opened_s}\n\n"
+        f"<b>Проблема:</b>\n<blockquote>{html.escape(initial_text[:1200])}</blockquote>"
+    )
+    await cq.answer()
+    if cq.message:
+        await cq.message.edit_text(
+            text_view,
+            parse_mode="HTML",
+            reply_markup=ticket_view_keyboard(ticket_id),
+            disable_web_page_preview=True,
+        )
 
 
 @router.callback_query(F.data.startswith("tickets:user_close:"))

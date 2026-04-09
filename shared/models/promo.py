@@ -36,7 +36,12 @@ class PromoCode(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    usages: Mapped[list["PromoUsage"]] = relationship("PromoUsage", back_populates="promo")
+    usages: Mapped[list["PromoUsage"]] = relationship(
+        "PromoUsage",
+        back_populates="promo",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class PromoUsage(Base):

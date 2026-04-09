@@ -19,7 +19,7 @@ from shared.integrations.rw_traffic import (
 )
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
-from shared.services.subscription_service import count_devices, get_active_subscription, get_base_subscription_plan
+from shared.services.subscription_service import count_devices, get_active_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +166,6 @@ async def build_subscription_detail_caption(
         + plain(")"),
         ]
     )
-    if sub.auto_renew and sub.status == "active":
-        bp = await get_base_subscription_plan(session)
-        if bp is not None and bp.price_rub > 0:
-            quote_lines.append(
-                plain("🔄 Авто-продление: ")
-                + bold(str(int(bp.price_rub)) + " ₽")
-                + plain(" за +")
-                + bold(str(int(bp.duration_days)) + " дн.")
-                + plain(" (~за 1 ч до окончания)")
-            )
     quoted_block = "\n".join("> " + line for line in quote_lines)
     caption = join_lines(header, "", quoted_block)
     if sub_url:

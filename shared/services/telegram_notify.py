@@ -21,6 +21,7 @@ async def send_telegram_message(
     *,
     parse_mode: str | None = "MarkdownV2",
     message_thread_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
     settings: Settings | None = None,
 ) -> bool:
     s = settings or get_settings()
@@ -30,6 +31,8 @@ async def send_telegram_message(
         payload["parse_mode"] = parse_mode
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(url, json=payload)
@@ -40,6 +43,28 @@ async def send_telegram_message(
         return True
     except Exception:
         logger.exception("Telegram sendMessage error")
+        return False
+
+
+async def delete_telegram_message(
+    chat_id: int | str,
+    message_id: int,
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    s = settings or get_settings()
+    url = f"https://api.telegram.org/bot{s.bot_token}/deleteMessage"
+    payload: dict[str, Any] = {"chat_id": chat_id, "message_id": int(message_id)}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(url, json=payload)
+            data = r.json()
+        if not data.get("ok"):
+            logger.debug("Telegram deleteMessage failed: %s", data)
+            return False
+        return True
+    except Exception:
+        logger.exception("Telegram deleteMessage error")
         return False
 
 

@@ -4,16 +4,20 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def start_keyboard(*, has_active_ticket: bool, active_ticket_id: int | None = None) -> InlineKeyboardMarkup:
+def start_keyboard(
+    *,
+    has_active_ticket: bool,
+    active_ticket_id: int | None = None,
+    active_ticket_label: str | None = None,
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_active_ticket and active_ticket_id is not None:
         b.row(
             InlineKeyboardButton(
-                text=f"У вас уже есть активный тикет #{active_ticket_id}",
-                callback_data="tickets:noop",
+                text=active_ticket_label or f"🟡 Тикет #{active_ticket_id}",
+                callback_data=f"tickets:view:{active_ticket_id}",
             )
         )
-        b.row(InlineKeyboardButton(text="❌ Закрыть тикет", callback_data=f"tickets:user_close:{active_ticket_id}"))
     else:
         b.row(InlineKeyboardButton(text="📩 Создать тикет", callback_data="tickets:create"))
     return b.as_markup()
@@ -21,6 +25,7 @@ def start_keyboard(*, has_active_ticket: bool, active_ticket_id: int | None = No
 
 def ticket_cancel_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data="tickets:create_cancel"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="tickets:home"))
     return b.as_markup()
 
@@ -50,10 +55,17 @@ def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def active_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+def active_ticket_keyboard(ticket_id: int, *, label: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=f"🎫 Тикет #{ticket_id} активен", callback_data="tickets:noop"))
-    b.row(InlineKeyboardButton(text="❌ Закрыть тикет", callback_data=f"tickets:user_close:{ticket_id}"))
+    b.row(InlineKeyboardButton(text=label or f"🟡 Тикет #{ticket_id}", callback_data=f"tickets:view:{ticket_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="tickets:home"))
+    return b.as_markup()
+
+
+def ticket_view_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📌 Статус", callback_data=f"tickets:view:{ticket_id}"))
+    b.row(InlineKeyboardButton(text="❌ Закрыть тикет", callback_data=f"tickets:user_close:{ticket_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="tickets:home"))
     return b.as_markup()
 

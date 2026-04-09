@@ -78,6 +78,7 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="1000 ₽", callback_data="topup:amt:1000"),
     )
     builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
+    builder.row(InlineKeyboardButton(text="🧾 История пополнений", callback_data="topup:history"))
     builder.row(InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"))
     return builder.as_markup()
 
@@ -93,6 +94,7 @@ def topup_invoice_keyboard(pay_url: str, *, txn_id: int) -> InlineKeyboardMarkup
         )
     )
     builder.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
+    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"))
     return builder.as_markup()
 
 
@@ -101,14 +103,14 @@ def topup_providers_keyboard(amount_rub: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="🪙 CryptoBot (Крипта)",
-            callback_data=f"topup:prov:cryptobot:{amount_rub}",
+            text="💳 Platega (СБП)",
+            callback_data=f"topup:prov:platega:{amount_rub}",
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text="💳 Platega (СБП)",
-            callback_data=f"topup:prov:platega:{amount_rub}",
+            text="🪙 CryptoBot (Крипта)",
+            callback_data=f"topup:prov:cryptobot:{amount_rub}",
         )
     )
     builder.row(InlineKeyboardButton(text="⬅️ К суммам", callback_data="topup:back_amt"))

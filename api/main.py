@@ -17,7 +17,9 @@ if str(_ROOT) not in sys.path:
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import Response
 
 from api.routers import public_pages, tickets_api, web_admin, webhooks
 from shared.config import get_settings
@@ -41,6 +43,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.web_admin_session_secret,
@@ -55,9 +58,17 @@ app.include_router(tickets_api.router, prefix="/api")
 
 _assets_dir = _ROOT / "assets"
 if _assets_dir.is_dir():
+    class CacheStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):
+            response = await super().get_response(path, scope)
+            if isinstance(response, Response) and response.status_code == 200:
+                # Версионированные ассеты браузер может держать долго.
+                response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+            return response
+
     app.mount(
         "/assets",
-        StaticFiles(directory=str(_assets_dir)),
+        CacheStaticFiles(directory=str(_assets_dir)),
         name="assets",
     )
 

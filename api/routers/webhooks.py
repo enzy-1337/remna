@@ -74,6 +74,7 @@ async def webhook_cryptobot(request: Request) -> Response:
             settings=settings,
             user_id=user_id,
             provider_name="cryptobot",
+            internal_transaction_id=parsed.internal_transaction_id,
         )
     elif status == "duplicate":
         logger.info("CryptoBot webhook: дубликат invoice txn=%s", parsed.internal_transaction_id)
@@ -120,6 +121,7 @@ async def webhook_platega(request: Request) -> Response:
             settings=settings,
             user_id=user_id,
             provider_name="platega",
+            internal_transaction_id=parsed.internal_transaction_id,
         )
     elif status == "duplicate":
         logger.info("Platega webhook: дубликат txn=%s", parsed.internal_transaction_id)

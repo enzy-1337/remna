@@ -11,11 +11,11 @@ from decimal import Decimal, InvalidOperation
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +32,9 @@ from shared.md2 import bold, code, esc, italic, join_lines, plain, strip_for_pop
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.models.billing_ledger_entry import BillingLedgerEntry
+from shared.models.billing_usage_event import BillingUsageEvent
+from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 
@@ -64,14 +67,227 @@ def _is_admin(tg_id: int | None) -> bool:
 
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    s = get_settings()
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="📋 Пользователи", callback_data="admin:users:0"))
-    b.row(InlineKeyboardButton(text="🔎 Найти по Telegram ID", callback_data="admin:find"))
-    b.row(InlineKeyboardButton(text="📢 Рассылка всем", callback_data="admin:broadcast"))
-    b.row(InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"))
-    b.row(InlineKeyboardButton(text="⛔ Полный сброс БД", callback_data="admin:reset:start"))
+    # Основные действия
+    b.row(
+        InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
+        InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find"),
+    )
+    b.row(
+        InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
+        InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
+    )
+    b.row(InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"))
+    b.row(InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0"))
+    if (s.public_site_url or "").strip():
+        b.row(InlineKeyboardButton(text="🌐 Web-admin", callback_data="admin:web"))
+    # Опасные действия — отдельно, последней строкой
+    b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
+
+
+def _admin_web_keyboard() -> InlineKeyboardMarkup:
+    s = get_settings()
+    root = (s.public_site_url or "").rstrip("/")
+    admin_url = f"{root}/admin" if root else ""
+    b = InlineKeyboardBuilder()
+    if admin_url:
+        b.row(InlineKeyboardButton(text="🏠 Главная", url=admin_url))
+        b.row(
+            InlineKeyboardButton(text="👥 Пользователи", url=f"{admin_url}/users"),
+            InlineKeyboardButton(text="⏱ Подписки", url=f"{admin_url}/subscriptions"),
+        )
+        b.row(
+            InlineKeyboardButton(text="🎁 Промокоды", url=f"{admin_url}/promos"),
+            InlineKeyboardButton(text="📢 Рассылка", url=f"{admin_url}/broadcast"),
+        )
+        b.row(
+            InlineKeyboardButton(text="🎫 Тикеты", url=f"{admin_url}/tickets"),
+            InlineKeyboardButton(text="⚙️ Настройки", url=f"{admin_url}/settings"),
+        )
+    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    return b.as_markup()
+
+
+def _sub_status_emoji(status: str) -> str:
+    st = (status or "").strip().lower()
+    if st == "active":
+        return "🟢"
+    if st == "trial":
+        return "🎁"
+    if st == "cancelled":
+        return "⏹"
+    if st == "expired":
+        return "⚪"
+    return "⚪"
+
+
+def _parse_subs_filters(parts: list[str]) -> tuple[int, str, str]:
+    # admin:subs:<page>:<scope>:<ar>
+    # scope: all | exp24 | exp3 | trial
+    # ar: all | on | off
+    page = 0
+    scope = "all"
+    ar = "all"
+    try:
+        if len(parts) >= 3:
+            page = int(parts[2])
+    except Exception:
+        page = 0
+    if len(parts) >= 4 and parts[3] in ("all", "exp24", "exp3", "trial"):
+        scope = parts[3]
+    if len(parts) >= 5 and parts[4] in ("all", "on", "off"):
+        ar = parts[4]
+    return page, scope, ar
+
+
+def _subs_cb(page: int, scope: str, ar: str) -> str:
+    return f"admin:subs:{page}:{scope}:{ar}"
+
+
+async def _render_admin_subs_screen(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    *,
+    page: int,
+    scope: str,
+    ar: str,
+) -> None:
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    expires_to = None
+    statuses = ("active", "trial")
+    if scope == "trial":
+        statuses = ("trial",)
+    elif scope == "exp24":
+        expires_to = now + timedelta(hours=24)
+    elif scope == "exp3":
+        expires_to = now + timedelta(hours=3)
+
+    ar_cond = None
+    if ar == "on":
+        ar_cond = True
+    elif ar == "off":
+        ar_cond = False
+
+    base_q = (
+        select(Subscription, User)
+        .join(User, User.id == Subscription.user_id)
+        .where(
+            Subscription.status.in_(statuses),
+            Subscription.expires_at > now,
+        )
+    )
+    if expires_to is not None:
+        base_q = base_q.where(Subscription.expires_at <= expires_to)
+    if ar_cond is not None:
+        base_q = base_q.where(Subscription.auto_renew.is_(ar_cond))
+
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Subscription).where(
+                    Subscription.status.in_(statuses),
+                    Subscription.expires_at > now,
+                    *( [Subscription.expires_at <= expires_to] if expires_to is not None else [] ),
+                    *( [Subscription.auto_renew.is_(ar_cond)] if ar_cond is not None else [] ),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    offset = max(0, int(page)) * PAGE_SIZE
+    rows = (
+        await session.execute(
+            base_q.order_by(Subscription.expires_at.asc()).offset(offset).limit(PAGE_SIZE)
+        )
+    ).all()
+    scope_label = {
+        "all": "все активные/триал",
+        "trial": "только trial",
+        "exp24": "истекают < 24ч",
+        "exp3": "истекают < 3ч",
+    }.get(scope, "все")
+    ar_label = {"all": "любой", "on": "вкл", "off": "выкл"}.get(ar, "любой")
+    lines: list[str] = [
+        "⏱ " + bold("Подписки"),
+        plain(f"Фильтр: ") + bold(scope_label) + plain(" · авто: ") + bold(ar_label),
+        plain(f"Стр. {int(page) + 1} · записей: ") + bold(str(total)),
+        "",
+        plain("Сортировка: ближайшее окончание сверху."),
+        "",
+    ]
+    b = InlineKeyboardBuilder()
+    # Фильтры
+    b.row(
+        InlineKeyboardButton(text="Все", callback_data=_subs_cb(0, "all", ar)),
+        InlineKeyboardButton(text="<24ч", callback_data=_subs_cb(0, "exp24", ar)),
+        InlineKeyboardButton(text="<3ч", callback_data=_subs_cb(0, "exp3", ar)),
+        InlineKeyboardButton(text="Trial", callback_data=_subs_cb(0, "trial", ar)),
+    )
+    b.row(
+        InlineKeyboardButton(text="Авто: любой", callback_data=_subs_cb(0, scope, "all")),
+        InlineKeyboardButton(text="Авто: вкл", callback_data=_subs_cb(0, scope, "on")),
+        InlineKeyboardButton(text="Авто: выкл", callback_data=_subs_cb(0, scope, "off")),
+    )
+    for sub, u in rows:
+        exp = sub.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        exp_s = exp.astimezone(_MSK_TZ).strftime("%d.%m %H:%M")
+        nm = (u.first_name or u.username or "?").strip()
+        if len(nm) > 16:
+            nm = nm[:15] + "…"
+        ar_emoji = "🔄" if sub.auto_renew else "⏸"
+        btn_text = f"{_sub_status_emoji(sub.status)}{ar_emoji} #{sub.id} до {exp_s} · {nm}"
+        b.row(InlineKeyboardButton(text=btn_text[:64], callback_data=f"admin:u:{u.id}"))
+
+    total_pages = max(1, math.ceil(total / PAGE_SIZE)) if total else 1
+    cur_page = int(page) + 1
+    page_label = f"{cur_page}/{total_pages}"
+    placeholder = InlineKeyboardButton(text="·", callback_data="admin:subs:noop")
+    left_btn = (
+        InlineKeyboardButton(text="⬅️", callback_data=_subs_cb(int(page) - 1, scope, ar))
+        if int(page) > 0
+        else placeholder
+    )
+    mid_btn = InlineKeyboardButton(text=page_label, callback_data="admin:subs:noop")
+    right_btn = (
+        InlineKeyboardButton(text="➡️", callback_data=_subs_cb(int(page) + 1, scope, ar))
+        if offset + len(rows) < total
+        else placeholder
+    )
+    b.row(left_btn, mid_btn, right_btn)
+    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(*lines),
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("admin:subs:"))
+async def cb_admin_subs(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    parts = cq.data.split(":")
+    if len(parts) >= 3 and parts[2] == "noop":
+        await cq.answer()
+        return
+    page, scope, ar = _parse_subs_filters(parts)
+    await _render_admin_subs_screen(cq, session, page=page, scope=scope, ar=ar)
+
 
 
 def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:
@@ -361,6 +577,177 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
         caption=text,
         reply_markup=admin_panel_keyboard(),
         settings=settings,
+    )
+
+
+@router.callback_query(F.data == "admin:web")
+async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    s = get_settings()
+    if not (s.public_site_url or "").strip():
+        await cq.answer("Не задан PUBLIC_SITE_URL", show_alert=True)
+        return
+    cap = join_lines(
+        "🌐 " + bold("Web-admin"),
+        "",
+        plain("Быстрые ссылки на разделы веб-админки."),
+    )
+    await cq.answer()
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=_admin_web_keyboard(),
+        settings=s,
+    )
+
+
+@router.callback_query(F.data == "admin:metrics")
+async def cb_admin_metrics(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(hours=24)
+    webhook_ok_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    RemnawaveWebhookEvent.received_at >= day_ago,
+                    RemnawaveWebhookEvent.signature_valid.is_(True),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    webhook_dup_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    RemnawaveWebhookEvent.received_at >= day_ago,
+                    RemnawaveWebhookEvent.status == "duplicate",
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    webhook_invalid_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(RemnawaveWebhookEvent).where(
+                    RemnawaveWebhookEvent.received_at >= day_ago,
+                    RemnawaveWebhookEvent.signature_valid.is_(False),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    rating_events_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(BillingUsageEvent).where(BillingUsageEvent.created_at >= day_ago)
+            )
+        ).scalar_one()
+        or 0
+    )
+    ledger_rejects_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(BillingLedgerEntry).where(
+                    BillingLedgerEntry.created_at >= day_ago,
+                    BillingLedgerEntry.entry_type == "reject",
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    transitions_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Transaction).where(
+                    Transaction.created_at >= day_ago,
+                    Transaction.type == "billing_transition",
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    risk_1h_users = int(
+        (
+            await session.execute(select(func.count()).select_from(User).where(User.risk_notified_1h_at.is_not(None)))
+        ).scalar_one()
+        or 0
+    )
+    risk_24h_users = int(
+        (
+            await session.execute(select(func.count()).select_from(User).where(User.risk_notified_24h_at.is_not(None)))
+        ).scalar_one()
+        or 0
+    )
+    active_sub_users = int(
+        (
+            await session.execute(
+                select(func.count(distinct(Subscription.user_id))).where(
+                    Subscription.status.in_(("active", "trial")),
+                    Subscription.expires_at > now,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    topups_24h = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Transaction).where(
+                    Transaction.type == "topup",
+                    Transaction.status == "completed",
+                    Transaction.created_at >= day_ago,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    cap = join_lines(
+        "📈 " + bold("Метрики (24 часа)"),
+        "",
+        "🌐 " + bold("Remnawave webhooks"),
+        plain("ok: ") + bold(str(webhook_ok_24h)),
+        plain("duplicate: ") + bold(str(webhook_dup_24h)),
+        plain("invalid: ") + bold(str(webhook_invalid_24h)),
+        "",
+        "💸 " + bold("Billing"),
+        plain("rating events: ") + bold(str(rating_events_24h)),
+        plain("ledger rejects: ") + bold(str(ledger_rejects_24h)),
+        plain("legacy→hybrid transitions: ") + bold(str(transitions_24h)),
+        "",
+        "👥 " + bold("Пользователи"),
+        plain("active subs (users): ") + bold(str(active_sub_users)),
+        plain("risk notified 24h: ") + bold(str(risk_24h_users)),
+        plain("risk notified 1h: ") + bold(str(risk_1h_users)),
+        "",
+        "💳 " + bold("Платежи"),
+        plain("topups completed: ") + bold(str(topups_24h)),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:metrics"))
+    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    await cq.answer()
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=get_settings(),
     )
 
 
@@ -1337,10 +1724,18 @@ async def msg_admin_reset_step_telegram_id(
     )
 
 
+def _broadcast_input_markup() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:panel"))
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast_cancel"))
+    return kb.as_markup()
+
+
 def _broadcast_confirm_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast_go"))
-    kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:broadcast_cancel"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast"))
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast_cancel"))
     return kb.as_markup()
 
 
@@ -1358,11 +1753,11 @@ async def cb_broadcast_start(
         return
     await state.set_state(AdminBroadcastStates.waiting_text)
     await cq.answer()
-    if cq.bot is None or cq.message is None:
+    if cq.message is None:
         return
-    await cq.bot.send_message(
-        cq.message.chat.id,
-        join_lines(
+    sent = await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
             "📢 " + bold("Рассылка всем пользователям"),
             "",
             plain("Отправьте одним сообщением текст. Поддерживается форматирование "),
@@ -1388,19 +1783,14 @@ async def cb_broadcast_start(
             + plain(" символов в итоговом сообщении."),
             "",
             italic("Не получат пользователи, отмеченные в боте как заблокированные."),
-            "",
-            plain("Отмена: ") + code("/cancel_broadcast"),
         ),
+        reply_markup=_broadcast_input_markup(),
+        settings=get_settings(),
     )
-
-
-@router.message(Command("cancel_broadcast"), StateFilter(AdminBroadcastStates))
-async def cmd_cancel_broadcast(message: Message, state: FSMContext) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
-        return
-    await state.clear()
-    await message.answer(esc("Рассылка отменена."))
-
+    await state.update_data(
+        broadcast_prompt_mid=(sent.message_id if sent else None),
+        broadcast_preview_mid=None,
+    )
 
 @router.callback_query(F.data == "admin:broadcast_cancel")
 async def cb_broadcast_cancel(
@@ -1439,10 +1829,17 @@ async def msg_broadcast_receive_text(
         await state.clear()
         return
     if (message.text or "").strip().startswith("/"):
-        await message.answer(
-            esc("Пришлите текст рассылки без команд или отмените: /cancel_broadcast")
-        )
+        await message.answer(esc("Пришлите текст рассылки обычным сообщением или нажмите «Отмена»."))
         return
+    data0 = await state.get_data()
+    old_prompt_mid = data0.get("broadcast_prompt_mid")
+    old_preview_mid = data0.get("broadcast_preview_mid")
+    if message.bot is not None:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        if isinstance(old_prompt_mid, int):
+            await _try_delete_message(message.bot, message.chat.id, old_prompt_mid)
+        if isinstance(old_preview_mid, int):
+            await _try_delete_message(message.bot, message.chat.id, old_preview_mid)
 
     # Сохраняем форматирование из клиента Telegram (жирный и т.д.) → HTML
     raw = (getattr(message, "html_text", None) or message.text or "").strip()
@@ -1467,7 +1864,7 @@ async def msg_broadcast_receive_text(
     )
     preview_html = f"<b>Предпросмотр рассылки</b>\n\n{preview}{footer}"
     try:
-        await message.answer(
+        sent = await message.answer(
             preview_html,
             parse_mode=ParseMode.HTML,
             reply_markup=_broadcast_confirm_markup(),
@@ -1482,7 +1879,7 @@ async def msg_broadcast_receive_text(
         )
         return
 
-    await state.update_data(broadcast_text=raw)
+    await state.update_data(broadcast_text=raw, broadcast_preview_mid=sent.message_id)
     await state.set_state(AdminBroadcastStates.waiting_confirm)
 
 
