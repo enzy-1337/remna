@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -68,6 +69,18 @@ def _parse_webhook_unix_ts(ts_header: str) -> int | None:
     return ts
 
 
+def _ts_header_looks_like_unix_epoch(raw: str) -> bool:
+    """
+    Анти-replay по TTL имеет смысл только для «момента отправки» (Unix).
+    Remnawave кладёт в заголовок ISO из payload (см. docs.rw) — это время события,
+    оно может сильно отличаться от момента HTTP-запроса; TTL по нему ломает валидную подпись.
+    """
+    s = (raw or "").strip()
+    if not s or "T" in s or s.endswith("Z"):
+        return False
+    return bool(re.fullmatch(r"\d{9,}(\.\d+)?", s))
+
+
 def _normalize_signature_hex_header(signature_header: str) -> str:
     """Сравнение без учёта регистра hex (панель может слать A-F)."""
     sig = signature_header.strip()
@@ -105,7 +118,12 @@ def verify_remnawave_signature(
     ts_norm = _parse_webhook_unix_ts(ts_header) if has_ts else None
     # Непарсящийся timestamp не блокирует HMAC: в docs.rw TS-пример проверяет только подпись.
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    if ts_norm is not None and abs(now_ts - ts_norm) > settings.remnawave_webhook_signature_ttl_sec:
+    if (
+        has_ts
+        and _ts_header_looks_like_unix_epoch(raw_ts_header)
+        and ts_norm is not None
+        and abs(now_ts - ts_norm) > settings.remnawave_webhook_signature_ttl_sec
+    ):
         return False
 
     # 1) Как в Go-примере docs.rw: HMAC от сырого тела.
