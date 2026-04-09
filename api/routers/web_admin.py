@@ -2244,10 +2244,10 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           if(sig===lastSig) return;
           model=nextModel;
           renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom);
-          if(chat&&!wasNearBottom){
+          if(chat&&!wasNearBottom){{
             var newHeight=chat.scrollHeight;
             chat.scrollTop=Math.max(0, prevTop + (newHeight - prevHeight));
-          }
+          }}
           lastSig=sig;
           var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
           assign.value=atg?String(atg):'';
@@ -2280,20 +2280,20 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{alert('Не удалось сохранить назначение');}}
       }});
       var liveTimer=null;
-      function startLive(){
+      function startLive(){{
         if(liveTimer)clearInterval(liveTimer);
-        liveTimer=setInterval(function(){
+        liveTimer=setInterval(function(){{
           if(document.hidden)return;
           load();
         },3500);
-      }
-      document.addEventListener('visibilitychange', function(){
+      }}
+      document.addEventListener('visibilitychange', function(){{
         if(document.hidden)return;
         load();
-      });
-      window.addEventListener('beforeunload', function(){
+      }});
+      window.addEventListener('beforeunload', function(){{
         if(liveTimer)clearInterval(liveTimer);
-      });
+      }});
       initAssign(); load(); startLive();
     }})();
     </script>
