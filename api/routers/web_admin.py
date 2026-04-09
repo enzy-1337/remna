@@ -3029,7 +3029,25 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
-          <p>Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
+          <div class="flex flex-wrap items-end gap-2">
+            <p class="m-0">Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
+            <form method="post" action="/admin/users/{user_id}/add-balance" class="flex flex-wrap items-end gap-2">
+              <label class="form-control">
+                <span class="label-text text-xs opacity-70">Баланс +₽</span>
+                <input
+                  type="text"
+                  name="amount"
+                  required
+                  inputmode="decimal"
+                  placeholder="0"
+                  class="input input-bordered input-sm h-9 min-h-9 w-28"
+                />
+              </label>
+              <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
+                <i class="fa-solid fa-plus" aria-hidden="true"></i>Выдать
+              </button>
+            </form>
+          </div>
           {negative_risk_block}
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
@@ -3107,6 +3125,50 @@ async def admin_user_subscription_auto_renew(
         await session.rollback()
     err = str(msg).replace("\n", " ")[:400]
     return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/users/{user_id}/add-balance")
+async def admin_user_add_balance(
+    request: Request, user_id: int, amount: str = Form(...)
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    raw = (amount or "").strip().replace(",", ".")
+    try:
+        amt = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('Неверная сумма')}", status_code=303)
+    if amt <= 0:
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
+    wauth = request.session.get("wauth") or {}
+    admin_tg = int(wauth.get("telegram_id") or 0)
+    async with await _session() as session:
+        u = await session.get(User, user_id)
+        if u is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        admin_db_id = None
+        if admin_tg:
+            au = (await session.execute(select(User).where(User.telegram_id == admin_tg))).scalar_one_or_none()
+            if au is not None:
+                admin_db_id = au.id
+        u.balance += amt
+        session.add(
+            Transaction(
+                user_id=u.id,
+                type="admin_balance_add",
+                amount=amt,
+                currency="RUB",
+                payment_provider="admin",
+                payment_id=None,
+                status="completed",
+                description=f"Админ (web user) добавил баланс: +{amt} ₽",
+                meta={"admin_id": admin_db_id, "source": "web_user"},
+            )
+        )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=bal_ok", status_code=303)
 
 
 @router.post("/users/{user_id}/subscription/disable")
