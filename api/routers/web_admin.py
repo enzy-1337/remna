@@ -294,12 +294,17 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     .remna-loading-box {{
       display: inline-flex;
       align-items: center;
-      gap: .75rem;
+      gap: .52rem;
       border: 1px solid color-mix(in oklab, var(--bc) 20%, transparent);
       background: color-mix(in oklab, var(--b1) 92%, transparent);
       border-radius: .9rem;
       padding: .72rem 1rem;
       box-shadow: 0 12px 36px rgba(0,0,0,.2);
+    }}
+    .remna-loading-main {{
+      display: inline-flex;
+      align-items: center;
+      gap: .36rem;
     }}
     .remna-loading-side {{
       display: inline-flex;
@@ -312,6 +317,11 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
       background: color-mix(in oklab, var(--b3) 74%, transparent);
       color: color-mix(in oklab, var(--p) 72%, var(--bc) 28%);
     }}
+    .remna-hourglass-icon {{
+      display: inline-block;
+      transform-origin: 50% 50%;
+      animation: remna-hourglass-rotate 2.2s infinite;
+    }}
     .remna-spinner {{
       width: 1rem;
       height: 1rem;
@@ -319,6 +329,14 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
       border-top-color: var(--p);
       border-radius: 9999px;
       animation: remna-spin .8s linear infinite;
+    }}
+    @keyframes remna-hourglass-rotate {{
+      /* Пол-оборота: плавный старт, ускорение, замедление */
+      0%   {{ transform: rotate(0deg); animation-timing-function: cubic-bezier(.40, 0, .95, .32); }}
+      18%  {{ transform: rotate(16deg); }}
+      50%  {{ transform: rotate(180deg); animation-timing-function: cubic-bezier(.08, .64, .26, 1); }}
+      68%  {{ transform: rotate(196deg); }}
+      100% {{ transform: rotate(360deg); }}
     }}
     @keyframes remna-spin {{ to {{ transform: rotate(360deg); }} }}
     .remna-avatar-img {{
@@ -575,9 +593,11 @@ def _layout(
     <div id="remna-toast-host" aria-live="polite"></div>
     <div id="remna-loading-overlay" class="remna-loading-overlay" aria-hidden="true">
       <div class="remna-loading-box">
-        <span class="remna-loading-side" aria-hidden="true"><i class="fa-solid fa-hourglass-half"></i></span>
+        <span class="remna-loading-main">
+          <span class="remna-loading-side" aria-hidden="true"><i class="fa-solid fa-hourglass-half remna-hourglass-icon"></i></span>
+          <span id="remna-loading-text" class="text-sm font-medium">Загрузка</span>
+        </span>
         <span class="remna-spinner" aria-hidden="true"></span>
-        <span id="remna-loading-text" class="text-sm font-medium">Загрузка</span>
       </div>
     </div>
     <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
