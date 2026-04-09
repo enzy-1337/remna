@@ -2072,7 +2072,22 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       var assign=document.getElementById('tk-assign');
       var compose=document.getElementById('tk-compose');
       var model=null;
+      var lastSig='';
+      var loadInFlight=false;
       function esc(s){{return String(s||'').replace(/[&<>\"']/g,function(ch){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}}[ch]||ch;}});}}
+      function modelSig(m){{
+        var t=(m&&m.ticket)||{{}};
+        var msgs=(m&&m.messages)||[];
+        var last=msgs.length?msgs[msgs.length-1]:null;
+        return [
+          String(t.status||''),
+          String(t.last_activity||''),
+          String(msgs.length),
+          String(last&&last.id||''),
+          String(last&&last.created_at||''),
+          String(last&&last.text||'')
+        ].join('|');
+      }}
       function initAssign() {{
         assign.innerHTML='';
         var opt=document.createElement('option');opt.value='';opt.textContent='— не назначен —';assign.appendChild(opt);
@@ -2159,7 +2174,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         }}
         m.innerHTML=html;
       }}
-      function renderChat() {{
+      function renderChat(shouldStickBottom) {{
         var msgs=(model&&model.messages)||[];
         if(!msgs.length) {{
           chat.innerHTML='<div class="opacity-60 text-sm">Сообщений пока нет.</div>'; return;
@@ -2178,7 +2193,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +(m.photo_file_id?'<div class="mt-2"><img src="/api/tickets/'+ticketId+'/messages/'+m.id+'/photo" alt="" title="Нажмите, чтобы открыть крупно" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/></div>':'')
             +'</div></div>';
         }}).join('');
-        chat.scrollTop=chat.scrollHeight;
+        if(shouldStickBottom) chat.scrollTop=chat.scrollHeight;
       }}
       function closePhotoLb() {{
         if(!lb) return;
@@ -2214,18 +2229,33 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         }});
       }}
       async function load() {{
+        if(loadInFlight) return;
+        loadInFlight=true;
         try {{
+          var prevTop=chat?chat.scrollTop:0;
+          var prevHeight=chat?chat.scrollHeight:0;
+          var wasNearBottom=chat?(prevTop+chat.clientHeight>=prevHeight-24):true;
           var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
           if(!r.ok){{meta.textContent='Ошибка загрузки: HTTP '+r.status;chat.innerHTML='<div class="text-error text-sm">HTTP '+r.status+'</div>';return;}}
           var ct=(r.headers.get('content-type')||'');
           if(ct.indexOf('application/json')===-1){{meta.textContent='Ответ не JSON (проверьте, что /api открыт на этом же домене)';chat.innerHTML='';return;}}
-          model=await r.json();
-          renderMeta(); renderUserPanel(); renderMgmt(); renderChat();
+          var nextModel=await r.json();
+          var sig=modelSig(nextModel);
+          if(sig===lastSig) return;
+          model=nextModel;
+          renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom);
+          if(chat&&!wasNearBottom){
+            var newHeight=chat.scrollHeight;
+            chat.scrollTop=Math.max(0, prevTop + (newHeight - prevHeight));
+          }
+          lastSig=sig;
           var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
           assign.value=atg?String(atg):'';
         }} catch(e) {{
           meta.textContent='Ошибка разбора ответа: '+(e&&e.message?e.message:String(e));
           chat.innerHTML='<div class="text-error text-sm opacity-90">Не удалось отобразить тикет. Откройте консоль браузера (F12) и вкладку Network для /api/tickets/'+ticketId+'.</div>';
+        }} finally {{
+          loadInFlight=false;
         }}
       }}
       async function sendJson(url, method, data) {{
