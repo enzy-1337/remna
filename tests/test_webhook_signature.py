@@ -18,6 +18,13 @@ class _EmptySecretSettingsStub:
     remnawave_webhook_signature_ttl_sec = 300
 
 
+class _Hex64SecretSettingsStub:
+    """Секрет в .env как 64 hex-символа; панель подписывает ключом bytes.fromhex(...)."""
+
+    remnawave_webhook_secret = "0f" * 32
+    remnawave_webhook_signature_ttl_sec = 300
+
+
 class RemnawaveWebhookSignatureTests(unittest.TestCase):
     def test_signature_valid_body_only_remna_doc_style(self) -> None:
         """Как в docs.rw: HMAC-SHA256(secret, raw_body), без префикса timestamp."""
@@ -109,6 +116,19 @@ class RemnawaveWebhookSignatureTests(unittest.TestCase):
                 ts_header="not-a-unix-nor-iso",
                 signature_header=digest.upper(),
                 settings=_SettingsStub(),  # type: ignore[arg-type]
+            )
+        )
+
+    def test_signature_hex_secret_decoded_like_node_buffer_from_hex(self) -> None:
+        body = b'{"scope":"service","event":"service.panel_started"}'
+        key = bytes.fromhex(_Hex64SecretSettingsStub.remnawave_webhook_secret)
+        digest = hmac.new(key, body, hashlib.sha256).hexdigest()
+        self.assertTrue(
+            verify_remnawave_signature(
+                body=body,
+                ts_header="2026-01-01T00:00:00.000Z",
+                signature_header=digest,
+                settings=_Hex64SecretSettingsStub(),  # type: ignore[arg-type]
             )
         )
 
