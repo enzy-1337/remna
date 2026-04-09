@@ -159,7 +159,9 @@ async def webhook_remnawave(request: Request, background_tasks: BackgroundTasks)
                 session.add(
                     RemnawaveWebhookEvent(
                         event_id=_invalid_event_id(),
-                        event_type=str(payload.get("event_type") or "unknown"),
+                        event_type=str(
+                            payload.get("event") or payload.get("event_type") or "unknown"
+                        ),
                         status="invalid_signature",
                         signature_valid=False,
                         payload=payload,
