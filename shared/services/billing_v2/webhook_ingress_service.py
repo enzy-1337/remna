@@ -98,6 +98,21 @@ def _hmac_sha256_hex_matches(*, secret: bytes, message: bytes, signature_header:
     return hmac.compare_digest(digest, sig)
 
 
+def _remnawave_hmac_key_candidates(secret_raw: str) -> list[bytes]:
+    """
+    Панель может подписывать как UTF-8 строкой из .env, так и байтами из hex
+    (аналог Buffer.from(secret, 'hex') в Node) — типично для секрета из 64 hex-символов.
+    """
+    out: list[bytes] = [secret_raw.encode("utf-8")]
+    if (
+        len(secret_raw) >= 32
+        and len(secret_raw) % 2 == 0
+        and re.fullmatch(r"[0-9a-fA-F]+", secret_raw) is not None
+    ):
+        out.append(bytes.fromhex(secret_raw))
+    return out
+
+
 def verify_remnawave_signature(
     *,
     body: bytes,
@@ -106,8 +121,7 @@ def verify_remnawave_signature(
     settings: Settings,
 ) -> bool:
     secret_raw = (settings.remnawave_webhook_secret or "").strip()
-    secret = secret_raw.encode("utf-8")
-    if not secret:
+    if not secret_raw:
         return False
     sig = (signature_header or "").strip()
     if not sig:
@@ -126,30 +140,33 @@ def verify_remnawave_signature(
     ):
         return False
 
-    # 1) Как в Go-примере docs.rw: HMAC от сырого тела.
-    if _hmac_sha256_hex_matches(secret=secret, message=body, signature_header=sig):
-        return True
-    # 2) Канонический JSON (как при повторной сериализации; ensure_ascii как в JS по умолчанию).
-    try:
-        text = body.decode("utf-8")
-        if text.startswith("\ufeff"):
-            text = text[1:]
-        obj = json.loads(text)
-        for sk in (False, True):
-            for ascii_flag in (True, False):
-                compact = json.dumps(obj, separators=(",", ":"), sort_keys=sk, ensure_ascii=ascii_flag).encode("utf-8")
-                if _hmac_sha256_hex_matches(secret=secret, message=compact, signature_header=sig):
+    for secret in _remnawave_hmac_key_candidates(secret_raw):
+        # 1) Как в Go-примере docs.rw: HMAC от сырого тела.
+        if _hmac_sha256_hex_matches(secret=secret, message=body, signature_header=sig):
+            return True
+        # 2) Канонический JSON (как при повторной сериализации; ensure_ascii как в JS по умолчанию).
+        try:
+            text = body.decode("utf-8")
+            if text.startswith("\ufeff"):
+                text = text[1:]
+            obj = json.loads(text)
+            for sk in (False, True):
+                for ascii_flag in (True, False):
+                    compact = json.dumps(
+                        obj, separators=(",", ":"), sort_keys=sk, ensure_ascii=ascii_flag
+                    ).encode("utf-8")
+                    if _hmac_sha256_hex_matches(secret=secret, message=compact, signature_header=sig):
+                        return True
+        except Exception:
+            pass
+        # 3) Старый вариант: "{unix}." + сырое тело (совместимость).
+        if has_ts:
+            for prefix in (f"{raw_ts_header}.", f"{ts_norm}." if ts_norm is not None else None):
+                if prefix is None:
+                    continue
+                msg = prefix.encode("utf-8") + body
+                if _hmac_sha256_hex_matches(secret=secret, message=msg, signature_header=sig):
                     return True
-    except Exception:
-        pass
-    # 3) Старый вариант: "{unix}." + сырое тело (совместимость).
-    if has_ts:
-        for prefix in (f"{raw_ts_header}.", f"{ts_norm}." if ts_norm is not None else None):
-            if prefix is None:
-                continue
-            msg = prefix.encode("utf-8") + body
-            if _hmac_sha256_hex_matches(secret=secret, message=msg, signature_header=sig):
-                return True
     return False
 
 
