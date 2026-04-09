@@ -112,6 +112,23 @@ class RemnawaveWebhookSignatureTests(unittest.TestCase):
             )
         )
 
+    def test_signature_iso_timestamp_does_not_trigger_ttl(self) -> None:
+        """Как у Remnawave: ISO в заголовке — время payload, не anti-replay; TTL к нему не применяем."""
+        body = b'{"scope":"user","event":"user.created"}'
+        digest = hmac.new(
+            _SettingsStub.remnawave_webhook_secret.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertTrue(
+            verify_remnawave_signature(
+                body=body,
+                ts_header="2020-01-01T00:00:00.000Z",
+                signature_header=digest,
+                settings=_SettingsStub(),  # type: ignore[arg-type]
+            )
+        )
+
     def test_signature_empty_secret(self) -> None:
         self.assertFalse(
             verify_remnawave_signature(
