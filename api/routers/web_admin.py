@@ -406,23 +406,25 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
       align-items: center;
       gap: 0.75rem;
       padding: 0.85rem 1rem 0.95rem;
+      backdrop-filter: blur(7px) saturate(1.08);
+      -webkit-backdrop-filter: blur(7px) saturate(1.08);
       animation: remna-toast-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
     }}
     .remna-toast.remna-toast--out {{ animation: remna-toast-out 0.32s ease-in forwards; }}
     .remna-toast--success {{
-      background: color-mix(in oklab, #22c55e 14%, var(--b1));
+      background: color-mix(in oklab, #22c55e 33%, transparent);
       border: 1px solid color-mix(in oklab, #22c55e 42%, transparent);
     }}
     .remna-toast--error {{
-      background: color-mix(in oklab, #ef4444 14%, var(--b1));
+      background: color-mix(in oklab, #ef4444 33%, transparent);
       border: 1px solid color-mix(in oklab, #ef4444 38%, transparent);
     }}
     .remna-toast--warning {{
-      background: color-mix(in oklab, #eab308 16%, var(--b1));
+      background: color-mix(in oklab, #eab308 33%, transparent);
       border: 1px solid color-mix(in oklab, #ca8a04 35%, transparent);
     }}
     .remna-toast--info {{
-      background: color-mix(in oklab, var(--p) 12%, var(--b1));
+      background: color-mix(in oklab, var(--p) 33%, transparent);
       border: 1px solid color-mix(in oklab, var(--p) 35%, transparent);
     }}
     .remna-toast__icon {{
