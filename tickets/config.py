@@ -25,6 +25,7 @@ class TicketsConfig:
     support_group_id: int = 0
     reminder_hours: int = 6
     auto_close_days: int = 3
+    media_max_mb: int = 50
     admin_ids: list[int] = field(default_factory=list)
 
     @classmethod
@@ -41,12 +42,14 @@ class TicketsConfig:
         support_group_id = _int_env("SUPPORT_GROUP_ID", 0)
         reminder_hours = _int_env("REMINDER_HOURS", 6)
         auto_close_days = _int_env("AUTO_CLOSE_DAYS", 3)
+        media_max_mb = _int_env("TICKETS_MEDIA_MAX_MB", 50)
         admin_ids = _parse_int_csv(os.getenv("ADMIN_IDS"))
         return cls(
             bot_token=(os.getenv("TICKETS_BOT_TOKEN", "") or "").strip(),
             support_group_id=support_group_id,
             reminder_hours=reminder_hours,
             auto_close_days=auto_close_days,
+            media_max_mb=max(1, media_max_mb),
             admin_ids=admin_ids,
         )
 

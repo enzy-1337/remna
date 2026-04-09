@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -18,7 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from shared.database import get_session_factory
-from shared.tickets_db_compat import ticket_messages_has_photo_file_id_column
+from shared.tickets_db_compat import (
+    ticket_messages_has_photo_file_id_column,
+    ticket_messages_has_video_file_id_column,
+)
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
@@ -58,11 +61,30 @@ def _to_iso(dt: Any) -> str | None:
     return str(dt)
 
 
-def _ticket_message_json(m: Any, has_photo: bool) -> dict[str, Any]:
+def _ticket_message_json(m: Any, has_photo: bool, has_video: bool) -> dict[str, Any]:
     d = {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
     if not has_photo:
         d["photo_file_id"] = None
+    if not has_video:
+        d["video_file_id"] = None
     return d
+
+
+def _tg_media_mime(path: str, *, is_video: bool) -> str:
+    p = (path or "").lower()
+    if is_video:
+        if p.endswith(".webm"):
+            return "video/webm"
+        if p.endswith(".mov"):
+            return "video/quicktime"
+        return "video/mp4"
+    if p.endswith(".png"):
+        return "image/png"
+    if p.endswith(".webp"):
+        return "image/webp"
+    if p.endswith(".gif"):
+        return "image/gif"
+    return "image/jpeg"
 
 
 class TicketReplyIn(BaseModel):
@@ -229,9 +251,14 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
         has_photo = await ticket_messages_has_photo_file_id_column(session)
+        has_video = await ticket_messages_has_video_file_id_column(session)
         msg_cols = (
-            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id"
+            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id"
+            if (has_photo and has_video)
+            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id"
             if has_photo
+            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,video_file_id"
+            if has_video
             else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal"
         )
         msgs = (
@@ -299,24 +326,13 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
     return {
         "ticket": {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()},
         "messages": [
-            _ticket_message_json(m, has_photo)
+            _ticket_message_json(m, has_photo, has_video)
             for m in msgs
         ],
         "user": user_info,
         "user_subscription": user_subscription,
         "last_cancelled_subscription_id": last_cancelled_sub_id,
     }
-
-
-def _tg_photo_mime(path: str) -> str:
-    p = (path or "").lower()
-    if p.endswith(".png"):
-        return "image/png"
-    if p.endswith(".webp"):
-        return "image/webp"
-    if p.endswith(".gif"):
-        return "image/gif"
-    return "image/jpeg"
 
 
 @router.get("/tickets/{ticket_id}/messages/{msg_id}/photo")
@@ -347,7 +363,37 @@ async def api_ticket_message_photo(request: Request, ticket_id: int, msg_id: int
     async with httpx.AsyncClient(timeout=60.0) as client:
         r = await client.get(url)
         r.raise_for_status()
-        return Response(content=r.content, media_type=_tg_photo_mime(fp))
+        return Response(content=r.content, media_type=_tg_media_mime(fp, is_video=False))
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/video")
+async def api_ticket_message_video(request: Request, ticket_id: int, msg_id: int) -> Response:
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        if not await ticket_messages_has_video_file_id_column(session):
+            raise HTTPException(status_code=404, detail="Video not available")
+        row = (
+            await session.execute(
+                text("SELECT video_file_id FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+                {"mid": msg_id, "tid": ticket_id},
+            )
+        ).mappings().first()
+    if not row or not row.get("video_file_id"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    fid = str(row["video_file_id"])
+    async with Bot(token=tok) as bot:
+        f = await bot.get_file(fid)
+        fp = f.file_path
+        if not fp:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+    url = f"https://api.telegram.org/file/bot{tok}/{fp}"
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(content=r.content, media_type=_tg_media_mime(fp, is_video=True))
 
 
 @router.post("/tickets/{ticket_id}/reply")
@@ -440,6 +486,155 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                 )
         finally:
             await bot.session.close()
+    return {"ok": True}
+
+
+@router.post("/tickets/{ticket_id}/reply-media")
+async def api_ticket_reply_media(
+    request: Request,
+    ticket_id: int,
+    text_value: str = Form(default=""),
+    is_internal: bool = Form(default=False),
+    file: UploadFile = File(...),
+) -> dict:
+    _require_api_login(request)
+    txt = (text_value or "").strip()
+    file_data = await file.read()
+    size_limit = int(tickets_config.media_max_mb) * 1024 * 1024
+    if not file_data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(file_data) > size_limit:
+        raise HTTPException(status_code=400, detail=f"File too large (max {tickets_config.media_max_mb} MB)")
+    ctype = (file.content_type or "").lower()
+    is_photo = ctype.startswith("image/")
+    is_video = ctype.startswith("video/")
+    if not (is_photo or is_video):
+        raise HTTPException(status_code=400, detail="Only photo/video supported")
+
+    async with await _session() as session:
+        t = (
+            await session.execute(
+                text("SELECT id,status,topic_id,telegram_user_id FROM tickets WHERE id=:tid"),
+                {"tid": ticket_id},
+            )
+        ).mappings().first()
+        if t is None:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if str(t["status"]) == "closed":
+            raise HTTPException(status_code=400, detail="Ticket is closed")
+        wauth = request.session.get("wauth") or {}
+        admin_tg = int(wauth.get("telegram_id") or 0)
+        admin_uid = None
+        if admin_tg:
+            u = (
+                await session.execute(
+                    text("SELECT id FROM users WHERE telegram_id=:tg LIMIT 1"),
+                    {"tg": admin_tg},
+                )
+            ).first()
+            admin_uid = int(u[0]) if u else None
+        now = datetime.now(timezone.utc)
+        media_text = txt or ("📷 [Фото]" if is_photo else "🎬 [Видео]")
+        label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
+        photo_fid: str | None = None
+        video_fid: str | None = None
+        async with Bot(token=tickets_config.bot_token) as bot:
+            if is_photo:
+                sent_user = await bot.send_photo(chat_id=int(t["telegram_user_id"]), photo=file_data, caption=txt[:1024] or None)
+                photo_fid = sent_user.photo[-1].file_id if sent_user.photo else None
+            else:
+                sent_user = await bot.send_video(chat_id=int(t["telegram_user_id"]), video=file_data, caption=txt[:1024] or None)
+                video_fid = sent_user.video.file_id if sent_user.video else None
+            topic_id = int(t["topic_id"] or 0)
+            if topic_id:
+                topic_caption = f"<b>💬 Ответ администратора</b> — {label}\n\n<blockquote>{html.escape(media_text)}</blockquote>"
+                if photo_fid:
+                    await bot.send_photo(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        photo=photo_fid,
+                        caption=topic_caption[:1024],
+                        parse_mode=ParseMode.HTML,
+                    )
+                elif video_fid:
+                    await bot.send_video(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        video=video_fid,
+                        caption=topic_caption[:1024],
+                        parse_mode=ParseMode.HTML,
+                    )
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        has_video = await ticket_messages_has_video_file_id_column(session)
+        if has_photo and has_video:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,:internal,:photo,:video)
+                    """
+                ),
+                {
+                    "tid": ticket_id,
+                    "sid": admin_uid,
+                    "stg": admin_tg or None,
+                    "txt": media_text,
+                    "now": now,
+                    "internal": bool(is_internal),
+                    "photo": photo_fid,
+                    "video": video_fid,
+                },
+            )
+        elif has_photo:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,:internal,:photo)
+                    """
+                ),
+                {
+                    "tid": ticket_id,
+                    "sid": admin_uid,
+                    "stg": admin_tg or None,
+                    "txt": media_text,
+                    "now": now,
+                    "internal": bool(is_internal),
+                    "photo": photo_fid,
+                },
+            )
+        else:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,:internal)
+                    """
+                ),
+                {
+                    "tid": ticket_id,
+                    "sid": admin_uid,
+                    "stg": admin_tg or None,
+                    "txt": media_text,
+                    "now": now,
+                    "internal": bool(is_internal),
+                },
+            )
+        await session.execute(
+            text(
+                """
+                UPDATE tickets
+                SET status = CASE WHEN status='open' THEN 'in_progress' ELSE status END,
+                    assigned_admin_id = COALESCE(:aid, assigned_admin_id),
+                    telegram_assigned_admin_id = COALESCE(:atg, telegram_assigned_admin_id),
+                    updated_at=:now, last_activity=:now
+                WHERE id=:tid
+                """
+            ),
+            {"aid": admin_uid, "atg": admin_tg or None, "now": now, "tid": ticket_id},
+        )
+        await session.commit()
+    _invalidate_tickets_list_cache()
     return {"ok": True}
 
 

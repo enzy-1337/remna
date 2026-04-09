@@ -35,6 +35,12 @@ from tickets.config import config
 router = Router(name="tickets_user")
 
 
+def _within_media_limit(size_bytes: int | None) -> bool:
+    if not size_bytes:
+        return True
+    return size_bytes <= int(config.media_max_mb) * 1024 * 1024
+
+
 def _status_emoji(status: str) -> str:
     st = (status or "").lower()
     if st == "open":
@@ -407,6 +413,15 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         return
 
     photo_fid: str | None = message.photo[-1].file_id if message.photo else None
+    video_fid: str | None = message.video.file_id if message.video else None
+    media_size = None
+    if message.photo:
+        media_size = int(message.photo[-1].file_size or 0)
+    elif message.video:
+        media_size = int(message.video.file_size or 0)
+    if (photo_fid or video_fid) and not _within_media_limit(media_size):
+        await message.answer(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
+        return
     await add_ticket_message(
         session,
         ticket_id=active_id,
@@ -416,6 +431,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         text_body=txt,
         is_internal=False,
         photo_file_id=photo_fid,
+        video_file_id=video_fid,
     )
     await bump_ticket_activity(session, ticket_id=active_id, status_to_in_progress=False)
 
@@ -438,6 +454,14 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
                 chat_id=config.support_group_id,
                 message_thread_id=topic_id,
                 photo=message.photo[-1].file_id,
+                caption=topic_text[:1024],
+                parse_mode="HTML",
+            )
+        elif message.video:
+            await message.bot.send_video(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                video=message.video.file_id,
                 caption=topic_text[:1024],
                 parse_mode="HTML",
             )
@@ -464,5 +488,10 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
             f"{txt}"
             + (f"\n\n<a href=\"{deep}\">Ответить</a>" if deep else "")
         )
-        await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)
+        if message.photo:
+            await message.bot.send_photo(chat_id=admin_tg, photo=message.photo[-1].file_id, caption=dm)
+        elif message.video:
+            await message.bot.send_video(chat_id=admin_tg, video=message.video.file_id, caption=dm)
+        else:
+            await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)
 

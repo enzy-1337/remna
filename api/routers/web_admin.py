@@ -2042,8 +2042,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             admin_opts.append({"db_id": int(u.id) if u else None, "tg_id": tg_id, "label": label})
     admins_json = json.dumps(admin_opts, ensure_ascii=False)
     body = f"""
-    <div class="grid gap-4 lg:grid-cols-3">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-1">
+    <div class="grid gap-4 lg:grid-cols-3 items-start">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-1 self-start">
         <div class="card-body gap-3">
           <h2 class="card-title text-2xl"><i class="fa-solid fa-ticket text-primary mr-2" aria-hidden="true"></i>Тикет #{ticket_id}</h2>
           <div id="tk-meta" class="text-sm opacity-80">Загрузка...</div>
@@ -2063,23 +2063,38 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           </div>
         </div>
       </div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-2">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-2 self-start">
         <div class="card-body gap-3">
           <h3 class="card-title text-xl"><i class="fa-solid fa-comments text-primary mr-2" aria-hidden="true"></i>Диалог</h3>
-          <div id="tk-chat" class="min-h-[360px] max-h-[62vh] overflow-y-auto rounded-xl border border-base-content/10 bg-base-200/40 p-3 space-y-2"></div>
+          <div id="tk-chat" class="max-h-[62vh] overflow-y-auto rounded-xl border border-base-content/10 bg-base-200/40 p-3 space-y-2"></div>
           <div id="tk-compose" class="grid gap-2">
-            <textarea id="tk-text" class="textarea textarea-bordered h-28" placeholder="Введите ответ пользователю или внутреннюю заметку"></textarea>
-            <div class="flex flex-wrap gap-2">
-              <button id="tk-send-reply" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить ответ</button>
-              <button id="tk-send-note" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i>Добавить заметку</button>
+            <div class="flex items-start gap-2">
+              <textarea id="tk-text" class="textarea textarea-bordered min-h-[44px] h-[44px] max-h-56 resize-none flex-1" placeholder="Введите ответ пользователю или заметку (Enter = отправить, Shift+Enter = новая строка)"></textarea>
+              <input id="tk-file-input" type="file" accept="image/*,video/*" class="hidden"/>
+              <div class="flex flex-col gap-2">
+                <button id="tk-send-reply" class="btn btn-primary btn-sm btn-square h-10 min-h-10" title="Отправить ответ"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
+                <button id="tk-send-note" class="btn btn-outline btn-sm btn-square h-10 min-h-10" title="Добавить внутреннюю заметку"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i></button>
+                <button id="tk-attach" class="btn btn-ghost btn-sm btn-square h-10 min-h-10" title="Прикрепить фото/видео"><i class="fa-solid fa-paperclip" aria-hidden="true"></i></button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
     <div id="tk-photo-lb" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6 cursor-zoom-out" role="dialog" aria-modal="true" aria-label="Просмотр вложения">
-      <img id="tk-photo-lb-img" src="" alt="" class="max-h-[90vh] max-w-[min(95vw,1280px)] w-auto h-auto object-contain rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" decoding="async"/>
+      <a id="tk-media-download" href="#" download class="absolute top-5 right-5 btn btn-circle btn-sm btn-ghost text-white/90 hover:text-white" title="Скачать"><i class="fa-solid fa-download"></i></a>
+      <img id="tk-photo-lb-img" src="" alt="" class="hidden max-h-[90vh] max-w-[min(95vw,1280px)] w-auto h-auto object-contain rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" decoding="async"/>
+      <video id="tk-photo-lb-video" class="hidden max-h-[90vh] max-w-[min(95vw,1280px)] rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" controls playsinline></video>
     </div>
+    <style>
+    .tk-msg-enter {{
+      animation: tkMsgIn .25s ease-out both;
+    }}
+    @keyframes tkMsgIn {{
+      from {{ opacity: .0; transform: translateY(6px) scale(.99); }}
+      to {{ opacity: 1; transform: translateY(0) scale(1); }}
+    }}
+    </style>
     <script>
     (function(){{
       var ticketId={ticket_id};
@@ -2090,7 +2105,10 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       var chat=document.getElementById('tk-chat');
       var lb=document.getElementById('tk-photo-lb');
       var lbImg=document.getElementById('tk-photo-lb-img');
+      var lbVideo=document.getElementById('tk-photo-lb-video');
+      var mediaDownload=document.getElementById('tk-media-download');
       var txt=document.getElementById('tk-text');
+      var fileInput=document.getElementById('tk-file-input');
       var assign=document.getElementById('tk-assign');
       var compose=document.getElementById('tk-compose');
       var model=null;
@@ -2107,7 +2125,9 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           String(msgs.length),
           String(last&&last.id||''),
           String(last&&last.created_at||''),
-          String(last&&last.text||'')
+          String(last&&last.text||''),
+          String(last&&last.photo_file_id||''),
+          String(last&&last.video_file_id||'')
         ].join('|');
       }}
       function initAssign() {{
@@ -2207,12 +2227,21 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
           var row=left?'justify-start':'justify-end';
           var who=note?'Заметка':(left?'Пользователь':'Администратор');
+          var mediaHtml='';
+          if(m.photo_file_id){{
+            var psrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/photo';
+            mediaHtml+='<div class="mt-2 relative"><img src="'+psrc+'" alt="" title="Нажмите, чтобы открыть крупно" data-kind="image" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/><a href="'+psrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
+          }}
+          if(m.video_file_id){{
+            var vsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video';
+            mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
+          }}
           return ''
             +'<div class="flex w-full '+row+'">'
-            +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+'">'
+            +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+' tk-msg-enter">'
             +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
             +'<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'
-            +(m.photo_file_id?'<div class="mt-2"><img src="/api/tickets/'+ticketId+'/messages/'+m.id+'/photo" alt="" title="Нажмите, чтобы открыть крупно" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/></div>':'')
+            +mediaHtml
             +'</div></div>';
         }}).join('');
         if(shouldStickBottom) chat.scrollTop=chat.scrollHeight;
@@ -2220,21 +2249,33 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       function closePhotoLb() {{
         if(!lb) return;
         lb.classList.add('hidden');
-        if(lbImg) lbImg.removeAttribute('src');
+        if(lbImg) {{ lbImg.removeAttribute('src'); lbImg.classList.add('hidden'); }}
+        if(lbVideo) {{ lbVideo.pause(); lbVideo.removeAttribute('src'); lbVideo.classList.add('hidden'); }}
+        if(mediaDownload) mediaDownload.setAttribute('href', '#');
         document.body.classList.remove('overflow-hidden');
       }}
-      function openPhotoLb(src) {{
-        if(!lb||!lbImg||!src) return;
-        lbImg.src=src;
+      function openPhotoLb(src, kind) {{
+        if(!lb||!src) return;
+        if(lbImg) lbImg.classList.add('hidden');
+        if(lbVideo) lbVideo.classList.add('hidden');
+        if(kind==='video' && lbVideo){{
+          lbVideo.src=src;
+          lbVideo.classList.remove('hidden');
+        }} else if(lbImg) {{
+          lbImg.src=src;
+          lbImg.classList.remove('hidden');
+        }}
+        if(mediaDownload) mediaDownload.setAttribute('href', src);
         lb.classList.remove('hidden');
         document.body.classList.add('overflow-hidden');
       }}
-      if(lb&&lbImg){{
+      if(lb){{
         lb.addEventListener('click', function(e) {{
-          if(e.target===lbImg) return;
+          if(e.target===lbImg || e.target===lbVideo || e.target===mediaDownload) return;
           closePhotoLb();
         }});
-        lbImg.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+        if(lbImg) lbImg.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+        if(lbVideo) lbVideo.addEventListener('click', function(e) {{ e.stopPropagation(); }});
       }}
       document.addEventListener('keydown', function(e) {{
         if(e.key!=='Escape') return;
@@ -2247,7 +2288,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var img=t.closest('img.tk-ticket-thumb');
           if(!img||!chat.contains(img)) return;
           e.preventDefault();
-          openPhotoLb(img.getAttribute('src')||'');
+          openPhotoLb(img.getAttribute('src')||'', img.getAttribute('data-kind')==='video'?'video':'image');
         }});
       }}
       async function load() {{
@@ -2285,6 +2326,22 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         if(!r.ok) throw new Error('HTTP '+r.status);
         return await r.json();
       }}
+      async function sendMedia(isInternal) {{
+        var f=fileInput&&fileInput.files&&fileInput.files[0];
+        if(!f) return;
+        var fd=new FormData();
+        fd.append('file', f);
+        fd.append('text_value', (txt.value||'').trim());
+        fd.append('is_internal', isInternal ? 'true' : 'false');
+        var r=await fetch('/api/tickets/'+ticketId+'/reply-media',{{method:'POST',credentials:'include',body:fd}});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        fileInput.value='';
+      }}
+      function autosizeText() {{
+        if(!txt) return;
+        txt.style.height='44px';
+        txt.style.height=Math.min(txt.scrollHeight, 224)+'px';
+      }}
       document.getElementById('tk-send-reply').addEventListener('click', async function(){{
         var v=(txt.value||'').trim(); if(!v) return;
         try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{alert('Ошибка отправки ответа');}}
@@ -2301,13 +2358,48 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
         try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{alert('Не удалось сохранить назначение');}}
       }});
+      if(txt){{
+        txt.addEventListener('input', autosizeText);
+        txt.addEventListener('keydown', async function(e){{
+          if(e.key!=='Enter' || e.shiftKey) return;
+          e.preventDefault();
+          var v=(txt.value||'').trim();
+          if(!v) return;
+          try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; autosizeText(); await load();}}catch(_e){{}}
+        }});
+        autosizeText();
+      }}
+      var attachBtn=document.getElementById('tk-attach');
+      if(attachBtn&&fileInput){{
+        attachBtn.addEventListener('click', function(){{ fileInput.click(); }});
+        fileInput.addEventListener('change', async function(){{
+          if(!fileInput.files||!fileInput.files.length) return;
+          try{{await sendMedia(false); await load();}}catch(e){{alert('Ошибка отправки файла');}}
+        }});
+      }}
       var liveTimer=null;
+      var notifyInited=false;
+      var lastTicketCount=0;
+      async function loadTicketCount(){{
+        try{{
+          var r=await fetch('/api/tickets?status=open&limit=1',{{credentials:'include'}});
+          if(!r.ok) return;
+          var d=await r.json();
+          var c=Number(d&&d.count||0);
+          if(notifyInited && c>lastTicketCount && document.hidden && 'Notification' in window && Notification.permission==='granted'){{
+            new Notification('Новый тикет',{{body:'Поступил новый тикет в поддержку'}});
+          }}
+          lastTicketCount=c;
+          notifyInited=true;
+        }} catch(_e) {{}}
+      }}
       function startLive(){{
         if(liveTimer)clearInterval(liveTimer);
         liveTimer=setInterval(function(){{
           if(document.hidden)return;
           load();
-        }},3500);
+          loadTicketCount();
+        }},2500);
       }}
       document.addEventListener('visibilitychange', function(){{
         if(document.hidden)return;
@@ -2316,7 +2408,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       window.addEventListener('beforeunload', function(){{
         if(liveTimer)clearInterval(liveTimer);
       }});
-      initAssign(); load(); startLive();
+      if('Notification' in window && Notification.permission==='default'){{ Notification.requestPermission(); }}
+      initAssign(); load(); loadTicketCount(); startLive();
     }})();
     </script>
     """

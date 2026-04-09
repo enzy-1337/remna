@@ -36,6 +36,12 @@ def _is_admin(telegram_id: int | None) -> bool:
     return telegram_id in (config.admin_ids or [])
 
 
+def _within_media_limit(size_bytes: int | None) -> bool:
+    if not size_bytes:
+        return True
+    return size_bytes <= int(config.media_max_mb) * 1024 * 1024
+
+
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_admin_entry(
     message: Message,
@@ -209,7 +215,7 @@ async def cb_reply_stub(cq: CallbackQuery) -> None:
     await cq.answer("Откройте тикет-бота для ответа.", show_alert=True)
 
 
-@router.message(TicketStates.waiting_admin_reply_text, F.text)
+@router.message(TicketStates.waiting_admin_reply_text)
 async def msg_admin_reply(
     message: Message,
     session: AsyncSession,
@@ -230,9 +236,24 @@ async def msg_admin_reply(
         await message.answer("Тикет не выбран.")
         return
 
-    txt = (message.text or "").strip()
-    if not txt:
+    txt = (message.text or message.caption or "").strip()
+    photo_fid: str | None = message.photo[-1].file_id if message.photo else None
+    video_fid: str | None = message.video.file_id if message.video else None
+    media_size = None
+    if message.photo:
+        media_size = int(message.photo[-1].file_size or 0)
+    elif message.video:
+        media_size = int(message.video.file_size or 0)
+    if (photo_fid or video_fid) and not _within_media_limit(media_size):
+        await message.answer(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
+    if not txt:
+        if message.photo:
+            txt = "📷 [Фото]"
+        elif message.video:
+            txt = "🎬 [Видео]"
+        else:
+            return
     t = await get_ticket_brief(session, ticket_id=ticket_id)
     if not t:
         await state.clear()
@@ -259,6 +280,8 @@ async def msg_admin_reply(
         sender_telegram_id=int(message.from_user.id),
         text_body=txt,
         is_internal=False,
+        photo_file_id=photo_fid,
+        video_file_id=video_fid,
     )
     await bump_ticket_activity(session, ticket_id=ticket_id, status_to_in_progress=True)
 
@@ -274,7 +297,12 @@ async def msg_admin_reply(
             f"{html.escape(txt)}\n\n"
             "С уважением, Flux Network"
         )
-        await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
+        if photo_fid:
+            await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)
+        elif video_fid:
+            await message.bot.send_video(chat_id=user_tg_id, video=video_fid, caption=body)
+        else:
+            await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
 
     # Копия в топик группы.
     try:
@@ -284,18 +312,35 @@ async def msg_admin_reply(
     if topic_id:
         admin_name = (message.from_user.full_name or "Администратор").strip()
         cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n<blockquote>{html.escape(txt)}</blockquote>"
-        await message.bot.send_message(
-            chat_id=config.support_group_id,
-            message_thread_id=topic_id,
-            text=cap,
-            disable_web_page_preview=True,
-        )
+        if photo_fid:
+            await message.bot.send_photo(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                photo=photo_fid,
+                caption=cap[:1024],
+                parse_mode="HTML",
+            )
+        elif video_fid:
+            await message.bot.send_video(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                video=video_fid,
+                caption=cap[:1024],
+                parse_mode="HTML",
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                text=cap,
+                disable_web_page_preview=True,
+            )
 
     await state.clear()
     await message.answer(f"✅ Ответ отправлен пользователю (тикет #{ticket_id}).")
 
 
-@router.message(F.chat.id == config.support_group_id, F.message_thread_id, F.text)
+@router.message(F.chat.id == config.support_group_id, F.message_thread_id)
 async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) -> None:
     if message.from_user is None or message.from_user.is_bot:
         return
@@ -312,9 +357,24 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         return
     if str(t.get("status") or "") == "closed":
         return
-    txt = (message.text or "").strip()
-    if not txt:
+    txt = (message.text or message.caption or "").strip()
+    photo_fid: str | None = message.photo[-1].file_id if message.photo else None
+    video_fid: str | None = message.video.file_id if message.video else None
+    media_size = None
+    if message.photo:
+        media_size = int(message.photo[-1].file_size or 0)
+    elif message.video:
+        media_size = int(message.video.file_size or 0)
+    if (photo_fid or video_fid) and not _within_media_limit(media_size):
+        await message.reply(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
+    if not txt:
+        if photo_fid:
+            txt = "📷 [Фото]"
+        elif video_fid:
+            txt = "🎬 [Видео]"
+        else:
+            return
     db_admin = await ensure_db_user(session, message.from_user)
     await assign_ticket_admin(
         session,
@@ -330,6 +390,8 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         sender_telegram_id=int(message.from_user.id),
         text_body=txt,
         is_internal=False,
+        photo_file_id=photo_fid,
+        video_file_id=video_fid,
     )
     await bump_ticket_activity(session, ticket_id=int(t["id"]), status_to_in_progress=True)
     try:
@@ -343,7 +405,12 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
             "С уважением, Flux Network"
         )
         try:
-            await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
+            if photo_fid:
+                await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)
+            elif video_fid:
+                await message.bot.send_video(chat_id=user_tg_id, video=video_fid, caption=body)
+            else:
+                await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
         except Exception:
             pass
 
