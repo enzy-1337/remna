@@ -177,7 +177,7 @@ async def webhook_remnawave(request: Request, background_tasks: BackgroundTasks)
         raise HTTPException(status_code=400, detail="invalid json")
 
     event_id = event_id_from_payload(payload, fallback=str(uuid4()))
-    event_type = str(payload.get("event_type") or "unknown")
+    event_type = str(payload.get("event") or payload.get("event_type") or "unknown")
 
     factory = get_session_factory()
     async with factory() as session:

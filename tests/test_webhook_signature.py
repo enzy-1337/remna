@@ -19,6 +19,24 @@ class _EmptySecretSettingsStub:
 
 
 class RemnawaveWebhookSignatureTests(unittest.TestCase):
+    def test_signature_valid_body_only_remna_doc_style(self) -> None:
+        """Как в docs.rw: HMAC-SHA256(secret, raw_body), без префикса timestamp."""
+        body = b'{"scope":"service","event":"service.panel_started"}'
+        ts = str(int(datetime.now(timezone.utc).timestamp()))
+        digest = hmac.new(
+            _SettingsStub.remnawave_webhook_secret.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertTrue(
+            verify_remnawave_signature(
+                body=body,
+                ts_header=ts,
+                signature_header=digest,
+                settings=_SettingsStub(),  # type: ignore[arg-type]
+            )
+        )
+
     def test_signature_valid(self) -> None:
         body = b'{"event_id":"abc"}'
         ts = str(int(datetime.now(timezone.utc).timestamp()))
