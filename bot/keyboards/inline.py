@@ -94,7 +94,6 @@ def topup_invoice_keyboard(pay_url: str, *, txn_id: int) -> InlineKeyboardMarkup
         )
     )
     builder.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
-    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"))
     return builder.as_markup()
 
 

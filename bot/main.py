@@ -21,6 +21,7 @@ if str(_ROOT) not in sys.path:
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
@@ -82,6 +83,12 @@ async def main() -> None:
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
+    )
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(command="start", description="Перезапустить бота"),
+        ],
+        scope=BotCommandScopeAllPrivateChats(),
     )
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)

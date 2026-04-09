@@ -26,7 +26,6 @@ from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
 from sqlalchemy import case
-from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
@@ -41,7 +40,6 @@ from shared.integrations.rw_traffic import (
     traffic_limit_gb_for_display,
 )
 from shared.integrations.rw_hwid_devices import format_rw_device_datetime_local, hwid_device_title, normalize_hwid_devices_list
-from shared.models.device import Device
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
@@ -289,19 +287,30 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
       display: none;
       align-items: center;
       justify-content: center;
-      background: color-mix(in oklab, var(--b1) 72%, transparent);
-      backdrop-filter: blur(2px);
+      background: color-mix(in oklab, var(--b1) 84%, var(--bc) 16%);
+      backdrop-filter: blur(4px);
     }}
     .remna-loading-overlay.is-active {{ display: flex; }}
     .remna-loading-box {{
       display: inline-flex;
       align-items: center;
-      gap: .6rem;
-      border: 1px solid color-mix(in oklab, var(--bc) 14%, transparent);
-      background: color-mix(in oklab, var(--b1) 88%, transparent);
+      gap: .75rem;
+      border: 1px solid color-mix(in oklab, var(--bc) 20%, transparent);
+      background: color-mix(in oklab, var(--b1) 92%, transparent);
       border-radius: .9rem;
-      padding: .7rem .9rem;
-      box-shadow: 0 10px 30px rgba(0,0,0,.18);
+      padding: .72rem 1rem;
+      box-shadow: 0 12px 36px rgba(0,0,0,.2);
+    }}
+    .remna-loading-side {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.8rem;
+      height: 1.8rem;
+      border-radius: .6rem;
+      border: 1px solid color-mix(in oklab, var(--bc) 12%, transparent);
+      background: color-mix(in oklab, var(--b3) 74%, transparent);
+      color: color-mix(in oklab, var(--p) 72%, var(--bc) 28%);
     }}
     .remna-spinner {{
       width: 1rem;
@@ -566,8 +575,9 @@ def _layout(
     <div id="remna-toast-host" aria-live="polite"></div>
     <div id="remna-loading-overlay" class="remna-loading-overlay" aria-hidden="true">
       <div class="remna-loading-box">
+        <span class="remna-loading-side" aria-hidden="true"><i class="fa-solid fa-hourglass-half"></i></span>
         <span class="remna-spinner" aria-hidden="true"></span>
-        <span class="text-sm font-medium">Загрузка…</span>
+        <span id="remna-loading-text" class="text-sm font-medium">Загрузка</span>
       </div>
     </div>
     <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
@@ -648,15 +658,29 @@ def _layout(
     };
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncIcon);else syncIcon();
     var remnaLoadOverlay=document.getElementById('remna-loading-overlay');
+    var remnaLoadText=document.getElementById('remna-loading-text');
+    var remnaLoadTimer=null;
+    var remnaLoadTick=0;
+    function remnaLoadSetText(){
+      if(!remnaLoadText)return;
+      var dots='.'.repeat(remnaLoadTick%4);
+      remnaLoadText.textContent='Загрузка'+dots;
+      remnaLoadTick++;
+    }
     window.remnaShowLoading=function(){
       if(!remnaLoadOverlay)return;
       remnaLoadOverlay.classList.add('is-active');
       remnaLoadOverlay.setAttribute('aria-hidden','false');
+      remnaLoadTick=0;
+      remnaLoadSetText();
+      if(remnaLoadTimer)clearInterval(remnaLoadTimer);
+      remnaLoadTimer=setInterval(remnaLoadSetText,350);
     };
     window.remnaHideLoading=function(){
       if(!remnaLoadOverlay)return;
       remnaLoadOverlay.classList.remove('is-active');
       remnaLoadOverlay.setAttribute('aria-hidden','true');
+      if(remnaLoadTimer){clearInterval(remnaLoadTimer);remnaLoadTimer=null;}
     };
     window.addEventListener('pageshow',window.remnaHideLoading);
     window.addEventListener('load',window.remnaHideLoading);
@@ -1249,7 +1273,8 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     elif err == "no_bot_token":
         alert = "<div class='alert alert-error mb-4'><span>BOT_TOKEN не задан — рассылка невозможна.</span></div>"
     body = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg max-w-3xl">
+    <div class="mx-auto flex w-full max-w-5xl justify-center">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-3xl">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
         <p class="text-sm opacity-70">Сообщение уходит всем пользователям из БД (как «Рассылка всем» в боте). В Telegram используется <strong>HTML</strong>, не Markdown: жирный — <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;текст&lt;/b&gt;</code> (закрывающий тег со слэшем: <code class="bg-base-300 px-1 rounded text-xs">&lt;/b&gt;</code>, не второй <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;</code>). Упрощённо: <code class="bg-base-300 px-1 rounded text-xs">**текст**</code> автоматически превращается в жирный; <code class="bg-base-300 px-1 rounded text-xs">__текст__</code> — в подчёркнутый. Также: <code class="bg-base-300 px-1 rounded text-xs">&lt;i&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;a href=&quot;…&quot;&gt;</code>.</p>
@@ -1269,6 +1294,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         </form>
         <div id="bc-prev" class="hidden rounded-xl border border-base-content/10 bg-base-200/50 p-4 text-sm"></div>
       </div>
+    </div>
     </div>
     <script>
     (function(){{
@@ -1768,96 +1794,6 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         subs_rows_total = int(metrics_row.subs_rows_total or 0)
         users_blocked = int(metrics_row.users_blocked or 0)
         topups_24h = int(metrics_row.topups_24h or 0)
-        tx_last_14 = (
-            await session.execute(
-                select(Transaction.created_at, Transaction.amount).where(
-                    Transaction.type == "topup",
-                    Transaction.status == "completed",
-                    Transaction.created_at >= day_start - timedelta(days=13),
-                )
-            )
-        ).all()
-        hour_ht = literal_column(
-            "EXTRACT(hour FROM TIMEZONE('Europe/Moscow', transactions.created_at))::int"
-        )
-        hour_rows_msk = (
-            await session.execute(
-                select(hour_ht, func.count())
-                .where(
-                    Transaction.type == "topup",
-                    Transaction.status == "completed",
-                    Transaction.created_at >= now - timedelta(days=7),
-                )
-                .group_by(hour_ht)
-            )
-        ).all()
-        hour_hd = literal_column(
-            "EXTRACT(hour FROM TIMEZONE('Europe/Moscow', devices.last_used_at))::int"
-        )
-        hour_dev_rows = (
-            await session.execute(
-                select(hour_hd, func.count())
-                .where(
-                    Device.last_used_at.isnot(None),
-                    Device.last_used_at >= now - timedelta(days=7),
-                )
-                .group_by(hour_hd)
-            )
-        ).all()
-    hour_counts_msk = [0] * 24
-    for hr, cnt in hour_rows_msk:
-        try:
-            h = int(hr)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= h < 24:
-            hour_counts_msk[h] += int(cnt or 0)
-    device_hour_counts = [0] * 24
-    for hr, cnt in hour_dev_rows:
-        try:
-            h = int(hr)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= h < 24:
-            device_hour_counts[h] += int(cnt or 0)
-    by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0"))
-    for created_at, amount in tx_last_14:
-        if created_at is None:
-            continue
-        ca = created_at
-        if ca.tzinfo is None:
-            ca = ca.replace(tzinfo=timezone.utc)
-        by_day[ca.astimezone(_MSK_TZ).date()] += Decimal(amount)
-    today_msk = datetime.now(_MSK_TZ).date()
-    chart_day_labels: list[str] = []
-    chart_day_amounts: list[float] = []
-    for i in range(13, -1, -1):
-        d = today_msk - timedelta(days=i)
-        val = by_day.get(d, Decimal("0"))
-        chart_day_labels.append(d.strftime("%d.%m"))
-        chart_day_amounts.append(float(val))
-    chart_day_labels_json = json.dumps(chart_day_labels)
-    chart_day_amounts_json = json.dumps(chart_day_amounts)
-    settings_dash = get_settings()
-    rw_devices_online: int | None = None
-    rw_dash_err = ""
-    if not settings_dash.remnawave_stub:
-        try:
-            rw_c = RemnaWaveClient(settings_dash)
-            users_rw = await rw_c.list_all_users(page_size=200, max_items=3000)
-            rw_devices_online = sum((extract_connected_devices_from_rw_user(u) or 0) for u in users_rw)
-        except Exception as e:
-            rw_dash_err = str(e)[:160]
-    rw_tile = (
-        f'<p class="text-3xl font-bold text-info">{rw_devices_online}</p>'
-        if rw_devices_online is not None
-        else '<p class="text-sm opacity-60">Недоступно</p>'
-    )
-    if rw_dash_err:
-        rw_tile += f'<p class="text-xs text-error mt-1">{_esc(rw_dash_err)}</p>'
-    chart_labels_json = json.dumps([f"{h:02d}:00" for h in range(24)])
-    chart_topup_json = json.dumps(hour_counts_msk)
-    chart_dev_json = json.dumps(device_hour_counts)
     safe_total = float(total_income or 0)
     safe_month = float(month_income or 0)
     safe_day = float(day_income or 0)
@@ -1924,128 +1860,6 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
           </div>
         </div>
         <p class="text-sm opacity-60">Учитываются только платежи (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
-        <p class="text-sm opacity-70">Суммы по календарным дням (МСК) и распределение пополнений по часам — в одной секции графиков ниже (Chart.js).</p>
-      </div>
-    </div>
-    <div class="mt-4">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
-        <div class="card-body items-center text-center gap-2">
-          <p class="text-sm opacity-60">Подключённых клиентов (сумма по API Remnawave)</p>
-          {rw_tile}
-          <p class="text-xs opacity-50">По полю «онлайн» / активных подключений в карточках пользователей панели</p>
-        </div>
-      </div>
-    </div>
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
-      <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-chart-line text-primary mr-2" aria-hidden="true"></i>Графики: дни и часы (МСК)</h2>
-        <p class="text-sm opacity-60">Одна библиотека Chart.js: столбцы — сумма успешных пополнений по дню (14 календарных дней по МСК); линии — за 7 дней: пополнения по часу суток и активность устройств по <code class="bg-base-300 px-1 rounded text-xs">last_used_at</code> в БД.</p>
-        <h3 class="text-lg font-semibold">Пополнения по дням (₽)</h3>
-        <div class="relative w-full min-h-[220px] rounded-xl border border-base-content/10 bg-base-200/40 p-4">
-          <canvas id="remnaDashDayChart" aria-label="Пополнения по дням"></canvas>
-        </div>
-        <h3 class="text-lg font-semibold mt-4">По часам суток</h3>
-        <div class="relative w-full min-h-[280px] rounded-xl border border-base-content/10 bg-base-200/40 p-4">
-          <canvas id="remnaDashHourChart" aria-label="График по часам"></canvas>
-        </div>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
-        <script>
-        (function() {{
-          var dayLabels = {chart_day_labels_json};
-          var dayAmt = {chart_day_amounts_json};
-          var labels = {chart_labels_json};
-          var topup = {chart_topup_json};
-          var dev = {chart_dev_json};
-          var cs = getComputedStyle(document.documentElement);
-          var fg = cs.getPropertyValue('--bc').trim() || '#e5e7eb';
-          if (typeof Chart !== 'undefined') {{
-            var elD = document.getElementById('remnaDashDayChart');
-            if (elD) {{
-              new Chart(elD, {{
-                type: 'bar',
-                data: {{
-                  labels: dayLabels,
-                  datasets: [{{
-                    label: 'Пополнения (₽)',
-                    data: dayAmt,
-                    backgroundColor: 'rgba(59, 130, 246, 0.45)',
-                    borderColor: 'rgb(59, 130, 246)',
-                    borderWidth: 1
-                  }}]
-                }},
-                options: {{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  plugins: {{ legend: {{ labels: {{ color: fg }} }} }},
-                  scales: {{
-                    x: {{ ticks: {{ color: fg, maxRotation: 45 }}, grid: {{ color: 'rgba(128,128,128,0.12)' }} }},
-                    y: {{ ticks: {{ color: fg }}, grid: {{ color: 'rgba(128,128,128,0.12)' }} }}
-                  }}
-                }}
-              }});
-            }}
-            var el = document.getElementById('remnaDashHourChart');
-            if (el) {{
-              new Chart(el, {{
-                type: 'line',
-                data: {{
-                  labels: labels,
-                  datasets: [
-                    {{
-                      label: 'Пополнения (шт.)',
-                      data: topup,
-                      borderColor: 'rgb(59, 130, 246)',
-                      backgroundColor: 'rgba(59, 130, 246, 0.12)',
-                      fill: true,
-                      tension: 0.35,
-                      pointRadius: 2,
-                      yAxisID: 'y1'
-                    }},
-                    {{
-                      label: 'Активность устройств (событий)',
-                      data: dev,
-                      borderColor: 'rgb(34, 197, 94)',
-                      backgroundColor: 'rgba(34, 197, 94, 0.08)',
-                      fill: true,
-                      tension: 0.35,
-                      pointRadius: 2,
-                      yAxisID: 'y2'
-                    }}
-                  ]
-                }},
-                options: {{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  interaction: {{ mode: 'index', intersect: false }},
-                  plugins: {{
-                    legend: {{ labels: {{ color: fg }} }}
-                  }},
-                  scales: {{
-                    x: {{
-                      ticks: {{ color: fg, maxRotation: 0, autoSkip: true }},
-                      grid: {{ color: 'rgba(128,128,128,0.15)' }}
-                    }},
-                    y1: {{
-                      type: 'linear',
-                      position: 'left',
-                      title: {{ display: true, text: 'Пополнения', color: fg }},
-                      ticks: {{ color: fg }},
-                      grid: {{ color: 'rgba(128,128,128,0.12)' }}
-                    }},
-                    y2: {{
-                      type: 'linear',
-                      position: 'right',
-                      title: {{ display: true, text: 'Устройства', color: fg }},
-                      ticks: {{ color: fg }},
-                      grid: {{ drawOnChartArea: false }}
-                    }}
-                  }}
-                }}
-              }});
-            }}
-          }}
-        }})();
-        </script>
       </div>
     </div>
     """
@@ -2435,7 +2249,22 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
         try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{alert('Не удалось сохранить назначение');}}
       }});
-      initAssign(); load();
+      var liveTimer=null;
+      function startLive(){
+        if(liveTimer)clearInterval(liveTimer);
+        liveTimer=setInterval(function(){
+          if(document.hidden)return;
+          load();
+        },3500);
+      }
+      document.addEventListener('visibilitychange', function(){
+        if(document.hidden)return;
+        load();
+      });
+      window.addEventListener('beforeunload', function(){
+        if(liveTimer)clearInterval(liveTimer);
+      });
+      initAssign(); load(); startLive();
     }})();
     </script>
     """

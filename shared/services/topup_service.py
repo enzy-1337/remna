@@ -349,7 +349,6 @@ async def notify_topup_success(
             settings=settings,
             reply_markup={
                 "inline_keyboard": [
-                    [{"text": "🏠 Главное меню", "callback_data": "menu:main"}],
                     [{"text": "💰 Баланс", "callback_data": "menu:balance"}],
                 ]
             },

@@ -15,7 +15,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import desc, distinct, func, select
+from sqlalchemy import String, desc, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -69,19 +69,24 @@ def _is_admin(tg_id: int | None) -> bool:
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     s = get_settings()
     b = InlineKeyboardBuilder()
-    # Основные действия
+    b.row(InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:noop"))
     b.row(
         InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
-        InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find"),
+        InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0"),
+    )
+    b.row(InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find"))
+    b.row(InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:noop"))
+    b.row(
+        InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
+        InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
     )
     b.row(
         InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
     )
-    b.row(InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"))
-    b.row(InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0"))
-    if (s.public_site_url or "").strip():
-        b.row(InlineKeyboardButton(text="🌐 Web-admin", callback_data="admin:web"))
+    if not (s.public_site_url or "").strip():
+        # Если web-admin отключён, оставляем понятный маркер без действия.
+        b.row(InlineKeyboardButton(text="🌐 Web-Admin (не настроен)", callback_data="admin:noop"))
     # Опасные действия — отдельно, последней строкой
     b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
@@ -288,6 +293,10 @@ async def cb_admin_subs(
     page, scope, ar = _parse_subs_filters(parts)
     await _render_admin_subs_screen(cq, session, page=page, scope=scope, ar=ar)
 
+
+@router.callback_query(F.data == "admin:noop")
+async def cb_admin_noop(cq: CallbackQuery) -> None:
+    await cq.answer()
 
 
 def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:
@@ -1321,9 +1330,17 @@ async def cb_admin_find_start(
     sent = await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
-            "🔎 " + bold("Поиск по Telegram ID"),
+            "🔎 " + bold("Поиск пользователя"),
             "",
-            plain("Отправьте числом Telegram ID пользователя."),
+            plain("Можно искать по:"),
+            plain("• имени"),
+            plain("• @username"),
+            plain("• Telegram ID"),
+            plain("• ID в боте"),
+            plain("• ID подписки"),
+            plain("• UUID в панели"),
+            "",
+            plain("Отправьте одно значение одним сообщением."),
         ),
         reply_markup=b.as_markup(),
         settings=settings,
@@ -1374,8 +1391,8 @@ async def msg_admin_find_telegram_id(
     last_res = data.get("find_last_result_mid")
 
     raw = (message.text or "").strip()
-    if not raw.isdigit():
-        await message.answer(esc("Нужно целое число (Telegram ID)."))
+    if not raw:
+        await message.answer(esc("Введите значение для поиска."))
         return
 
     if message.bot:
@@ -1387,18 +1404,83 @@ async def msg_admin_find_telegram_id(
             message.bot, message.chat.id, int(last_res) if last_res is not None else None
         )
 
-    tg_id = int(raw)
-    res = await session.execute(select(User).where(User.telegram_id == tg_id))
-    u = res.scalar_one_or_none()
+    typed = raw.strip()
+    typed_username = typed[1:] if typed.startswith("@") else typed
+    q_cf = typed_username.casefold()
+    users: list[User] = []
+    if typed.isdigit():
+        n = int(typed)
+        sub_user_id = (
+            await session.execute(
+                select(Subscription.user_id).where(Subscription.id == n).limit(1)
+            )
+        ).scalar_one_or_none()
+        conds = [User.id == n, User.telegram_id == n]
+        if sub_user_id is not None:
+            conds.append(User.id == int(sub_user_id))
+        users = list(
+            (
+                await session.execute(
+                    select(User).where(or_(*conds)).order_by(desc(User.id)).limit(20)
+                )
+            ).scalars()
+        )
+    else:
+        users = list(
+            (
+                await session.execute(
+                    select(User)
+                    .where(
+                        or_(
+                            func.lower(func.coalesce(User.username, "")).like(f"%{q_cf}%"),
+                            func.lower(func.coalesce(User.first_name, "")).like(f"%{q_cf}%"),
+                            func.lower(func.coalesce(User.last_name, "")).like(f"%{q_cf}%"),
+                            func.lower(func.cast(User.remnawave_uuid, String)).like(f"%{q_cf}%"),
+                        )
+                    )
+                    .order_by(desc(User.id))
+                    .limit(20)
+                )
+            ).scalars()
+        )
     settings = get_settings()
 
-    if u is None:
+    if not users:
         sent = await message.answer(
-            join_lines(plain("Не найден пользователь с ") + code(str(tg_id)), "", plain("/admin"))
+            join_lines(plain("По запросу ничего не найдено: ") + code(typed), "", plain("/admin"))
         )
         await state.update_data(find_last_result_mid=sent.message_id, find_prompt_mid=None)
         await state.set_state(None)
         return
+    if len(users) > 1:
+        b = InlineKeyboardBuilder()
+        for u in users[:8]:
+            nm = (u.first_name or u.username or "?").strip()
+            if len(nm) > 18:
+                nm = nm[:17] + "…"
+            b.row(
+                InlineKeyboardButton(
+                    text=f"👤 #{u.id} {nm}"[:64],
+                    callback_data=f"admin:u:{u.id}",
+                )
+            )
+        b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+        sent = await send_profile_screen(
+            message.bot,
+            chat_id=message.chat.id,
+            caption=join_lines(
+                "🔎 " + bold("Найдено несколько пользователей"),
+                plain("Запрос: ") + code(typed),
+                plain("Выберите нужного из списка ниже."),
+            ),
+            reply_markup=b.as_markup(),
+            settings=settings,
+            delete_message=None,
+        )
+        await state.update_data(find_last_result_mid=sent.message_id, find_prompt_mid=None)
+        await state.set_state(None)
+        return
+    u = users[0]
 
     un = esc(u.username or "—")
     line_user = plain(f"#{u.id} · tg ") + code(str(u.telegram_id))

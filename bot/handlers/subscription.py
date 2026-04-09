@@ -21,6 +21,7 @@ from bot.utils.screen_photo import (
 from shared.config import get_settings
 from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
+from shared.models.plan import Plan
 from shared.subscription_qr import subscription_url_qr_png
 from shared.services.subscription_service import (
     calculate_discounted_plan_price,
@@ -395,11 +396,14 @@ async def cb_renewal_menu(
     if not sub:
         await cq.answer("Нет активной подписки.", show_alert=True)
         return
+    plan = await session.get(Plan, sub.plan_id) if sub.plan_id else None
+    monthly_price = str(plan.price_rub) if plan is not None else "—"
     auto_text = "включено ✅" if sub.auto_renew else "выключено ⏸"
     cap = join_lines(
         "🔄 " + bold("Продление подписки"),
         "",
         plain("Здесь можно продлить подписку или переключить автопродление."),
+        plain("Стоимость продления в месяц: ") + bold(monthly_price) + plain(" ₽"),
         plain("Текущее автопродление: ") + bold(auto_text),
     )
     b = InlineKeyboardBuilder()
