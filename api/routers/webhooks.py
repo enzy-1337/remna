@@ -138,8 +138,8 @@ async def webhook_remnawave(request: Request, background_tasks: BackgroundTasks)
 
     body = await request.body()
     headers = _lower_headers(request)
-    ts_header = headers.get("x-timestamp", "")
-    sig_header = headers.get("x-signature", "")
+    ts_header = headers.get("x-remnawave-timestamp") or headers.get("x-timestamp") or ""
+    sig_header = headers.get("x-remnawave-signature") or headers.get("x-signature") or ""
     signature_ok = verify_remnawave_signature(
         body=body,
         ts_header=ts_header,

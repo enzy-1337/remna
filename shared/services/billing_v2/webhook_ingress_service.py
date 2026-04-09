@@ -49,8 +49,12 @@ def verify_remnawave_signature(
         return False
     payload_to_sign = f"{ts_header}.".encode("utf-8") + body
     digest = hmac.new(secret, payload_to_sign, hashlib.sha256).hexdigest()
-    expected = f"sha256={digest}"
-    return hmac.compare_digest(expected, signature_header.strip())
+    sig = signature_header.strip()
+    expected_prefixed = f"sha256={digest}"
+    if hmac.compare_digest(expected_prefixed, sig):
+        return True
+    # Панель может отдавать только hex без префикса (см. docs.rw webhooks).
+    return hmac.compare_digest(digest, sig)
 
 
 async def store_raw_webhook_event(
