@@ -2285,7 +2285,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         liveTimer=setInterval(function(){{
           if(document.hidden)return;
           load();
-        },3500);
+        }},3500);
       }}
       document.addEventListener('visibilitychange', function(){{
         if(document.hidden)return;
