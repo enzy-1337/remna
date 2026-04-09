@@ -67,15 +67,28 @@ def _is_admin(tg_id: int | None) -> bool:
 
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
-    s = get_settings()
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:noop"))
+    b.row(InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:section:users"))
+    b.row(InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"))
+    b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    return b.as_markup()
+
+
+def _admin_users_section_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
         InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0"),
     )
     b.row(InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find"))
-    b.row(InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:noop"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
+    return b.as_markup()
+
+
+def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
+    s = get_settings()
+    b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
         InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
@@ -85,11 +98,8 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
     )
     if not (s.public_site_url or "").strip():
-        # Если web-admin отключён, оставляем понятный маркер без действия.
-        b.row(InlineKeyboardButton(text="🌐 Web-Admin (не настроен)", callback_data="admin:noop"))
-    # Опасные действия — отдельно, последней строкой
-    b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+        b.row(InlineKeyboardButton(text="ℹ️ Web-Admin не настроен", callback_data="admin:noop"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
     return b.as_markup()
 
 
@@ -297,6 +307,46 @@ async def cb_admin_subs(
 @router.callback_query(F.data == "admin:noop")
 async def cb_admin_noop(cq: CallbackQuery) -> None:
     await cq.answer()
+
+
+@router.callback_query(F.data == "admin:section:users")
+async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "👤 " + bold("Раздел пользователей"),
+            "",
+            plain("Выберите действие."),
+        ),
+        reply_markup=_admin_users_section_keyboard(),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "admin:section:analytics")
+async def cb_admin_section_analytics(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "📊 " + bold("Раздел аналитики"),
+            "",
+            plain("Выберите действие."),
+        ),
+        reply_markup=_admin_analytics_section_keyboard(),
+        settings=get_settings(),
+    )
 
 
 def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:
@@ -1808,16 +1858,14 @@ async def msg_admin_reset_step_telegram_id(
 
 def _broadcast_input_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:panel"))
-    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast_cancel"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast_cancel"))
     return kb.as_markup()
 
 
 def _broadcast_confirm_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast_go"))
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast"))
-    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast_cancel"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast_cancel"))
     return kb.as_markup()
 
 
@@ -1911,7 +1959,7 @@ async def msg_broadcast_receive_text(
         await state.clear()
         return
     if (message.text or "").strip().startswith("/"):
-        await message.answer(esc("Пришлите текст рассылки обычным сообщением или нажмите «Отмена»."))
+        await message.answer(esc("Пришлите текст рассылки обычным сообщением или нажмите «Назад»."))
         return
     data0 = await state.get_data()
     old_prompt_mid = data0.get("broadcast_prompt_mid")

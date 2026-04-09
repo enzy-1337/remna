@@ -196,7 +196,6 @@ async def cb_topup_history(
     rows = await _history_lines(session, db_user.id, limit=20)
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:main"))
     await _edit_or_send_balance(cq, caption=_history_caption(rows), reply_markup=kb.as_markup())
 
 
