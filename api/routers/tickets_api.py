@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -539,11 +540,21 @@ async def api_ticket_reply_media(
         photo_fid: str | None = None
         video_fid: str | None = None
         async with Bot(token=tickets_config.bot_token) as bot:
+            safe_name = (file.filename or "").strip() or ("upload.jpg" if is_photo else "upload.mp4")
+            upload = BufferedInputFile(file=file_data, filename=safe_name)
             if is_photo:
-                sent_user = await bot.send_photo(chat_id=int(t["telegram_user_id"]), photo=file_data, caption=txt[:1024] or None)
+                sent_user = await bot.send_photo(
+                    chat_id=int(t["telegram_user_id"]),
+                    photo=upload,
+                    caption=txt[:1024] or None,
+                )
                 photo_fid = sent_user.photo[-1].file_id if sent_user.photo else None
             else:
-                sent_user = await bot.send_video(chat_id=int(t["telegram_user_id"]), video=file_data, caption=txt[:1024] or None)
+                sent_user = await bot.send_video(
+                    chat_id=int(t["telegram_user_id"]),
+                    video=upload,
+                    caption=txt[:1024] or None,
+                )
                 video_fid = sent_user.video.file_id if sent_user.video else None
             topic_id = int(t["topic_id"] or 0)
             if topic_id:
