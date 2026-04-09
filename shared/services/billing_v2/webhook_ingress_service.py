@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -51,8 +52,36 @@ def telegram_id_from_payload(payload: dict) -> int | None:
     return None
 
 
+def remnawave_user_uuid_from_payload(payload: dict) -> uuid.UUID | None:
+    """UUID пользователя панели (data.user.uuid) — если telegramId в вебхуке null."""
+
+    def _parse(d: dict) -> uuid.UUID | None:
+        for key in ("uuid", "userUuid", "user_uuid"):
+            raw = d.get(key)
+            if raw is None:
+                continue
+            try:
+                return uuid.UUID(str(raw).strip())
+            except ValueError:
+                continue
+        return None
+
+    u = _parse(payload)
+    if u is not None:
+        return u
+    data = payload.get("data")
+    if isinstance(data, dict):
+        u = _parse(data)
+        if u is not None:
+            return u
+        user = data.get("user")
+        if isinstance(user, dict):
+            return _parse(user)
+    return None
+
+
 def device_hwid_from_payload(payload: dict) -> str:
-    """Кастомные вебхуки (device_hwid) и нативные Remnawave (data.device / data.hwid)."""
+    """Кастомные вебхуки и нативные Remnawave (@remnawave/backend-contract: data.hwidUserDevice.hwid)."""
 
     def _pick(d: object) -> str:
         if not isinstance(d, dict):
@@ -76,6 +105,10 @@ def device_hwid_from_payload(payload: dict) -> str:
             return h
         device = data.get("device")
         h = _pick(device)
+        if h:
+            return h
+        hud = data.get("hwidUserDevice")
+        h = _pick(hud)
         if h:
             return h
     return ""
@@ -244,14 +277,17 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
     payload = row.payload or {}
     event_type = (row.event_type or "").strip().lower()
     user_tg_id = telegram_id_from_payload(payload)
-    if user_tg_id is None:
-        row.status = "ignored"
-        row.processed_at = datetime.now(timezone.utc)
-        return
-
-    user = (
-        await session.execute(select(User).where(User.telegram_id == user_tg_id).limit(1))
-    ).scalar_one_or_none()
+    user = None
+    if user_tg_id is not None:
+        user = (
+            await session.execute(select(User).where(User.telegram_id == user_tg_id).limit(1))
+        ).scalar_one_or_none()
+    if user is None:
+        rw_uuid = remnawave_user_uuid_from_payload(payload)
+        if rw_uuid is not None:
+            user = (
+                await session.execute(select(User).where(User.remnawave_uuid == rw_uuid).limit(1))
+            ).scalar_one_or_none()
     if user is None:
         row.status = "ignored"
         row.processed_at = datetime.now(timezone.utc)

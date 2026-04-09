@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import uuid
 from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,12 +48,13 @@ class _SessionUserQuery:
         return None
 
 
-def _test_user(*, tg_id: int = 1001) -> User:
+def _test_user(*, tg_id: int = 1001, rw_uuid: uuid.UUID | None = None) -> User:
     return User(
         id=1,
         telegram_id=tg_id,
         balance=Decimal("10.00"),
         referral_code="r" + "x" * 30,
+        remnawave_uuid=rw_uuid,
     )
 
 
@@ -258,8 +260,8 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
                 "scope": "user_hwid_devices",
                 "event": "user_hwid_devices.added",
                 "data": {
-                    "user": {"telegramId": 1001},
-                    "device": {"hwid": "panel-hw-1"},
+                    "user": {"telegramId": 1001, "uuid": str(uuid.uuid4())},
+                    "hwidUserDevice": {"hwid": "panel-hw-1", "userId": 1},
                 },
             },
             headers={},
@@ -267,6 +269,42 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
+        settings = MagicMock()
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "processed")
+        mock_hist.assert_awaited_once()
+        mock_daily.assert_awaited_once()
+
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.charge_daily_device_once",
+        new_callable=AsyncMock,
+    )
+    async def test_remnawave_user_hwid_resolves_user_by_rw_uuid_when_no_telegram(
+        self,
+        mock_daily: AsyncMock,
+        mock_hist: AsyncMock,
+    ) -> None:
+        panel_uid = uuid.uuid4()
+        row = RemnawaveWebhookEvent(
+            event_id="e-rw-hwid-uuid",
+            event_type="user_hwid_devices.added",
+            payload={
+                "scope": "user_hwid_devices",
+                "event": "user_hwid_devices.added",
+                "data": {
+                    "user": {"uuid": str(panel_uid), "telegramId": None},
+                    "hwidUserDevice": {"hwid": "by-uuid-hw", "userId": 42},
+                },
+            },
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001, rw_uuid=panel_uid))
         settings = MagicMock()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
