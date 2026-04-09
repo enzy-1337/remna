@@ -468,6 +468,7 @@ async def cb_topup_check(
                 settings=settings,
                 user_id=int(db_user.id),
                 provider_name=str(txn.payment_provider or ""),
+                internal_transaction_id=int(txn.id),
             )
     await session.refresh(db_user)
     cap = _balance_caption(db_user)
