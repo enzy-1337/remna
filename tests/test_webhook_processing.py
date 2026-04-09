@@ -238,6 +238,41 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
         mock_hist.assert_awaited_once()
         mock_daily.assert_not_called()
 
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.charge_daily_device_once",
+        new_callable=AsyncMock,
+    )
+    async def test_remnawave_user_hwid_devices_added_nested_payload(
+        self,
+        mock_daily: AsyncMock,
+        mock_hist: AsyncMock,
+    ) -> None:
+        row = RemnawaveWebhookEvent(
+            event_id="e-rw-hwid",
+            event_type="user_hwid_devices.added",
+            payload={
+                "scope": "user_hwid_devices",
+                "event": "user_hwid_devices.added",
+                "data": {
+                    "user": {"telegramId": 1001},
+                    "device": {"hwid": "panel-hw-1"},
+                },
+            },
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001))
+        settings = MagicMock()
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "processed")
+        mock_hist.assert_awaited_once()
+        mock_daily.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

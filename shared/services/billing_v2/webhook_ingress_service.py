@@ -30,17 +30,55 @@ def telegram_id_from_payload(payload: dict) -> int | None:
                     return None
         return None
 
-    for key in ("telegram_id", "telegramId", "tg_id", "tgId"):
-        tid = _coerce(payload.get(key))
-        if tid is not None:
-            return tid
-    data = payload.get("data")
-    if isinstance(data, dict):
+    def _from_dict(d: dict) -> int | None:
         for key in ("telegram_id", "telegramId", "tg_id", "tgId"):
-            tid = _coerce(data.get(key))
+            tid = _coerce(d.get(key))
             if tid is not None:
                 return tid
+        return None
+
+    tid = _from_dict(payload)
+    if tid is not None:
+        return tid
+    data = payload.get("data")
+    if isinstance(data, dict):
+        tid = _from_dict(data)
+        if tid is not None:
+            return tid
+        user = data.get("user")
+        if isinstance(user, dict):
+            return _from_dict(user)
     return None
+
+
+def device_hwid_from_payload(payload: dict) -> str:
+    """Кастомные вебхуки (device_hwid) и нативные Remnawave (data.device / data.hwid)."""
+
+    def _pick(d: object) -> str:
+        if not isinstance(d, dict):
+            return ""
+        for key in ("device_hwid", "hwid", "deviceHwid", "hardwareId"):
+            raw = d.get(key)
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if s:
+                return s
+        return ""
+
+    h = _pick(payload)
+    if h:
+        return h
+    data = payload.get("data")
+    if isinstance(data, dict):
+        h = _pick(data)
+        if h:
+            return h
+        device = data.get("device")
+        h = _pick(device)
+        if h:
+            return h
+    return ""
 
 
 def _parse_webhook_unix_ts(ts_header: str) -> int | None:
@@ -231,12 +269,17 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
             settings=settings,
         )
         row.status = "processed" if ok else "rejected"
-    elif event_type in ("device.attached", "device.detached"):
-        hwid = str(payload.get("device_hwid") or "").strip()
+    elif event_type in (
+        "device.attached",
+        "device.detached",
+        "user_hwid_devices.added",
+        "user_hwid_devices.deleted",
+    ):
+        hwid = device_hwid_from_payload(payload)
         if not hwid:
             row.status = "ignored"
         else:
-            is_active = event_type == "device.attached"
+            is_active = event_type in ("device.attached", "user_hwid_devices.added")
             await add_device_history_event(
                 session,
                 user_id=user.id,
