@@ -49,9 +49,15 @@ from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.billing_calculator import (
+    estimate_pay_per_use_30d_rub,
+    plan_fields_for_ppu_estimate,
+    transition_credit_for_remaining_legacy_rub,
+)
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
 from shared.services.subscription_service import (
+    BASE_SUBSCRIPTION_PLAN_NAME,
     admin_disable_subscription_record,
     admin_enable_subscription_record,
     count_devices,
@@ -64,6 +70,8 @@ from shared.services.subscription_service import (
     update_rw_user_respecting_hwid_limit,
 )
 from shared.subscription_qr import subscription_url_qr_png
+
+_RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
 
 router = APIRouter(tags=["web-admin"])
 
@@ -550,6 +558,7 @@ def _layout(
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
         {_sidebar_nav_item("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
         {_sidebar_nav_item("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
+        {_sidebar_nav_item("/admin/tariffs", "fa-solid fa-tags", "Тарифы", cur)}
         {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
@@ -582,6 +591,7 @@ def _layout(
       <a href="/admin/users" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-base"></i><span>Юзеры</span></a>
       <a href="/admin/tickets" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tickets', cur)}"><i class="fa-solid fa-headset text-base"></i><span>Тикеты</span></a>
       <a href="/admin/subscriptions" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/subscriptions', cur)}"><i class="fa-solid fa-clock-rotate-left text-base"></i><span>Подписки</span></a>
+      <a href="/admin/tariffs" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tariffs', cur)}"><i class="fa-solid fa-tags text-base"></i><span>Тарифы</span></a>
       <a href="/admin/promos" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-base"></i><span>Промо</span></a>
       <a href="/admin/broadcast" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/broadcast', cur)}"><i class="fa-solid fa-bullhorn text-base"></i><span>Рассыл.</span></a>
       <a href="/admin/settings" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-base"></i><span>Настр.</span></a>
@@ -4063,4 +4073,455 @@ async def admin_promos_delete(request: Request, promo_id: int):
             await session.delete(promo)
             await session.commit()
     return RedirectResponse("/admin/promos", status_code=303)
+
+
+def _parse_plan_opt_int(raw: str) -> int | None:
+    t = (raw or "").strip()
+    if not t or t in "-—":
+        return None
+    return int(t)
+
+
+def _admin_tariff_transition_card(settings: Settings, tdays: str) -> str:
+    tip = ""
+    try:
+        d = int((tdays or "").strip())
+        if d > 0:
+            cred = transition_credit_for_remaining_legacy_rub(settings, remaining_days=d)
+            base = settings.billing_transition_base_month_rub
+            fee = settings.billing_transition_fee_percent
+            tip = f"""
+            <div class="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm">
+              <p><b>Осталось дней:</b> {_esc(d)}</p>
+              <p>База месяца: <b>{_esc(base)} ₽</b> · комиссия: <b>{_esc(fee)}%</b></p>
+              <p class="text-lg font-semibold mt-2">Рекомендуемый кредит на баланс: <span class="text-primary">{_esc(cred)} ₽</span></p>
+              <p class="text-xs opacity-70 mt-1">Только для ориентира, автоначисления нет.</p>
+            </div>
+            """
+    except ValueError:
+        tip = ""
+    return f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-calculator text-primary mr-2" aria-hidden="true"></i>Калькулятор перехода с legacy</h3>
+        <p class="text-sm opacity-80">Остаток старой подписки в днях → сумма на баланс после вычета комиссии (переменные <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>, <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>).</p>
+        <form method="get" class="flex flex-wrap items-end gap-2">
+          <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Осталось дней</span>
+            <input class="input input-bordered input-sm h-9 min-h-9" name="tdays" value="{_esc((tdays or '').strip())}" placeholder="30"/></label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Посчитать</button>
+        </form>
+        {tip}
+      </div>
+    </div>
+    """
+
+
+def _admin_plan_form(
+    *,
+    action: str,
+    settings: Settings,
+    plan: Plan | None = None,
+    error: str | None = None,
+    plan_id: int | None = None,
+) -> str:
+    p = plan
+    e = f"<div class='alert alert-error text-sm'>{_esc(error)}</div>" if error else ""
+    name_extra = 'readonly class="input input-bordered input-sm h-9 min-h-9 bg-base-200"' if p and p.name in _RESERVED_PLAN_NAMES else 'class="input input-bordered input-sm h-9 min-h-9"'
+    pkg_yes = p is not None and p.is_package_monthly
+    pkg_no = p is None or not p.is_package_monthly
+    act_yes = p is None or p.is_active
+    act_no = p is not None and not p.is_active
+    dd = str(p.duration_days) if p else "30"
+    pr = str(p.price_rub) if p else "0"
+    dsc = str(p.discount_percent) if p else "0"
+    tgb = "" if p is None or p.traffic_limit_gb is None else str(p.traffic_limit_gb)
+    dlim = "" if p is None or p.device_limit is None else str(p.device_limit)
+    mgbl = "" if p is None or p.monthly_gb_limit is None else str(p.monthly_gb_limit)
+    so = str(p.sort_order) if p else "0"
+    nm = p.name if p else ""
+    daily = str(settings.billing_device_daily_rub)
+    gbstep = str(settings.billing_gb_step_rub)
+    mobx = str(settings.billing_mobile_gb_extra_rub)
+    delete_block = ""
+    if plan_id is not None and p is not None and p.name not in _RESERVED_PLAN_NAMES:
+        delete_block = f"""
+        <form method="post" action="/admin/tariffs/{plan_id}/delete" class="mt-2" onsubmit="return confirm('Удалить тариф «{_esc_attr(p.name)}»? Это возможно только если нет записей подписок с этим plan_id.');">
+          <button type="submit" class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить тариф</button>
+        </form>
+        """
+    return f"""
+    <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-2xl">
+      <div class="card-body gap-4">
+        <h2 class="card-title text-xl"><i class="fa-solid fa-tags text-primary mr-2" aria-hidden="true"></i>{'Редактирование тарифа' if p else 'Новый тариф'}</h2>
+        {e}
+        <div id="tariff-ppu-config" class="hidden" data-daily="{_esc_attr(daily)}" data-gbstep="{_esc_attr(gbstep)}" data-mobile="{_esc_attr(mobx)}"></div>
+        <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
+          <label class="form-control w-full"><span class="label-text font-medium">Название</span>
+            <input type="text" name="name" id="f_name" value="{_esc(nm)}" {name_extra} /></label>
+          <p class="text-xs opacity-70 -mt-2">Имена «{_esc(BASE_SUBSCRIPTION_PLAN_NAME)}» и «Триал» нельзя переименовать (системные).</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="form-control w-full"><span class="label-text font-medium">Срок, дней</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="duration_days" id="f_duration_days" type="number" min="1" value="{_esc(dd)}" /></label>
+            <label class="form-control w-full"><span class="label-text font-medium">Цена, ₽</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="price_rub" id="f_price_rub" value="{_esc(pr)}" /></label>
+          </div>
+          <label class="form-control w-full"><span class="label-text font-medium">Внутренняя скидка плана, %</span>
+            <input class="input input-bordered input-sm h-9 min-h-9" name="discount_percent" id="f_discount_percent" value="{_esc(dsc)}" /></label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="form-control w-full"><span class="label-text font-medium">Лимит трафика, ГБ (пусто = без лимита в записи)</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="traffic_limit_gb" id="f_traffic_gb" value="{_esc(tgb)}" placeholder="—" /></label>
+            <label class="form-control w-full"><span class="label-text font-medium">Лимит устройств (пусто = не задано)</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="device_limit" id="f_device_limit" value="{_esc(dlim)}" placeholder="—" /></label>
+          </div>
+          <label class="form-control w-full"><span class="label-text font-medium">Пакетный месячный тариф</span>
+            <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_package_monthly" id="f_is_pkg">
+              <option value="false" {'selected' if pkg_no else ''}>нет (классический)</option>
+              <option value="true" {'selected' if pkg_yes else ''}>да (включены лимиты пакета в v2)</option>
+            </select></label>
+          <label class="form-control w-full"><span class="label-text font-medium">ГБ в пакете / месяц (для пакетного)</span>
+            <input class="input input-bordered input-sm h-9 min-h-9" name="monthly_gb_limit" id="f_monthly_gb" value="{_esc(mgbl)}" placeholder="—" /></label>
+          <div class="rounded-xl border border-base-content/10 bg-base-200/60 p-4 text-sm">
+            <p class="font-semibold mb-1">Сравнение с pay-per-use за 30 дней</p>
+            <p class="text-xs opacity-70 mb-2">Оценка по полям выше: {daily} ₽/день за устройство, {gbstep} ₽ за шаг ГБ, +{mobx} ₽/ГБ «мобильный интернет» (оценка моб. трафика — вручную).</p>
+            <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Моб. интернет, ГБ (оценка)</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" type="number" min="0" id="f_ppu_mobile_gb" value="0" /></label>
+            <p id="f_ppu_result" class="mt-2 font-mono text-sm"></p>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="form-control w-full"><span class="label-text font-medium">Активен в магазине</span>
+              <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_active" id="f_is_active">
+                <option value="true" {'selected' if act_yes else ''}>да</option>
+                <option value="false" {'selected' if act_no else ''}>нет</option>
+              </select></label>
+            <label class="form-control w-full"><span class="label-text font-medium">Порядок сортировки</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="sort_order" id="f_sort_order" type="number" value="{_esc(so)}" /></label>
+          </div>
+          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
+        </form>
+        {delete_block}
+        <script>
+        (function(){{
+          var cfg=document.getElementById('tariff-ppu-config');
+          var out=document.getElementById('f_ppu_result');
+          if(!cfg||!out)return;
+          var DAILY=parseFloat(cfg.dataset.daily||'0');
+          var GBSTEP=parseFloat(cfg.dataset.gbstep||'0');
+          var MOB=parseFloat(cfg.dataset.mobile||'0');
+          function recalc(){{
+            var dev=parseInt(document.getElementById('f_device_limit').value,10);
+            if(!dev||dev<1)dev=1;
+            var pkg=document.getElementById('f_is_pkg').value==='true';
+            var gb=0;
+            if(pkg){{ gb=parseInt(document.getElementById('f_monthly_gb').value,10)||0; }}
+            else {{ gb=parseInt(document.getElementById('f_traffic_gb').value,10)||0; }}
+            var mob=parseInt(document.getElementById('f_ppu_mobile_gb').value,10)||0;
+            var dr=(30*DAILY*dev).toFixed(2);
+            var tr=(GBSTEP*gb).toFixed(2);
+            var mr=(MOB*mob).toFixed(2);
+            var sum=(parseFloat(dr)+parseFloat(tr)+parseFloat(mr)).toFixed(2);
+            out.textContent='Устройства: '+dev+' × 30 × '+DAILY+' = '+dr+' ₽ · ГБ: '+gb+' × '+GBSTEP+' = '+tr+' ₽ · Моб.: '+mob+' × '+MOB+' = '+mr+' ₽ · Всего ≈ '+sum+' ₽';
+          }}
+          ['f_device_limit','f_monthly_gb','f_traffic_gb','f_is_pkg','f_ppu_mobile_gb'].forEach(function(id){{
+            var el=document.getElementById(id);
+            if(el){{ el.addEventListener('input',recalc); el.addEventListener('change',recalc); }}
+          }});
+          recalc();
+        }})();
+        </script>
+      </div>
+    </div>
+    </div>
+    """
+
+
+@router.get("/tariffs")
+async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        plans = list(
+            (await session.execute(select(Plan).order_by(Plan.sort_order.asc(), Plan.id.asc()))).scalars().all()
+        )
+    rows: list[str] = []
+    for pl in plans:
+        dev, gb = plan_fields_for_ppu_estimate(pl)
+        est = estimate_pay_per_use_30d_rub(settings, device_count=dev, gb_per_month=gb, mobile_gb_per_month=0)
+        pkg = "да" if pl.is_package_monthly else "нет"
+        act = "да" if pl.is_active else "нет"
+        rows.append(
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/tariffs/{pl.id}/edit' tabindex='0' role='link'>"
+            f"<td class='font-medium'>{_esc(pl.name)}</td>"
+            f"<td>{pl.duration_days}</td><td>{_esc(pl.price_rub)}</td>"
+            f"<td class='text-xs'>{_esc(pl.traffic_limit_gb if pl.traffic_limit_gb is not None else '—')}</td>"
+            f"<td class='text-xs'>{_esc(pl.device_limit if pl.device_limit is not None else '—')}</td>"
+            f"<td class='text-xs'>{_esc(pl.monthly_gb_limit if pl.monthly_gb_limit is not None else '—')}</td>"
+            f"<td>{_esc(pkg)}</td><td>{_esc(act)}</td>"
+            f"<td class='whitespace-nowrap text-xs' title='устройства {dev}, ГБ {gb}'>{_esc(est['total_rub'])} ₽</td>"
+            f"<td>{pl.sort_order}</td></tr>"
+        )
+    trans = _admin_tariff_transition_card(settings, tdays)
+    body = (
+        "<div class='flex flex-col gap-4'>"
+        f"{trans}"
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
+        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>Тарифы</h2>"
+        "<a class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' href='/admin/tariffs/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Новый тариф</a></div>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'>"
+        "<thead><tr><th>Название</th><th>Дней</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
+        "<th title='Эквивалент pay-per-use, 30 дн.'>≈ PPU 30д</th><th>Сорт.</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"10\" class=\"opacity-50\">Нет тарифов</td></tr>'}</tbody></table></div>"
+        "<p class='text-xs opacity-60'>Строка ведёт в редактирование. «Базовый» и «Триал» нельзя удалить и переименовать.</p>"
+        "</div></div></div>"
+    )
+    return _layout("Тарифы", body, request=request)
+
+
+@router.get("/tariffs/new")
+async def admin_tariffs_new(request: Request) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    return _layout(
+        "Новый тариф",
+        _admin_plan_form(action="/admin/tariffs/new", settings=get_settings()),
+        request=request,
+        back_href="/admin/tariffs",
+    )
+
+
+@router.post("/tariffs/new")
+async def admin_tariffs_new_post(
+    request: Request,
+    name: str = Form(""),
+    duration_days: str = Form(""),
+    price_rub: str = Form(""),
+    discount_percent: str = Form("0"),
+    traffic_limit_gb: str = Form(""),
+    device_limit: str = Form(""),
+    monthly_gb_limit: str = Form(""),
+    is_package_monthly: str = Form("false"),
+    is_active: str = Form("true"),
+    sort_order: str = Form("0"),
+):
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    try:
+        nm = name.strip()
+        if not nm:
+            raise ValueError("Название обязательно")
+        if nm in _RESERVED_PLAN_NAMES:
+            raise ValueError("Создайте тариф с другим имени; «Базовый» и «Триал» уже зарезервированы")
+        dd = int((duration_days or "").strip())
+        if dd < 1:
+            raise ValueError("Срок должен быть ≥ 1 дня")
+        pr = Decimal((price_rub or "0").strip().replace(",", "."))
+        if pr < 0:
+            raise ValueError("Цена не может быть отрицательной")
+        dsc = Decimal((discount_percent or "0").strip().replace(",", "."))
+        if dsc < 0 or dsc >= 100:
+            raise ValueError("Скидка плана должна быть в [0, 100)")
+        tgb = _parse_plan_opt_int(traffic_limit_gb)
+        dlim = _parse_plan_opt_int(device_limit)
+        mgbl = _parse_plan_opt_int(monthly_gb_limit)
+        pkg = is_package_monthly == "true"
+        active = is_active == "true"
+        so = int((sort_order or "0").strip())
+    except (ValueError, InvalidOperation) as e:
+        return _layout(
+            "Тариф — ошибка",
+            _admin_plan_form(action="/admin/tariffs/new", settings=settings, error=str(e)),
+            request=request,
+            back_href="/admin/tariffs",
+        )
+    async with await _session() as session:
+        dup = (
+            await session.execute(select(Plan.id).where(Plan.name == nm).limit(1))
+        ).scalar_one_or_none()
+        if dup is not None:
+            return _layout(
+                "Тариф — ошибка",
+                _admin_plan_form(
+                    action="/admin/tariffs/new",
+                    settings=settings,
+                    error="Тариф с таким названием уже есть",
+                ),
+                request=request,
+                back_href="/admin/tariffs",
+            )
+        session.add(
+            Plan(
+                name=nm,
+                duration_days=dd,
+                price_rub=pr,
+                discount_percent=dsc,
+                traffic_limit_gb=tgb,
+                device_limit=dlim,
+                monthly_gb_limit=mgbl,
+                is_package_monthly=pkg,
+                is_active=active,
+                sort_order=so,
+            )
+        )
+        await session.commit()
+    return RedirectResponse("/admin/tariffs", status_code=303)
+
+
+@router.get("/tariffs/{plan_id}/edit")
+async def admin_tariffs_edit(request: Request, plan_id: int) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        plan = await session.get(Plan, plan_id)
+    if plan is None:
+        return _layout(
+            "Тариф не найден",
+            "<div class='alert alert-warning shadow-lg'>Тариф не найден</div>",
+            request=request,
+            back_href="/admin/tariffs",
+        )
+    return _layout(
+        "Редактирование тарифа",
+        _admin_plan_form(
+            action=f"/admin/tariffs/{plan_id}/edit",
+            settings=get_settings(),
+            plan=plan,
+            plan_id=plan_id,
+        ),
+        request=request,
+        back_href="/admin/tariffs",
+    )
+
+
+@router.post("/tariffs/{plan_id}/edit")
+async def admin_tariffs_edit_post(
+    request: Request,
+    plan_id: int,
+    name: str = Form(""),
+    duration_days: str = Form(""),
+    price_rub: str = Form(""),
+    discount_percent: str = Form("0"),
+    traffic_limit_gb: str = Form(""),
+    device_limit: str = Form(""),
+    monthly_gb_limit: str = Form(""),
+    is_package_monthly: str = Form("false"),
+    is_active: str = Form("true"),
+    sort_order: str = Form("0"),
+):
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        plan = await session.get(Plan, plan_id)
+        if plan is None:
+            return _layout(
+                "Тариф не найден",
+                "<div class='alert alert-warning shadow-lg'>Тариф не найден</div>",
+                request=request,
+                back_href="/admin/tariffs",
+            )
+        try:
+            nm = name.strip()
+            if not nm:
+                raise ValueError("Название обязательно")
+            if plan.name in _RESERVED_PLAN_NAMES and nm != plan.name:
+                raise ValueError("Системный тариф нельзя переименовать")
+            dd = int((duration_days or "").strip())
+            if dd < 1:
+                raise ValueError("Срок должен быть ≥ 1 дня")
+            pr = Decimal((price_rub or "0").strip().replace(",", "."))
+            if pr < 0:
+                raise ValueError("Цена не может быть отрицательной")
+            dsc = Decimal((discount_percent or "0").strip().replace(",", "."))
+            if dsc < 0 or dsc >= 100:
+                raise ValueError("Скидка плана должна быть в [0, 100)")
+            tgb = _parse_plan_opt_int(traffic_limit_gb)
+            dlim = _parse_plan_opt_int(device_limit)
+            mgbl = _parse_plan_opt_int(monthly_gb_limit)
+            pkg = is_package_monthly == "true"
+            active = is_active == "true"
+            so = int((sort_order or "0").strip())
+        except (ValueError, InvalidOperation) as e:
+            return _layout(
+                "Тариф — ошибка",
+                _admin_plan_form(
+                    action=f"/admin/tariffs/{plan_id}/edit",
+                    settings=settings,
+                    plan=plan,
+                    plan_id=plan_id,
+                    error=str(e),
+                ),
+                request=request,
+                back_href="/admin/tariffs",
+            )
+        if nm != plan.name:
+            dup = (
+                await session.execute(select(Plan.id).where(Plan.name == nm, Plan.id != plan_id).limit(1))
+            ).scalar_one_or_none()
+            if dup is not None:
+                return _layout(
+                    "Тариф — ошибка",
+                    _admin_plan_form(
+                        action=f"/admin/tariffs/{plan_id}/edit",
+                        settings=settings,
+                        plan=plan,
+                        plan_id=plan_id,
+                        error="Тариф с таким названием уже есть",
+                    ),
+                    request=request,
+                    back_href="/admin/tariffs",
+                )
+        plan.name = nm
+        plan.duration_days = dd
+        plan.price_rub = pr
+        plan.discount_percent = dsc
+        plan.traffic_limit_gb = tgb
+        plan.device_limit = dlim
+        plan.monthly_gb_limit = mgbl
+        plan.is_package_monthly = pkg
+        plan.is_active = active
+        plan.sort_order = so
+        await session.commit()
+    return RedirectResponse("/admin/tariffs", status_code=303)
+
+
+@router.post("/tariffs/{plan_id}/delete")
+async def admin_tariffs_delete(request: Request, plan_id: int):
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        plan = await session.get(Plan, plan_id)
+        if plan is None:
+            return RedirectResponse("/admin/tariffs", status_code=303)
+        if plan.name in _RESERVED_PLAN_NAMES:
+            return _layout(
+                "Тариф",
+                f"<div class='alert alert-error shadow-lg'>Нельзя удалить системный тариф «{_esc(plan.name)}».</div>"
+                "<p class='mt-2'><a class='link' href='/admin/tariffs'>К списку</a></p>",
+                request=request,
+                back_href="/admin/tariffs",
+            )
+        cnt = (
+            await session.execute(
+                select(func.count()).select_from(Subscription).where(Subscription.plan_id == plan_id)
+            )
+        ).scalar_one()
+        if int(cnt or 0) > 0:
+            return _layout(
+                "Тариф",
+                "<div class='alert alert-error shadow-lg'>У тарифа есть записи подписок в истории — удаление запрещено. Отключите тариф (неактивен) или замените план у подписок.</div>"
+                "<p class='mt-2'><a class='link' href='/admin/tariffs'>К списку</a></p>",
+                request=request,
+                back_href="/admin/tariffs",
+            )
+        await session.delete(plan)
+        await session.commit()
+    return RedirectResponse("/admin/tariffs", status_code=303)
 

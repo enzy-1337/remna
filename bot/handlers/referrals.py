@@ -15,12 +15,23 @@ from shared.models.user import User
 from shared.services.referral_service import (
     count_invited_users,
     list_invited_users,
-    list_referrer_rewards,
+    list_referrer_rewards_with_referred,
     sum_referrer_bonus_days,
     sum_referrer_bonus_rub,
 )
 
 router = Router(name="referrals")
+
+_REF_REWARD_SOURCE_RU = {
+    "first_paid_plan": "первая покупка тарифа",
+    "topup_percent": "% с пополнения друга",
+}
+
+
+def _referred_short(u: User) -> str:
+    if u.username:
+        return f"@{u.username}"
+    return f"id {u.telegram_id}"
 
 
 def _referrals_main_body(
@@ -42,6 +53,14 @@ def _referrals_main_body(
             + plain(" ₽ на баланс ")
             + bold("вам и другу")
             + plain(", когда он нажал /start по вашей ссылке")
+        )
+    if settings.referral_topup_percent > 0:
+        cond_lines.append(
+            plain("• ")
+            + bold(str(settings.referral_topup_percent))
+            + plain("% на ваш баланс с ")
+            + bold("каждого пополнения")
+            + plain(" приглашённого")
         )
     if rub_m > 0:
         cond_lines.append(
@@ -180,18 +199,33 @@ async def cb_ref_rewards(
         return
     assert db_user is not None
     settings = get_settings()
-    rows = await list_referrer_rewards(session, db_user.id, limit=25)
+    rows = await list_referrer_rewards_with_referred(session, db_user.id, limit=22)
     if not rows:
         text = join_lines("💸 " + bold("История начислений"), "", plain("Начислений пока нет."))
     else:
-        lines: list[str] = ["💸 " + bold("История начислений"), ""]
-        for idx, row in enumerate(rows, start=1):
+        lines: list[str] = [
+            "💸 " + bold("История начислений"),
+            "",
+            italic("Сумма · тип · друг · дата"),
+            "",
+        ]
+        for idx, (row, ref_u) in enumerate(rows, start=1):
             applied = row.applied_at.strftime("%d.%m.%Y %H:%M") if row.applied_at else "—"
+            src = _REF_REWARD_SOURCE_RU.get(row.source, row.source)
+            extra_days = (
+                plain(" · +") + bold(str(row.bonus_days)) + plain(" дн.")
+                if int(row.bonus_days or 0) > 0
+                else plain("")
+            )
             lines.append(
                 plain(f"{idx}. ")
                 + bold(str(row.bonus_rub))
-                + plain(" ₽ · ")
-                + code(row.source)
+                + plain(" ₽")
+                + extra_days
+                + plain(" · ")
+                + plain(src)
+                + plain(" · ")
+                + code(_referred_short(ref_u))
                 + plain(" · ")
                 + plain(applied)
             )

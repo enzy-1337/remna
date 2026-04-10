@@ -18,7 +18,7 @@ from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
 from shared.services.referral_parse import parse_referral_code_from_start_args
-from shared.services.telegram_notify import send_telegram_message
+from shared.services.referral_service import replace_referrer_bonus_telegram_message
 
 
 async def _generate_unique_referral_code(session: AsyncSession) -> str:
@@ -110,15 +110,16 @@ async def register_user(
                 )
             )
             await session.flush()
-            await send_telegram_message(
-                referrer.telegram_id,
+            await replace_referrer_bonus_telegram_message(
+                session,
+                referrer,
                 join_lines(
                     "🎁 " + bold("Реферальный бонус"),
                     plain("По вашей ссылке зарегистрировался друг: +")
                     + bold(str(bonus))
                     + plain(" ₽ на баланс."),
                 ),
-                settings=settings,
+                settings,
             )
             await notify_admin(
                 settings,

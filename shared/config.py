@@ -208,7 +208,16 @@ class Settings(BaseSettings):
         validation_alias="REMNAWAVE_WEBHOOK_BACKGROUND_PROCESS",
     )
     billing_v2_enabled: bool = Field(default=False, validation_alias="BILLING_V2_ENABLED")
-    billing_v2_for_new_users_only: bool = Field(default=True, validation_alias="BILLING_V2_FOR_NEW_USERS_ONLY")
+    billing_v2_for_new_users_only: bool = Field(
+        default=True,
+        validation_alias="BILLING_V2_FOR_NEW_USERS_ONLY",
+        description=(
+            "Если true — новые пользователи сразу hybrid (при BILLING_V2_ENABLED), "
+            "существующие legacy не переводятся автоматически (/start и фоновый цикл перехода отключены для них); "
+            "списания pay-per-use в вебхуках только для hybrid. Если false — полный rollout: "
+            "фоновый перевод legacy→hybrid после окончания подписки и maybe_switch_to_hybrid на /start."
+        ),
+    )
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
     billing_mobile_gb_extra_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_MOBILE_GB_EXTRA_RUB")
@@ -309,7 +318,11 @@ class Settings(BaseSettings):
     referral_topup_percent: Decimal = Field(
         default=Decimal("10"),
         validation_alias="REFERRAL_TOPUP_PERCENT",
-        description="Реферальное начисление от пополнений приглашённого пользователя, в процентах.",
+        description=(
+            "Реферальное начисление только от пополнений баланса приглашённого (вебхуки оплаты), "
+            "в процентах. Покупки тарифа с баланса сюда не входят — для них отдельно "
+            "REFERRAL_INVITER_REWARD_* при первой платной покупке."
+        ),
     )
 
     maintenance_mode: bool = Field(default=False, validation_alias="MAINTENANCE_MODE")

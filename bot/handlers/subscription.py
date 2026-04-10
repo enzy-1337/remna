@@ -160,11 +160,10 @@ async def cb_plans_or_extend(
         return
     has_act = await get_active_subscription(session, db_user.id) is not None
     is_extend = cq.data == "sub:extend"
-    title = (
-        "🔄 " + bold("Продлить подписку") + "\n\n"
-        if (is_extend and has_act)
-        else "🛒 " + bold("Купить подписку") + "\n\n"
-    )
+    if is_extend and has_act:
+        title = "🔄 " + bold("Продлить подписку") + "\n\n"
+    else:
+        title = "📋 " + bold("Тарифы") + "\n\n"
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
     body = title + plain(
         "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."

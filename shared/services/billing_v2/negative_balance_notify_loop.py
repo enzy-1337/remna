@@ -93,29 +93,35 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
         in_24h, in_1h, reset_24h, reset_1h = classify_eta_windows(remaining)
 
         if in_24h and user.risk_notified_24h_at is None:
-            ok = await send_telegram_message(
-                user.telegram_id,
-                (
-                    "⏰ Предупреждение: при текущем расходе баланс может уйти в минус примерно через 24 часа.\n"
-                    f"Текущий баланс: {user.balance} ₽.\n"
-                    "Рекомендуем пополнить баланс заранее."
-                ),
-                parse_mode=None,
-                settings=settings,
+            ok = (
+                await send_telegram_message(
+                    user.telegram_id,
+                    (
+                        "⏰ Предупреждение: при текущем расходе баланс может уйти в минус примерно через 24 часа.\n"
+                        f"Текущий баланс: {user.balance} ₽.\n"
+                        "Рекомендуем пополнить баланс заранее."
+                    ),
+                    parse_mode=None,
+                    settings=settings,
+                )
+                is not None
             )
             if ok:
                 user.risk_notified_24h_at = now
                 sent24 += 1
         if in_1h and user.risk_notified_1h_at is None:
-            ok = await send_telegram_message(
-                user.telegram_id,
-                (
-                    "⏰ Срочно: при текущем расходе баланс может уйти в минус примерно через 1 час.\n"
-                    f"Текущий баланс: {user.balance} ₽.\n"
-                    "Пополните баланс, чтобы избежать ограничений."
-                ),
-                parse_mode=None,
-                settings=settings,
+            ok = (
+                await send_telegram_message(
+                    user.telegram_id,
+                    (
+                        "⏰ Срочно: при текущем расходе баланс может уйти в минус примерно через 1 час.\n"
+                        f"Текущий баланс: {user.balance} ₽.\n"
+                        "Пополните баланс, чтобы избежать ограничений."
+                    ),
+                    parse_mode=None,
+                    settings=settings,
+                )
+                is not None
             )
             if ok:
                 user.risk_notified_1h_at = now

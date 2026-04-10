@@ -18,10 +18,7 @@ class PromoCode(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     type: Mapped[str] = mapped_column(String(32))
     value: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    # Если тип промокода подразумевает начисление "не деньгами", но у пользователя нет условия
-    # (например, нет активной подписки) — админ задаёт запасную денежную награду.
-    # Используется, например, для типа "subscription_days": дни выдаются только при наличии активной подписки,
-    # иначе начисляются деньги на баланс.
+    # Опционально: запасная денежная награда для типов, где основная выгода зависит от условий в панели/подписке.
     fallback_value_rub: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

@@ -3,8 +3,9 @@ from __future__ import annotations
 import unittest
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
@@ -19,6 +20,9 @@ class _ScalarResult:
         self._value = value
 
     def scalar_one_or_none(self) -> object:
+        return self._value
+
+    def scalar_one(self) -> object:
         return self._value
 
 
@@ -38,24 +42,37 @@ class _SessionStore:
 
 
 class _SessionUserQuery:
-    def __init__(self, user: User | None) -> None:
+    def __init__(self, user: User | None, *, device_history_count: int = 0) -> None:
         self._user = user
+        self._device_history_count = device_history_count
 
-    async def execute(self, _stmt: object) -> _ScalarResult:
+    async def execute(self, stmt: object) -> _ScalarResult:
+        if "device_history" in str(stmt).lower():
+            return _ScalarResult(self._device_history_count)
         return _ScalarResult(self._user)
 
     async def flush(self) -> None:
         return None
 
 
-def _test_user(*, tg_id: int = 1001, rw_uuid: uuid.UUID | None = None) -> User:
+def _test_user(
+    *,
+    tg_id: int = 1001,
+    rw_uuid: uuid.UUID | None = None,
+    billing_mode: str = "hybrid",
+) -> User:
     return User(
         id=1,
         telegram_id=tg_id,
         balance=Decimal("10.00"),
         referral_code="r" + "x" * 30,
         remnawave_uuid=rw_uuid,
+        billing_mode=billing_mode,
     )
+
+
+def _v2_settings(*, enabled: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(billing_v2_enabled=enabled)
 
 
 class StoreRawWebhookEventTests(IsolatedAsyncioTestCase):
@@ -108,7 +125,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user())
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "ignored")
 
@@ -122,7 +139,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(None)
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "ignored")
 
@@ -141,7 +158,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
         mock_charge.return_value = False
@@ -166,9 +183,28 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "ignored")
+
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.charge_gb_step",
+        new_callable=AsyncMock,
+    )
+    async def test_traffic_legacy_user_ignored_no_charge(self, mock_charge: AsyncMock) -> None:
+        row = RemnawaveWebhookEvent(
+            event_id="e-legacy",
+            event_type="traffic.gb_step",
+            payload={"telegram_id": 1001},
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001, billing_mode="legacy"))
+        settings = _v2_settings()
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "ignored")
+        mock_charge.assert_not_called()
 
     async def test_subscription_status_processed(self) -> None:
         row = RemnawaveWebhookEvent(
@@ -180,10 +216,14 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
 
+    @patch(
+        "shared.services.device_telegram_notify.notify_device_attached_replace_message",
+        new_callable=AsyncMock,
+    )
     @patch(
         "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
         new_callable=AsyncMock,
@@ -196,6 +236,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
         self,
         mock_daily: AsyncMock,
         mock_hist: AsyncMock,
+        _mock_dev_notify: AsyncMock,
     ) -> None:
         row = RemnawaveWebhookEvent(
             event_id="e1",
@@ -206,7 +247,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
         mock_hist.assert_awaited_once()
@@ -234,12 +275,16 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
         mock_hist.assert_awaited_once()
         mock_daily.assert_not_called()
 
+    @patch(
+        "shared.services.device_telegram_notify.notify_device_attached_replace_message",
+        new_callable=AsyncMock,
+    )
     @patch(
         "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
         new_callable=AsyncMock,
@@ -252,6 +297,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
         self,
         mock_daily: AsyncMock,
         mock_hist: AsyncMock,
+        _mock_dev_notify: AsyncMock,
     ) -> None:
         row = RemnawaveWebhookEvent(
             event_id="e-rw-hwid",
@@ -269,12 +315,16 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
         mock_hist.assert_awaited_once()
         mock_daily.assert_awaited_once()
 
+    @patch(
+        "shared.services.device_telegram_notify.notify_device_attached_replace_message",
+        new_callable=AsyncMock,
+    )
     @patch(
         "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
         new_callable=AsyncMock,
@@ -287,6 +337,7 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
         self,
         mock_daily: AsyncMock,
         mock_hist: AsyncMock,
+        _mock_dev_notify: AsyncMock,
     ) -> None:
         panel_uid = uuid.uuid4()
         row = RemnawaveWebhookEvent(
@@ -305,11 +356,63 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
             status="received",
         )
         s = _SessionUserQuery(_test_user(tg_id=1001, rw_uuid=panel_uid))
-        settings = MagicMock()
+        settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "processed")
         mock_hist.assert_awaited_once()
         mock_daily.assert_awaited_once()
+
+    @patch(
+        "shared.services.device_telegram_notify.notify_device_attached_replace_message",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.add_device_history_event",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.charge_daily_device_once",
+        new_callable=AsyncMock,
+    )
+    async def test_device_attached_legacy_no_daily_charge(
+        self,
+        mock_daily: AsyncMock,
+        mock_hist: AsyncMock,
+        _mock_dev_notify: AsyncMock,
+    ) -> None:
+        row = RemnawaveWebhookEvent(
+            event_id="e-dev-legacy",
+            event_type="device.attached",
+            payload={"telegram_id": 1001, "device_hwid": "hw-leg"},
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001, billing_mode="legacy"))
+        settings = _v2_settings()
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "processed")
+        mock_hist.assert_awaited_once()
+        mock_daily.assert_not_called()
+
+    @patch(
+        "shared.services.billing_v2.webhook_ingress_service.charge_gb_step",
+        new_callable=AsyncMock,
+    )
+    async def test_traffic_v2_disabled_ignored(self, mock_charge: AsyncMock) -> None:
+        row = RemnawaveWebhookEvent(
+            event_id="e-v2-off",
+            event_type="traffic.gb_step",
+            payload={"telegram_id": 1001},
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001, billing_mode="hybrid"))
+        settings = _v2_settings(enabled=False)
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "ignored")
+        mock_charge.assert_not_called()
 
 
 if __name__ == "__main__":

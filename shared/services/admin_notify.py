@@ -98,13 +98,14 @@ async def notify_admin(
     assert chat_id is not None
     thread = settings.admin_log_thread_for(topic)
 
-    ok = await send_telegram_message(
+    mid = await send_telegram_message(
         chat_id,
         body,
         message_thread_id=thread,
         parse_mode="MarkdownV2",
         settings=settings,
     )
+    ok = mid is not None
     log_status = "sent" if ok else "failed"
     if not ok:
         logger.warning("admin notify failed event=%s topic=%s", event_type, topic.value)
@@ -135,13 +136,14 @@ async def notify_admin_plain(
     chat_id = settings.admin_log_chat_id
     assert chat_id is not None
     thread = settings.admin_log_thread_for(topic)
-    return await send_telegram_message(
+    mid = await send_telegram_message(
         chat_id,
         text[:12000],
         message_thread_id=thread,
         parse_mode=None,
         settings=settings,
     )
+    return mid is not None
 
 
 async def notify_admin_document(

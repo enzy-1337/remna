@@ -18,6 +18,7 @@
   - `remnawave_webhook_events`
 - Проверить новые поля:
   - `users.billing_mode`, `users.lifetime_exempt_flag`, `users.risk_notified_24h_at`, `users.risk_notified_1h_at`
+  - `users.referral_bonus_message_id`, `users.device_notify_message_id`
   - `plans.device_limit`, `plans.monthly_gb_limit`, `plans.is_package_monthly`
 
 ## 2. Конфиг (минимум)
@@ -58,6 +59,8 @@ BILLING_MOBILE_GB_EXTRA_RUB=2.5
 - у новых пользователей `billing_mode=hybrid`;
 - списания идут в `billing_ledger_entries`;
 - детализация в боте/админке не пустая.
+- у пользователей `billing_mode=legacy` события вебхука трафика/устройств **не** создают списаний (`traffic.gb_step` → `ignored` в логе событий; дневная плата за устройство не начисляется), история HWID при этом пишется;
+- `/start` **не** переводит старых legacy в hybrid (пока флаг true).
 
 3) Запустить полный режим:
 - `BILLING_V2_FOR_NEW_USERS_ONLY=false`

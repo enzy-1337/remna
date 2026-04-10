@@ -86,8 +86,9 @@ async def process_subscription_expiry_notifications(session: AsyncSession, setti
                 f"Окончание: {exp_s}.\n"
                 "Продлите доступ в разделе «Моя подписка» в боте."
             )
-            if await send_telegram_message(
-                user.telegram_id, text, parse_mode=None, settings=settings
+            if (
+                await send_telegram_message(user.telegram_id, text, parse_mode=None, settings=settings)
+                is not None
             ):
                 sub.expiry_notified_24h = True
                 n24 += 1
@@ -101,8 +102,9 @@ async def process_subscription_expiry_notifications(session: AsyncSession, setti
                 f"Окончание: {exp_s}.\n"
                 "Продлите в боте, чтобы не потерять доступ."
             )
-            if await send_telegram_message(
-                user.telegram_id, text, parse_mode=None, settings=settings
+            if (
+                await send_telegram_message(user.telegram_id, text, parse_mode=None, settings=settings)
+                is not None
             ):
                 sub.expiry_notified_3h = True
                 n3 += 1

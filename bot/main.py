@@ -49,7 +49,11 @@ from shared.services.autorenew_service import subscription_autorenew_loop
 from shared.services.expiry_notify_service import subscription_expiry_notify_loop
 from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.remnawave_sync import sync_loop
-from shared.services.schema_patches import ensure_promo_columns, ensure_subscription_expiry_notify_columns
+from shared.services.schema_patches import (
+    ensure_promo_columns,
+    ensure_subscription_expiry_notify_columns,
+    ensure_user_bot_message_id_columns,
+)
 from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
 from shared.services.billing_v2.negative_balance_notify_loop import negative_balance_notify_loop
 from shared.services.billing_v2.transition_service import legacy_transition_loop
@@ -78,6 +82,7 @@ async def main() -> None:
         await ensure_default_plans_if_needed(s)
         await ensure_subscription_expiry_notify_columns(s)
         await ensure_promo_columns(s)
+        await ensure_user_bot_message_id_columns(s)
         await s.commit()
 
     bot = Bot(

@@ -342,8 +342,14 @@ async def notify_topup_success(
         if invoice_mid is not None:
             from shared.services.telegram_notify import delete_telegram_message
 
-            _ = await delete_telegram_message(tg, invoice_mid, settings=settings)
-        await send_telegram_message(
+            deleted = await delete_telegram_message(tg, invoice_mid, settings=settings)
+            if not deleted:
+                logger.debug(
+                    "notify_topup_success: invoice message not deleted user_tg=%s mid=%s",
+                    tg,
+                    invoice_mid,
+                )
+        mid = await send_telegram_message(
             tg,
             text,
             settings=settings,
@@ -353,6 +359,8 @@ async def notify_topup_success(
                 ]
             },
         )
+        if mid is None:
+            logger.warning("notify_topup_success: не удалось отправить сообщение user_tg=%s", tg)
 
     if user_id is not None:
         from shared.services.admin_notify import notify_admin

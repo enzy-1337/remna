@@ -23,7 +23,7 @@ async def send_telegram_message(
     message_thread_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     settings: Settings | None = None,
-) -> bool:
+) -> int | None:
     s = settings or get_settings()
     url = f"https://api.telegram.org/bot{s.bot_token}/sendMessage"
     payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
@@ -39,11 +39,15 @@ async def send_telegram_message(
             data = r.json()
         if not data.get("ok"):
             logger.error("Telegram sendMessage failed: %s", data)
-            return False
-        return True
+            return None
+        result = data.get("result") or {}
+        mid = result.get("message_id")
+        if isinstance(mid, int):
+            return mid
+        return None
     except Exception:
         logger.exception("Telegram sendMessage error")
-        return False
+        return None
 
 
 async def delete_telegram_message(

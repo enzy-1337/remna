@@ -36,6 +36,9 @@ class User(Base):
     risk_notified_24h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     risk_notified_1h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    referral_bonus_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    device_notify_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     referred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

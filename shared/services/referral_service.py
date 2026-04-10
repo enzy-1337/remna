@@ -21,11 +21,32 @@ from shared.services.subscription_service import (
     get_active_subscription,
     update_rw_user_respecting_hwid_limit,
 )
-from shared.services.telegram_notify import send_telegram_message
+from shared.services.telegram_notify import delete_telegram_message, send_telegram_message
 
 logger = logging.getLogger(__name__)
 
 SOURCE_FIRST_PAID_PLAN = "first_paid_plan"
+
+
+async def replace_referrer_bonus_telegram_message(
+    session: AsyncSession,
+    referrer: User,
+    text: str,
+    settings: Settings,
+) -> None:
+    """Удаляет предыдущее реферальное уведомление бота и отправляет новое (одно «окно» в чате)."""
+    old = referrer.referral_bonus_message_id
+    if old is not None:
+        deleted = await delete_telegram_message(referrer.telegram_id, int(old), settings=settings)
+        if not deleted:
+            logger.debug(
+                "replace_referrer_bonus_telegram_message: old message not deleted tg=%s mid=%s",
+                referrer.telegram_id,
+                old,
+            )
+    mid = await send_telegram_message(referrer.telegram_id, text, settings=settings)
+    referrer.referral_bonus_message_id = int(mid) if mid is not None else None
+    await session.flush()
 
 
 async def count_invited_users(session: AsyncSession, referrer_user_id: int) -> int:
@@ -84,6 +105,22 @@ async def list_referrer_rewards(
         .limit(limit)
     )
     return list(r.scalars().all())
+
+
+async def list_referrer_rewards_with_referred(
+    session: AsyncSession,
+    referrer_user_id: int,
+    *,
+    limit: int = 35,
+) -> list[tuple[ReferralReward, User]]:
+    r = await session.execute(
+        select(ReferralReward, User)
+        .join(User, User.id == ReferralReward.referred_id)
+        .where(ReferralReward.referrer_id == referrer_user_id, ReferralReward.status == "applied")
+        .order_by(ReferralReward.id.desc())
+        .limit(limit)
+    )
+    return list(r.all())
 
 
 def first_paid_plan_referrer_rewards(
@@ -198,7 +235,7 @@ async def grant_referrer_reward_first_paid_plan(
             + plain("."),
             *parts,
         )
-        await send_telegram_message(referrer.telegram_id, msg, settings=settings)
+        await replace_referrer_bonus_telegram_message(session, referrer, msg, settings)
         from shared.services.admin_notify import notify_admin
 
         from shared.services.admin_log_topics import AdminLogTopic
@@ -232,6 +269,9 @@ async def grant_referrer_reward_from_topup(
     topup_amount_rub: Decimal,
     settings: Settings,
 ) -> Decimal:
+    """
+    Процент рефереру только от суммы пополнения (вебхук оплаты), не от покупки тарифа с баланса.
+    """
     if topup_amount_rub <= 0 or referred_user.referred_by is None:
         return Decimal("0")
     if settings.referral_topup_percent <= 0:
@@ -270,16 +310,13 @@ async def grant_referrer_reward_from_topup(
             meta={"referred_id": referred_user.id, "topup_amount_rub": str(topup_amount_rub)},
         )
     )
-    await send_telegram_message(
-        referrer.telegram_id,
-        join_lines(
-            "🎁 " + bold("Реферальное начисление"),
-            plain("Ваш реферал пополнил баланс: +")
-            + bold(str(bonus))
-            + plain(" ₽ (")
-            + bold(str(settings.referral_topup_percent))
-            + plain("%)."),
-        ),
-        settings=settings,
+    msg = join_lines(
+        "🎁 " + bold("Реферальное начисление"),
+        plain("Ваш реферал пополнил баланс: +")
+        + bold(str(bonus))
+        + plain(" ₽ (")
+        + bold(str(settings.referral_topup_percent))
+        + plain("%)."),
     )
+    await replace_referrer_bonus_telegram_message(session, referrer, msg, settings)
     return bonus

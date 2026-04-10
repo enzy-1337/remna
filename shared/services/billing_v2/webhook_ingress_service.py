@@ -7,13 +7,15 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.database import get_session_factory
+from shared.models.device_history import DeviceHistory
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
+from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.billing_v2.rating_service import charge_daily_device_once, charge_gb_step
 
@@ -295,6 +297,11 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
 
     now = datetime.now(timezone.utc)
     if event_type == "traffic.gb_step":
+        if not applies_pay_per_use_charges(user, settings):
+            row.status = "ignored"
+            row.processed_at = now
+            await session.flush()
+            return
         is_mobile = bool(payload.get("mobile_internet", False))
         ok = await charge_gb_step(
             session,
@@ -316,6 +323,12 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
             row.status = "ignored"
         else:
             is_active = event_type in ("device.attached", "user_hwid_devices.added")
+            hist_count = (
+                await session.execute(
+                    select(func.count()).select_from(DeviceHistory).where(DeviceHistory.user_id == user.id)
+                )
+            ).scalar_one()
+            first_ever_device = int(hist_count or 0) == 0
             await add_device_history_event(
                 session,
                 user_id=user.id,
@@ -326,13 +339,19 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                 is_active=is_active,
                 meta={"source_event_id": row.event_id},
             )
-            if is_active:
+            if is_active and applies_pay_per_use_charges(user, settings):
                 await charge_daily_device_once(
                     session,
                     user=user,
                     device_hwid=hwid,
                     day=now.date(),
                     settings=settings,
+                )
+            if is_active:
+                from shared.services.device_telegram_notify import notify_device_attached_replace_message
+
+                await notify_device_attached_replace_message(
+                    session, user, settings, first_ever=first_ever_device
                 )
             row.status = "processed"
     elif event_type == "subscription.status":

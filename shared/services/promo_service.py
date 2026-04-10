@@ -10,10 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.md2 import bold, plain
+from shared.md2 import bold, join_lines, plain
 
 # bonus_rub — устаревший тип: начисление на основной баланс (как balance_rub)
 SUPPORTED_PROMO_TYPES = {
@@ -175,9 +176,6 @@ async def apply_promo_code_for_user_v2(
             {"code": promo.code, "type": promo.type, "value": str(value)},
         )
 
-    if promo.type in {"discount_percent", "extra_gb", "extra_devices"}:
-        return False, plain("Этот тип промокода будет доступен в следующем релизе."), None
-
     if promo.type == "topup_bonus_percent":
         # Бонус начисляется при первом успешном пополнении после активации.
         percent = value
@@ -253,6 +251,8 @@ async def apply_promo_code_for_user_v2(
         return True, join_lines(plain("✅ Начислено "), bold(str(gb)), plain(" ГБ.")), {"code": promo.code, "type": promo.type, "value": str(gb)}
 
     if promo.type == "extra_devices":
+        from shared.services.subscription_service import get_active_subscription, update_rw_user_respecting_hwid_limit
+
         add_slots = int(value)
         if add_slots <= 0:
             return False, plain("Некорректное количество устройств."), None

@@ -28,7 +28,7 @@ from bot.states.admin import (
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
-from shared.md2 import bold, code, esc, italic, join_lines, plain, strip_for_popup_alert
+from shared.md2 import bold, code, esc, italic, join_lines, link, plain, strip_for_popup_alert
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
@@ -47,6 +47,7 @@ from shared.services.broadcast_service import (
     collect_recipient_telegram_ids,
 )
 from shared.database import get_session_factory
+from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.referral_service import count_invited_users
 from shared.services.subscription_service import (
     get_base_subscription_plan,
@@ -93,6 +94,7 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
         InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
     )
+    b.row(InlineKeyboardButton(text="🧮 Калькулятор перехода legacy", callback_data="admin:transition_calc"))
     b.row(
         InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
@@ -116,8 +118,9 @@ def _admin_web_keyboard() -> InlineKeyboardMarkup:
         )
         b.row(
             InlineKeyboardButton(text="🎁 Промокоды", url=f"{admin_url}/promos"),
-            InlineKeyboardButton(text="📢 Рассылка", url=f"{admin_url}/broadcast"),
+            InlineKeyboardButton(text="📋 Тарифы", url=f"{admin_url}/tariffs"),
         )
+        b.row(InlineKeyboardButton(text="📢 Рассылка", url=f"{admin_url}/broadcast"))
         b.row(
             InlineKeyboardButton(text="🎫 Тикеты", url=f"{admin_url}/tickets"),
             InlineKeyboardButton(text="⚙️ Настройки", url=f"{admin_url}/settings"),
@@ -636,6 +639,56 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
         caption=text,
         reply_markup=admin_panel_keyboard(),
         settings=settings,
+    )
+
+
+@router.callback_query(F.data == "admin:transition_calc")
+async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    s = get_settings()
+    base = s.billing_transition_base_month_rub
+    fee = s.billing_transition_fee_percent
+    sample_days = (7, 15, 30, 45)
+    lines: list[str | object] = [
+        "🧮 " + bold("Калькулятор перехода с legacy"),
+        "",
+        plain("Сумма на баланс (ориентир): (остаток_дней / 30) × ")
+        + bold(str(base))
+        + plain(" ₽ × (1 − ")
+        + bold(str(fee))
+        + plain("%). Автоначисления нет."),
+        "",
+    ]
+    for d in sample_days:
+        c = transition_credit_for_remaining_legacy_rub(s, remaining_days=d)
+        lines.append(plain(f"{d} дн. → ") + bold(str(c)) + plain(" ₽"))
+    root = (s.public_site_url or "").strip().rstrip("/")
+    if root:
+        lines.extend(
+            [
+                "",
+                plain("Любое число дней: раздел "),
+                link("Тарифы", f"{root}/admin/tariffs"),
+                plain(" в web-admin."),
+            ]
+        )
+    else:
+        lines.append(
+            join_lines("", plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «осталось дней»."))
+        )
+    await cq.answer()
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(*lines),
+        reply_markup=kb.as_markup(),
+        settings=s,
     )
 
 
