@@ -209,14 +209,23 @@ class Settings(BaseSettings):
     )
     billing_v2_enabled: bool = Field(default=False, validation_alias="BILLING_V2_ENABLED")
     billing_v2_for_new_users_only: bool = Field(
-        default=True,
+        default=False,
         validation_alias="BILLING_V2_FOR_NEW_USERS_ONLY",
         description=(
-            "Если true — новые пользователи сразу hybrid (при BILLING_V2_ENABLED), "
-            "существующие legacy не переводятся автоматически (/start и фоновый цикл перехода отключены для них); "
-            "списания pay-per-use в вебхуках только для hybrid. Если false — полный rollout: "
-            "фоновый перевод legacy→hybrid после окончания подписки и maybe_switch_to_hybrid на /start."
+            "Устарело: при BILLING_V2_ENABLED новые пользователи hybrid, legacy переводится на hybrid "
+            "после окончания подписки (и на /start). Значение больше не блокирует перевод."
         ),
+    )
+    billing_calendar_timezone: str = Field(
+        default="Europe/Moscow",
+        validation_alias="BILLING_CALENDAR_TIMEZONE",
+        description="Часовой пояс календарных суток для детализации и суточного списания за устройства",
+    )
+    billing_device_daily_job_interval_sec: int = Field(
+        default=120,
+        ge=60,
+        validation_alias="BILLING_DEVICE_DAILY_JOB_INTERVAL_SEC",
+        description="Интервал проверки «догонки» суточного списания за устройства (сек)",
     )
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
@@ -293,35 +302,34 @@ class Settings(BaseSettings):
         description="Как часто проверять подписки на напоминания (сек)",
     )
 
-    # Рефералы: бонус при /start по ссылке + награда пригласившему за первую покупку друга (пропорционально сроку)
+    # Рефералы: бонус при /start по ссылке + процент с платежей приглашённого (пополнение, тариф/слот с баланса)
     referral_signup_bonus_rub: Decimal = Field(
         default=Decimal("15"),
         validation_alias="REFERRAL_SIGNUP_BONUS_RUB",
         description="Регистрация по реф-ссылке: столько ₽ на основной баланс и пригласившему, и приглашённому (0 = выкл.)",
     )
     referral_inviter_reward_rub_per_30_days: Decimal = Field(
-        default=Decimal("15"),
+        default=Decimal("0"),
         validation_alias=AliasChoices(
             "REFERRAL_INVITER_REWARD_RUB_PER_30_DAYS",
             "REFERRAL_INVITER_BONUS_RUB",
         ),
-        description="Первая платная покупка приглашённого: ₽ пригласившему на каждые 30 дн. купленного тарифа (0 = выкл.)",
+        description="Устарело (оставлено для совместимости): раньше фикс. ₽ за первую покупку тарифа; используйте REFERRAL_PAYMENT_PERCENT.",
     )
     referral_inviter_reward_days_per_30_days: int = Field(
-        default=5,
+        default=0,
         validation_alias=AliasChoices(
             "REFERRAL_INVITER_REWARD_DAYS_PER_30_DAYS",
             "REFERRAL_INVITER_BONUS_DAYS",
         ),
-        description="Там же: дней к активной подписке пригласившего на каждые 30 дн. периода (0 = выкл.)",
+        description="Устарело: дни подписки рефереру за первую покупку друга (0 = выкл.).",
     )
-    referral_topup_percent: Decimal = Field(
+    referral_payment_percent: Decimal = Field(
         default=Decimal("10"),
-        validation_alias="REFERRAL_TOPUP_PERCENT",
+        validation_alias=AliasChoices("REFERRAL_PAYMENT_PERCENT", "REFERRAL_TOPUP_PERCENT"),
         description=(
-            "Реферальное начисление только от пополнений баланса приглашённого (вебхуки оплаты), "
-            "в процентах. Покупки тарифа с баланса сюда не входят — для них отдельно "
-            "REFERRAL_INVITER_REWARD_* при первой платной покупке."
+            "Процент на баланс реферера от платежей приглашённого: пополнения (Platega и т.д.) "
+            "и списания с баланса (тариф, доп. устройство). 0 = выкл."
         ),
     )
 

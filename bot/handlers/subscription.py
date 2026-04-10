@@ -33,9 +33,15 @@ from shared.services.subscription_service import (
     set_subscription_auto_renew,
 )
 
+from shared.services.billing_v2.billing_calendar import (
+    billing_local_day_end_utc_exclusive,
+    billing_local_day_start_utc,
+    billing_today,
+)
 from shared.services.billing_v2.detail_service import (
     get_month_summaries,
     get_today_summary,
+    month_bounds,
     summarize_month_total,
     usage_package_breakdown,
 )
@@ -458,9 +464,10 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
         return
     assert db_user is not None
     settings = get_settings()
-    row = await get_today_summary(session, user_id=db_user.id)
-    from_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    to_dt = from_dt + timedelta(days=1)
+    today = billing_today(settings)
+    row = await get_today_summary(session, user_id=db_user.id, today=today)
+    from_dt = billing_local_day_start_utc(settings, today)
+    to_dt = billing_local_day_end_utc_exclusive(settings, today)
     pack = await usage_package_breakdown(session, user_id=db_user.id, from_dt=from_dt, to_dt=to_dt)
     if row is None:
         text = join_lines("📅 " + bold("Сегодня"), "", plain("Списаний пока нет."))
@@ -514,13 +521,11 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
         return
     assert db_user is not None
     settings = get_settings()
-    rows = await get_month_summaries(session, user_id=db_user.id)
-    now = datetime.now(timezone.utc)
-    month_from = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if now.month == 12:
-        month_to = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:
-        month_to = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    anchor = billing_today(settings)
+    rows = await get_month_summaries(session, user_id=db_user.id, anchor_day=anchor)
+    month_start, next_month = month_bounds(anchor)
+    month_from = billing_local_day_start_utc(settings, month_start)
+    month_to = billing_local_day_start_utc(settings, next_month)
     pack = await usage_package_breakdown(session, user_id=db_user.id, from_dt=month_from, to_dt=month_to)
     if not rows:
         text = join_lines("🗓 " + bold("За месяц"), "", plain("Списаний пока нет."))

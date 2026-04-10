@@ -26,6 +26,7 @@ from shared.services.remnawave_username import build_remnawave_username_from_db_
 from shared.services.smart_cart import set_cart_plan
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
+from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 
 logger = logging.getLogger(__name__)
 
@@ -314,27 +315,27 @@ async def purchase_plan_with_balance(
         return False, join_lines(plain("Не удалось обновить доступ VPN:"), esc(str(e))), "error"
 
     user.balance -= price
-    session.add(
-        Transaction(
-            user_id=user.id,
-            type="subscription",
-            amount=price,
-            currency="RUB",
-            payment_provider="balance",
-            payment_id=idempotency_key,
-            status="completed",
-            description=f"Тариф «{purchased_plan.name}»",
-            meta={
-                "plan_id": purchased_plan.id,
-                "purchased_plan_id": purchased_plan.id,
-                "storage_plan_id": base_plan.id,
-                "original_price_rub": str(original_price),
-                "final_price_rub": str(price),
-                "discount_percent": str(discount_percent),
-                "discount_amount_rub": str(discount_amount),
-            },
-        )
+    purchase_txn = Transaction(
+        user_id=user.id,
+        type="subscription",
+        amount=price,
+        currency="RUB",
+        payment_provider="balance",
+        payment_id=idempotency_key,
+        status="completed",
+        description=f"Тариф «{purchased_plan.name}»",
+        meta={
+            "plan_id": purchased_plan.id,
+            "purchased_plan_id": purchased_plan.id,
+            "storage_plan_id": base_plan.id,
+            "original_price_rub": str(original_price),
+            "final_price_rub": str(price),
+            "discount_percent": str(discount_percent),
+            "discount_amount_rub": str(discount_amount),
+        },
     )
+    session.add(purchase_txn)
+    await session.flush()
 
     rw_uuid = user.remnawave_uuid
     assert rw_uuid is not None
@@ -401,9 +402,15 @@ async def purchase_plan_with_balance(
         msg += "\n\n" + link("Ссылка подписки", sub_url)
 
     from shared.services.admin_notify import notify_admin
-    from shared.services.referral_service import grant_referrer_reward_first_paid_plan
 
-    await grant_referrer_reward_first_paid_plan(session, buyer=user, plan=purchased_plan, settings=settings)
+    await grant_referrer_percent_of_referred_payment(
+        session,
+        referred_user=user,
+        payment_amount_rub=price,
+        settings=settings,
+        idempotency_key=f"referral_pct:subscription:{purchase_txn.id}",
+        reward_source="payment_pct_plan",
+    )
     from shared.services.admin_log_topics import AdminLogTopic
 
     await notify_admin(
@@ -498,20 +505,27 @@ async def add_paid_device_slot(
             name=f"Устройство {new_idx}",
         )
     )
-    session.add(
-        Transaction(
-            user_id=user.id,
-            type="manual_add",
-            amount=price,
-            currency="RUB",
-            payment_provider="balance",
-            payment_id=idempotency_key,
-            status="completed",
-            description="Дополнительное устройство",
-            meta={"subscription_id": sub.id},
-        )
+    slot_txn = Transaction(
+        user_id=user.id,
+        type="manual_add",
+        amount=price,
+        currency="RUB",
+        payment_provider="balance",
+        payment_id=idempotency_key,
+        status="completed",
+        description="Дополнительное устройство",
+        meta={"subscription_id": sub.id},
     )
+    session.add(slot_txn)
     await session.flush()
+    await grant_referrer_percent_of_referred_payment(
+        session,
+        referred_user=user,
+        payment_amount_rub=price,
+        settings=settings,
+        idempotency_key=f"referral_pct:device_slot:{slot_txn.id}",
+        reward_source="payment_pct_device",
+    )
     return True, join_lines(
         plain("Добавлен слот устройства (−")
         + bold(str(price))

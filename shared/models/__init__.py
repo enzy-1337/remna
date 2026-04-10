@@ -1,6 +1,7 @@
 """SQLAlchemy-модели (полная схема ТЗ)."""
 
 from shared.models.base import Base
+from shared.models.billing_cron_checkpoint import BillingCronCheckpoint
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
@@ -19,6 +20,7 @@ __all__ = [
     "Base",
     "BillingUsageEvent",
     "BillingLedgerEntry",
+    "BillingCronCheckpoint",
     "BillingDailySummary",
     "DeviceHistory",
     "RemnawaveWebhookEvent",

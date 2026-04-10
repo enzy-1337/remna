@@ -17,6 +17,7 @@ from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
 from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.device_service import add_device_history_event
+from shared.services.billing_v2.billing_calendar import billing_today
 from shared.services.billing_v2.rating_service import charge_daily_device_once, charge_gb_step
 
 
@@ -344,7 +345,7 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                     session,
                     user=user,
                     device_hwid=hwid,
-                    day=now.date(),
+                    day=billing_today(settings),
                     settings=settings,
                 )
             if is_active:

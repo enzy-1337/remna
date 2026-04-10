@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
+from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.tickets_db_compat import (
     ticket_messages_has_photo_file_id_column,
@@ -26,6 +27,7 @@ from shared.tickets_db_compat import (
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.billing_v2.billing_calendar import billing_today
 from shared.services.billing_v2.detail_service import get_month_summaries, get_today_summary, summarize_month_total
 from tickets.config import config as tickets_config
 
@@ -108,8 +110,9 @@ class TicketAssignIn(BaseModel):
 @router.get("/billing/{user_id}/detail/today")
 async def api_billing_detail_today(request: Request, user_id: int) -> dict:
     _require_api_login(request)
+    settings = get_settings()
     async with await _session() as session:
-        row = await get_today_summary(session, user_id=user_id)
+        row = await get_today_summary(session, user_id=user_id, today=billing_today(settings))
     if row is None:
         return {"day": None, "items": None, "total_rub": "0.00"}
     return {
@@ -129,8 +132,9 @@ async def api_billing_detail_today(request: Request, user_id: int) -> dict:
 @router.get("/billing/{user_id}/detail/month")
 async def api_billing_detail_month(request: Request, user_id: int) -> dict:
     _require_api_login(request)
+    settings = get_settings()
     async with await _session() as session:
-        rows = await get_month_summaries(session, user_id=user_id)
+        rows = await get_month_summaries(session, user_id=user_id, anchor_day=billing_today(settings))
     return {
         "days": [{"day": r.day.isoformat(), "total_rub": str(r.total_amount_rub)} for r in rows],
         "total_rub": str(summarize_month_total(rows)),

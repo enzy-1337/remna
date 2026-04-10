@@ -42,8 +42,6 @@ async def maybe_switch_to_hybrid(
 ) -> bool:
     if not settings.billing_v2_enabled:
         return False
-    if settings.billing_v2_for_new_users_only and user.billing_mode == "legacy":
-        return False
     if user.billing_mode == "hybrid":
         return False
     ts = now or datetime.now(timezone.utc)
@@ -97,12 +95,12 @@ async def legacy_transition_loop(settings: Settings, stop_event: asyncio.Event) 
     interval = max(5, int(settings.billing_transition_check_interval_sec))
     while not stop_event.is_set():
         try:
-            if not settings.billing_v2_for_new_users_only:
-                async with get_session_factory()() as session:
-                    async with session.begin():
-                        n = await process_due_legacy_transitions(session, settings)
-                    if n:
-                        logger.info("legacy_transition: switched users=%s", n)
+            n = 0
+            async with get_session_factory()() as session:
+                async with session.begin():
+                    n = await process_due_legacy_transitions(session, settings)
+            if n:
+                logger.info("legacy_transition: switched users=%s", n)
         except Exception:
             logger.exception("legacy_transition loop failed")
         try:

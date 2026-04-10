@@ -55,6 +55,7 @@ from shared.services.schema_patches import (
     ensure_user_bot_message_id_columns,
 )
 from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
+from shared.services.billing_v2.device_daily_midnight_loop import device_daily_midnight_loop
 from shared.services.billing_v2.negative_balance_notify_loop import negative_balance_notify_loop
 from shared.services.billing_v2.transition_service import legacy_transition_loop
 
@@ -120,6 +121,7 @@ async def main() -> None:
     autorenew_task: asyncio.Task | None = None
     expiry_notify_task: asyncio.Task | None = None
     billing_cleanup_task: asyncio.Task | None = None
+    device_daily_task: asyncio.Task | None = None
     negative_notify_task: asyncio.Task | None = None
     legacy_transition_task: asyncio.Task | None = None
     if settings.remnawave_sync_enabled and not settings.remnawave_stub:
@@ -132,6 +134,7 @@ async def main() -> None:
     expiry_notify_task = asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event))
     if settings.billing_v2_enabled:
         billing_cleanup_task = asyncio.create_task(billing_cleanup_loop(settings, stop_event))
+        device_daily_task = asyncio.create_task(device_daily_midnight_loop(settings, stop_event))
         if settings.billing_negative_notify_enabled:
             negative_notify_task = asyncio.create_task(negative_balance_notify_loop(settings, stop_event))
         legacy_transition_task = asyncio.create_task(legacy_transition_loop(settings, stop_event))
@@ -172,6 +175,10 @@ async def main() -> None:
             billing_cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await billing_cleanup_task
+        if device_daily_task is not None:
+            device_daily_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await device_daily_task
         if negative_notify_task is not None:
             negative_notify_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

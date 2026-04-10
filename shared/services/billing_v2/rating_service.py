@@ -154,6 +154,8 @@ async def charge_daily_device_once(
     device_hwid: str,
     day: date,
     settings: Settings,
+    eval_at: datetime | None = None,
+    active_hwids_for_package: list[str] | None = None,
 ) -> bool:
     event_id = f"device_daily:{user.id}:{device_hwid}:{day.isoformat()}"
     existing = (
@@ -164,11 +166,15 @@ async def charge_daily_device_once(
     if existing is not None:
         return True
 
-    now = datetime.now(timezone.utc)
-    plan = await _active_package_plan(session, user_id=user.id, now=now)
+    ev_ts = eval_at or datetime.now(timezone.utc)
+    plan = await _active_package_plan(session, user_id=user.id, now=ev_ts)
     package_covered = False
     if plan is not None and plan.device_limit is not None and plan.device_limit > 0:
-        active_hwids = await list_active_device_hwids(session, user_id=user.id)
+        active_hwids = (
+            active_hwids_for_package
+            if active_hwids_for_package is not None
+            else await list_active_device_hwids(session, user_id=user.id)
+        )
         if is_device_covered_by_package(
             device_hwid=device_hwid,
             active_hwids=active_hwids,
@@ -180,7 +186,7 @@ async def charge_daily_device_once(
             user_id=user.id,
             event_id=event_id,
             event_type="device_daily",
-            event_ts=now,
+            event_ts=ev_ts,
             device_hwid=device_hwid,
             is_mobile_internet=False,
             meta={"package_covered": package_covered},

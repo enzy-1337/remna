@@ -23,8 +23,12 @@ from shared.services.referral_service import (
 router = Router(name="referrals")
 
 _REF_REWARD_SOURCE_RU = {
-    "first_paid_plan": "первая покупка тарифа",
-    "topup_percent": "% с пополнения друга",
+    "first_paid_plan": "первая покупка тарифа (устар.)",
+    "topup_percent": "% с пополнения друга (устар.)",
+    "payment_pct_topup": "% с пополнения друга",
+    "payment_pct_plan": "% с покупки тарифа с баланса",
+    "payment_pct_device": "% с оплаты слота устройства",
+    "referral_payment_percent": "% с платежа друга",
 }
 
 
@@ -54,13 +58,13 @@ def _referrals_main_body(
             + bold("вам и другу")
             + plain(", когда он нажал /start по вашей ссылке")
         )
-    if settings.referral_topup_percent > 0:
+    if settings.referral_payment_percent > 0:
         cond_lines.append(
             plain("• ")
-            + bold(str(settings.referral_topup_percent))
+            + bold(str(settings.referral_payment_percent))
             + plain("% на ваш баланс с ")
-            + bold("каждого пополнения")
-            + plain(" приглашённого")
+            + bold("каждого платежа")
+            + plain(" приглашённого (пополнение, тариф или слот устройства — с баланса)")
         )
     if rub_m > 0:
         cond_lines.append(

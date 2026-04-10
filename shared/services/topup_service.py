@@ -284,6 +284,7 @@ async def apply_topup_from_webhook(
         referred_user=user,
         topup_amount_rub=credited,
         settings=settings,
+        internal_topup_txn_id=txn.id,
     )
 
     await session.flush()
