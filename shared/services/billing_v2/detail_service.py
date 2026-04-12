@@ -200,7 +200,6 @@ async def list_completed_transactions_billing_local_range(
     settings: Settings,
     from_day: date,
     to_day_inclusive: date,
-    *,
     tariff_only: bool = False,
 ) -> list[Transaction]:
     """Транзакции ``completed`` за полуинтервал локальных суток ``[from_day, to_day_inclusive]``."""
