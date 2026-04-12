@@ -500,10 +500,9 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
-        "mx-auto box-border flex h-9 w-9 shrink-0 items-center justify-center gap-0 rounded-xl "
-        "text-sm font-medium no-underline transition-[background-color,color,box-shadow,width] "
-        "group-hover/sidebar:mx-0 group-hover/sidebar:h-9 group-hover/sidebar:w-full "
-        "group-hover/sidebar:justify-start group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
+        "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 "
+        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 "
+        "group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
     )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -513,16 +512,16 @@ def _nav_link_class(href: str, cur: str) -> str:
     elif c == h or c.startswith(h + "/"):
         active = True
     if active:
-        return f"{base} bg-primary/20 text-primary shadow-sm ring-2 ring-inset ring-primary/25"
+        return f"{base} bg-primary/20 text-primary shadow-sm ring-primary/25"
     return f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content"
 
 
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
-    return f"""<div class="flex w-full justify-center">
-    <a href="{href}" class="{cls}">
-      <i class="{icon_class} shrink-0 text-[15px] leading-none opacity-90" aria-hidden="true"></i>
-      <span class="nav-label ml-0 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:ml-0 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
+    return f"""<div class="flex w-full justify-center overflow-hidden">
+    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 overflow-hidden group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0">
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
+      <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[12rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
 
 
@@ -565,21 +564,21 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.75rem+2.75rem+0.75rem)] md:pr-6 lg:pr-8"
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.75rem+3.75rem+0.75rem)] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-11 min-w-11 max-w-11 flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-1 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-56 hover:max-w-none hover:min-w-[14rem] md:flex">
-      <div class="flex w-full shrink-0 flex-col items-center gap-0 py-2 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2">
+    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-[3.75rem] min-w-[3.75rem] max-w-[3.75rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-3 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-56 hover:max-w-none hover:min-w-[14rem] md:flex">
+      <div class="flex w-full shrink-0 flex-col items-center gap-0 py-3 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
         </span>
-        <span class="nav-label max-h-0 max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
+        <span class="nav-label pointer-events-none max-h-0 min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[10rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden py-1 group-hover/sidebar:items-stretch">
+      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-0 py-1 group-hover/sidebar:items-stretch">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
@@ -590,13 +589,13 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-2 group-hover/sidebar:items-stretch">
-        <div class="flex w-full items-center justify-center gap-1 group-hover/sidebar:justify-between">
+      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-3 group-hover/sidebar:items-stretch">
+        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
-          <a href="/admin/profile" class="nav-label min-w-0 max-w-0 flex-1 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
-          <form method="post" action="/admin/logout" class="nav-label flex shrink-0 max-w-0 justify-center overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
+          <a href="/admin/profile" class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
+          <form method="post" action="/admin/logout" class="nav-label pointer-events-none flex max-w-0 shrink-0 grow-0 basis-0 justify-center overflow-hidden opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">
             <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
               <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
             </button>
@@ -702,7 +701,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(0.75rem+2.75rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(0.75rem+3.75rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
