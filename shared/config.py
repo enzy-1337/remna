@@ -416,6 +416,14 @@ class Settings(BaseSettings):
         validation_alias="BACKUP_MAX_TELEGRAM_MB",
         description="Максимальный размер файла для отправки в Telegram (лимит бота ~50 МБ)",
     )
+    backup_pg_dump_bin: str | None = Field(
+        default=None,
+        validation_alias="BACKUP_PG_DUMP_BIN",
+        description=(
+            "Полный путь к pg_dump той же major-версии, что и сервер PostgreSQL "
+            "(иначе pg_dump откажется при несовпадении версий)"
+        ),
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")

@@ -367,6 +367,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Лимит размера для отправки в Telegram (~50 МБ у ботов).",
             ),
             (
+                "BACKUP_PG_DUMP_BIN",
+                "Путь к pg_dump",
+                lambda s: s.backup_pg_dump_bin or "",
+                "Та же major-версия, что у сервера PostgreSQL; иначе ошибка несовпадения версий.",
+            ),
+            (
                 "CHANNEL_SUB_CACHE_TTL",
                 "TTL кэша подписки на канал (сек)",
                 lambda s: str(s.channel_sub_cache_ttl),

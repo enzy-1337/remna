@@ -73,8 +73,9 @@ async def run_daily_backup(settings: Settings) -> None:
     if sslmode:
         env["PGSSLMODE"] = str(sslmode)
 
+    pg_dump_exe = (settings.backup_pg_dump_bin or "").strip() or "pg_dump"
     cmd = [
-        "pg_dump",
+        pg_dump_exe,
         "-h",
         str(params["host"]),
         "-p",
@@ -99,7 +100,10 @@ async def run_daily_backup(settings: Settings) -> None:
     except FileNotFoundError:
         await notify_admin_plain(
             settings,
-            text="💾 Бэкап: не найден pg_dump (установите клиент PostgreSQL и добавьте в PATH).",
+            text=(
+                "💾 Бэкап: не найден pg_dump "
+                f"({pg_dump_exe!r}; задайте BACKUP_PG_DUMP_BIN или установите клиент в PATH)."
+            ),
             topic=AdminLogTopic.BACKUPS,
             event_type="backup_error",
         )
