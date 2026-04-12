@@ -288,7 +288,12 @@ async def apply_topup_from_webhook(
 
     # Приветственный бонус ГБ на первом пополнении без активной подписки (см. BILLING_FIRST_TOPUP_WELCOME_GB).
     welcome_gb = int(settings.billing_first_topup_welcome_gb)
-    if first_topup and not had_active_sub_before_payg and welcome_gb > 0:
+    if (
+        first_topup
+        and not had_active_sub_before_payg
+        and settings.billing_first_topup_welcome_enabled
+        and welcome_gb > 0
+    ):
         bonus_payment_id = f"welcome_gb_bonus:{user.id}"
         already_bonus = (
             await session.execute(

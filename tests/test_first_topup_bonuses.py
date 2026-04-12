@@ -25,6 +25,7 @@ def _settings(**overrides: object) -> SimpleNamespace:
         billing_v2_enabled=False,
         billing_first_topup_extra_balance_percent=Decimal("100"),
         billing_first_topup_extra_balance_min_rub=Decimal("10"),
+        billing_first_topup_welcome_enabled=True,
         billing_first_topup_welcome_gb=0,
         remnawave_stub=True,
     )
@@ -133,6 +134,47 @@ class FirstTopupBonusesTests(IsolatedAsyncioTestCase):
             parsed = ParsedWebhookTopup(
                 internal_transaction_id=int(tid),
                 external_payment_id="ext-2",
+                amount_rub=Decimal("50"),
+                paid=True,
+            )
+            await apply_topup_from_webhook(session, provider_name="cryptobot", parsed=parsed, settings=settings)
+            w = (
+                await session.execute(
+                    select(Transaction.id).where(Transaction.type == "welcome_gb_bonus", Transaction.user_id == u.id)
+                )
+            ).scalar_one_or_none()
+            self.assertIsNone(w)
+            await session.commit()
+
+    async def test_welcome_gb_disabled_when_flag_off(self) -> None:
+        settings = _settings(
+            billing_first_topup_extra_balance_percent=Decimal("0"),
+            billing_first_topup_welcome_gb=5,
+            billing_first_topup_welcome_enabled=False,
+        )
+        async with self.factory() as session:
+            u = await self._mk_user(session)
+            session.add(
+                Transaction(
+                    user_id=u.id,
+                    type="topup",
+                    amount=Decimal("50"),
+                    currency="RUB",
+                    payment_provider="cryptobot",
+                    payment_id="ext-3",
+                    status="pending",
+                    description="test",
+                    meta={"telegram_id": int(u.telegram_id)},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.flush()
+            tid = (
+                await session.execute(select(Transaction.id).where(Transaction.user_id == u.id).limit(1))
+            ).scalar_one()
+            parsed = ParsedWebhookTopup(
+                internal_transaction_id=int(tid),
+                external_payment_id="ext-3",
                 amount_rub=Decimal("50"),
                 paid=True,
             )

@@ -499,7 +499,12 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 
 
 def _nav_link_class(href: str, cur: str) -> str:
-    base = "flex w-full items-center gap-0 rounded-xl px-1.5 py-2 text-sm font-medium transition-colors no-underline"
+    base = (
+        "mx-auto box-border flex h-9 w-9 shrink-0 items-center justify-center gap-0 rounded-xl "
+        "text-sm font-medium no-underline transition-[background-color,color,box-shadow,width] "
+        "group-hover/sidebar:mx-0 group-hover/sidebar:h-9 group-hover/sidebar:w-full "
+        "group-hover/sidebar:justify-start group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
+    )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
     active = False
@@ -508,16 +513,16 @@ def _nav_link_class(href: str, cur: str) -> str:
     elif c == h or c.startswith(h + "/"):
         active = True
     if active:
-        return f"{base} bg-primary/20 text-primary shadow-sm border border-primary/20"
-    return f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content border border-transparent"
+        return f"{base} bg-primary/20 text-primary shadow-sm ring-2 ring-inset ring-primary/25"
+    return f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content"
 
 
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
-    return f"""<div class="shrink-0 px-1.5">
+    return f"""<div class="flex w-full justify-center px-0 group-hover/sidebar:px-1">
     <a href="{href}" class="{cls}">
-      <i class="{icon_class} fa-fw w-6 shrink-0 text-center text-[15px] opacity-90" aria-hidden="true"></i>
-      <span class="nav-label ml-1 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
+      <i class="{icon_class} shrink-0 text-[15px] leading-none opacity-90" aria-hidden="true"></i>
+      <span class="nav-label ml-0 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:ml-0 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
 
 
@@ -529,6 +534,15 @@ def _mob_nav_cls(href: str, cur: str) -> str:
     else:
         act = c == h or c.startswith(h + "/")
     return "text-primary font-semibold" if act else "text-base-content/55"
+
+
+def _mob_drawer_link(href: str, icon_class: str, label: str, cur: str) -> str:
+    tone = _mob_nav_cls(href, cur)
+    return (
+        f'<a href="{href}" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case {tone}">'
+        f'<i class="{icon_class} w-5 shrink-0 text-center text-base" aria-hidden="true"></i>'
+        f"<span>{_esc(label)}</span></a>"
+    )
 
 
 def _layout(
@@ -551,21 +565,21 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-28 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[4.5rem] md:pr-6 lg:pr-8"
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-9 md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-0 top-0 z-[60] hidden h-screen w-14 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width] duration-300 ease-out hover:w-56 md:flex">
-      <div class="flex shrink-0 items-center gap-0 px-1.5 pb-3 pt-2.5">
+    <aside class="group/sidebar fixed left-0 top-0 z-[60] hidden h-screen w-9 min-w-9 max-w-9 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-56 hover:max-w-none hover:min-w-[14rem] md:flex">
+      <div class="flex w-full shrink-0 flex-col items-center gap-0 px-0 py-2 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2 group-hover/sidebar:px-2">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
         </span>
-        <span class="nav-label ml-2 max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
+        <span class="nav-label max-h-0 max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[10rem] group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden px-0">
+      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden py-1 group-hover/sidebar:items-stretch">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
@@ -576,13 +590,13 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto border-t border-base-content/10 p-1.5">
-        <div class="flex w-full min-h-10 items-center gap-1">
-          <a href="/admin/profile" class="shrink-0 rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
+      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-2 group-hover/sidebar:items-stretch group-hover/sidebar:px-1">
+        <div class="flex w-full items-center justify-center gap-1 group-hover/sidebar:justify-between">
+          <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
-          <a href="/admin/profile" class="nav-label min-w-0 flex-1 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
-          <form method="post" action="/admin/logout" class="nav-label shrink-0 opacity-0 max-w-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
+          <a href="/admin/profile" class="nav-label min-w-0 max-w-0 flex-1 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
+          <form method="post" action="/admin/logout" class="nav-label flex shrink-0 max-w-0 justify-center overflow-hidden opacity-0 transition-all duration-300 ease-out group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
             <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
               <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
             </button>
@@ -597,23 +611,30 @@ def _layout(
       </span>
       <span class="max-w-[min(14rem,calc(100vw-8.5rem))] truncate text-sm font-bold tracking-tight text-base-content">{_esc(brand_title)}</span>
     </header>"""
-        mobile_nav = f"""
-    <nav class="fixed bottom-0 left-0 right-0 z-30 flex h-[4.25rem] items-center justify-between gap-0 border-t border-base-content/10 bg-base-300/95 px-2 py-1.5 backdrop-blur-md md:hidden" aria-label="Мобильное меню">
-      <a href="/admin/dashboard" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/dashboard', cur)}"><i class="fa-solid fa-chart-pie text-base"></i><span>Дашборд</span></a>
-      <a href="/admin/status" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/status', cur)}"><i class="fa-solid fa-heart-pulse text-base"></i><span>Статус</span></a>
-      <a href="/admin/users" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/users', cur)}"><i class="fa-solid fa-users text-base"></i><span>Юзеры</span></a>
-      <a href="/admin/tickets" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tickets', cur)}"><i class="fa-solid fa-headset text-base"></i><span>Тикеты</span></a>
-      <a href="/admin/subscriptions" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/subscriptions', cur)}"><i class="fa-solid fa-clock-rotate-left text-base"></i><span>Подписки</span></a>
-      <a href="/admin/tariffs" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/tariffs', cur)}"><i class="fa-solid fa-tags text-base"></i><span>Тарифы</span></a>
-      <a href="/admin/promos" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/promos', cur)}"><i class="fa-solid fa-ticket text-base"></i><span>Промо</span></a>
-      <a href="/admin/broadcast" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/broadcast', cur)}"><i class="fa-solid fa-bullhorn text-base"></i><span>Рассыл.</span></a>
-      <a href="/admin/settings" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/settings', cur)}"><i class="fa-solid fa-gear text-base"></i><span>Настр.</span></a>
-      <a href="/admin/profile" class="flex min-w-0 flex-1 flex-col items-center gap-0.5 p-1 text-[9px] leading-tight {_mob_nav_cls('/admin/profile', cur)}"><i class="fa-solid fa-user text-base"></i><span>Профиль</span></a>
-      <form method="post" action="/admin/logout" class="flex min-w-0 flex-1 flex-col items-center justify-center p-1"><button type="submit" class="text-error" title="Выйти"><i class="fa-solid fa-right-from-bracket text-base"></i></button></form>
-    </nav>"""
+        mobile_drawer = f"""
+    <button type="button" id="remna-mnav-open" class="btn btn-primary btn-circle fixed bottom-5 left-3 z-50 h-12 w-12 min-h-12 min-w-12 border-0 shadow-xl md:hidden" aria-expanded="false" aria-controls="remna-mnav-drawer" aria-label="Открыть меню">
+      <i class="fa-solid fa-bars text-lg" aria-hidden="true"></i>
+    </button>
+    <div id="remna-mnav-drawer" class="fixed inset-0 z-[75] hidden md:hidden" aria-hidden="true">
+      <div class="absolute inset-0 bg-base-content/45 backdrop-blur-sm" data-remna-mnav-close></div>
+      <aside class="absolute left-0 top-0 flex h-full w-[min(20rem,90vw)] flex-col gap-1 overflow-y-auto border-r border-base-content/10 bg-base-300 py-14 pl-2 pr-2 shadow-2xl" aria-label="Меню админки">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-3 z-10" data-remna-mnav-close aria-label="Закрыть"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        {_mob_drawer_link("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
+        {_mob_drawer_link("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
+        {_mob_drawer_link("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
+        {_mob_drawer_link("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
+        {_mob_drawer_link("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
+        {_mob_drawer_link("/admin/tariffs", "fa-solid fa-tags", "Тарифы", cur)}
+        {_mob_drawer_link("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
+        {_mob_drawer_link("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
+        {_mob_drawer_link("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
+        {_mob_drawer_link("/admin/profile", "fa-solid fa-user", "Мой профиль", cur)}
+        <form method="post" action="/admin/logout" class="mt-2 border-t border-base-content/10 pt-2"><button type="submit" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case text-error"><i class="fa-solid fa-right-from-bracket w-5 shrink-0 text-center text-base" aria-hidden="true"></i><span>Выйти</span></button></form>
+      </aside>
+    </div>"""
         theme_toggle = """
     <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2 top-2 z-[52] h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
-        nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_nav + theme_toggle
+        nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_drawer + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
     <div id="remna-loading-overlay" class="remna-loading-overlay" aria-hidden="true">
@@ -681,7 +702,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(3.5rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(2.25rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
@@ -886,7 +907,17 @@ def _layout(
       }
     },true);
     document.addEventListener('keydown',function(e){
-      if(e.key==='Escape')window.remnaCloseAllModals();
+      if(e.key!=='Escape')return;
+      var mdr=document.getElementById('remna-mnav-drawer');
+      if(mdr&&!mdr.classList.contains('hidden')){
+        mdr.classList.add('hidden');
+        mdr.setAttribute('aria-hidden','true');
+        document.body.style.overflow='';
+        var mop=document.getElementById('remna-mnav-open');
+        if(mop)mop.setAttribute('aria-expanded','false');
+        return;
+      }
+      window.remnaCloseAllModals();
     });
     document.addEventListener('submit',function(e){
       var f=e.target;
@@ -918,6 +949,36 @@ def _layout(
     }
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',remnaConsumeUrlNotify);
     else remnaConsumeUrlNotify();
+    (function(){
+      var dr=document.getElementById('remna-mnav-drawer');
+      var op=document.getElementById('remna-mnav-open');
+      if(!dr||!op)return;
+      function remnaMnavOpen(){
+        dr.classList.remove('hidden');
+        dr.setAttribute('aria-hidden','false');
+        op.setAttribute('aria-expanded','true');
+        document.body.style.overflow='hidden';
+      }
+      function remnaMnavClose(){
+        dr.classList.add('hidden');
+        dr.setAttribute('aria-hidden','true');
+        op.setAttribute('aria-expanded','false');
+        document.body.style.overflow='';
+      }
+      op.addEventListener('click',function(e){
+        e.preventDefault();
+        if(dr.classList.contains('hidden'))remnaMnavOpen();else remnaMnavClose();
+      });
+      dr.addEventListener('click',function(e){
+        if(e.target&&e.target.closest&&e.target.closest('[data-remna-mnav-close]'))remnaMnavClose();
+      });
+      dr.querySelectorAll('a[href]').forEach(function(a){
+        a.addEventListener('click',function(){remnaMnavClose();});
+      });
+      dr.querySelectorAll('form[method="post"]').forEach(function(f){
+        f.addEventListener('submit',function(){remnaMnavClose();});
+      });
+    })();
   })();
   </script>"""
 
@@ -3820,7 +3881,13 @@ async def admin_settings(request: Request) -> HTMLResponse:
     <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
-        <p class="text-sm opacity-70">Редактируются только безопасные ключи (пояснения — как в комментариях к <code class="bg-base-300 px-1 rounded text-xs">.env.example</code>). Токены, <code class="bg-base-300 px-1 rounded text-xs">DATABASE_URL</code>, секреты платежей и GitHub — правьте на сервере вручную.</p>
+        <p class="text-sm opacity-80 max-w-4xl">Здесь — <strong>безопасный поднабор</strong> переменных: их можно менять из браузера, они записываются в файл <code class="bg-base-300 px-1 rounded text-xs">.env</code> на сервере. Пояснения к каждому ключу совпадают по смыслу с комментариями в <code class="bg-base-300 px-1 rounded text-xs">.env.example</code> в репозитории — там полный список переменных.</p>
+        <ul class="text-sm opacity-70 list-disc pl-5 max-w-4xl space-y-1">
+          <li>Вкладка <strong>«Биллинг v2 и PAYG»</strong> — цены шага ГБ, сутки за устройство, пол баланса, опрос трафика, хранение детализации.</li>
+          <li>В <strong>«Подписки и устройства»</strong> — триал, автопродление, напоминания и переключатель <strong>бонусных ГБ при первом пополнении</strong> (как отдельный флаг у триала).</li>
+          <li><strong>Не</strong> доступно из этой формы: <code class="bg-base-300 px-0.5 rounded text-xs">BOT_TOKEN</code>, <code class="bg-base-300 px-0.5 rounded text-xs">DATABASE_URL</code>, секреты платёжных провайдеров, GitHub OAuth — их правят только на сервере.</li>
+        </ul>
+        <p class="text-sm opacity-70">После сохранения часть значений подхватится без перезапуска; для секретов и строк подключения перезапустите контейнеры API и бота.</p>
         {saved_note}
         <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
           {''.join(tab_buttons)}

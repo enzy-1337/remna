@@ -290,13 +290,21 @@ class Settings(BaseSettings):
         validation_alias="BILLING_FIRST_TOPUP_EXTRA_BALANCE_MIN_RUB",
         description="Минимальная сумма пополнения (₽ из транзакции), с которой срабатывает BILLING_FIRST_TOPUP_EXTRA_BALANCE_PERCENT",
     )
+    billing_first_topup_welcome_enabled: bool = Field(
+        default=True,
+        validation_alias="BILLING_FIRST_TOPUP_WELCOME_ENABLED",
+        description=(
+            "Мастер-переключатель бонуса ГБ при первом пополнении без активной подписки (как отдельный флаг у триала). "
+            "Если false — блок welcome не выполняется даже при BILLING_FIRST_TOPUP_WELCOME_GB > 0."
+        ),
+    )
     billing_first_topup_welcome_gb: int = Field(
         default=5,
         ge=0,
         le=1024,
         validation_alias="BILLING_FIRST_TOPUP_WELCOME_GB",
         description=(
-            "ГБ к лимиту трафика в Remnawave при первом пополнении **без** активной подписки; 0 отключает welcome-бонус. "
+            "ГБ к лимиту трафика в Remnawave при первом пополнении **без** активной подписки; 0 отключает сумму бонуса. "
             "Идемпотентность по транзакции `welcome_gb_bonus:{user_id}` без изменений."
         ),
     )
