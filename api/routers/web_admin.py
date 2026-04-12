@@ -519,7 +519,7 @@ def _nav_link_class(href: str, cur: str) -> str:
 
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
-    return f"""<div class="flex w-full justify-center px-0 group-hover/sidebar:px-1">
+    return f"""<div class="flex w-full justify-center">
     <a href="{href}" class="{cls}">
       <i class="{icon_class} shrink-0 text-[15px] leading-none opacity-90" aria-hidden="true"></i>
       <span class="nav-label ml-0 max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-300 ease-out group-hover/sidebar:ml-0 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:opacity-100">{_esc(label)}</span>
@@ -565,15 +565,15 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-9 md:pr-6 lg:pr-8"
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.75rem+2.75rem+0.75rem)] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-0 top-0 z-[60] hidden h-screen w-9 min-w-9 max-w-9 flex-col overflow-x-hidden border-r border-base-content/10 bg-base-300 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-56 hover:max-w-none hover:min-w-[14rem] md:flex">
-      <div class="flex w-full shrink-0 flex-col items-center gap-0 px-0 py-2 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2 group-hover/sidebar:px-2">
+    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-11 min-w-11 max-w-11 flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-1 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-56 hover:max-w-none hover:min-w-[14rem] md:flex">
+      <div class="flex w-full shrink-0 flex-col items-center gap-0 py-2 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
         </span>
@@ -590,7 +590,7 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-2 group-hover/sidebar:items-stretch group-hover/sidebar:px-1">
+      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-2 group-hover/sidebar:items-stretch">
         <div class="flex w-full items-center justify-center gap-1 group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
@@ -702,7 +702,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(2.25rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(0.75rem+2.75rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
