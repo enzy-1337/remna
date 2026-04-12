@@ -125,7 +125,8 @@ async def charge_gb_step(
         return True
 
     amount = settings.billing_gb_step_rub
-    mobile_extra = settings.billing_mobile_gb_extra_rub if is_mobile_internet else Decimal("0")
+    # Надбавка за «мобильный интернет» из вебхука отключена: отдельная оплата только за оптим. маршрут (opt_extra).
+    mobile_extra = Decimal("0")
     opt_extra = (
         settings.billing_optimized_route_gb_extra_rub if user.optimized_route_enabled else Decimal("0")
     )
@@ -166,9 +167,6 @@ async def charge_gb_step(
     summary = await _upsert_daily(session, user_id=user.id, day=summary_day)
     summary.gb_units += 1
     summary.gb_amount_rub += amount
-    if is_mobile_internet:
-        summary.mobile_gb_units += 1
-        summary.mobile_amount_rub += mobile_extra
     if opt_extra > 0:
         summary.gb_amount_rub += opt_extra
     summary.total_amount_rub += total

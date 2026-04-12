@@ -92,7 +92,10 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
         InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
     )
-    b.row(InlineKeyboardButton(text="🧮 Калькулятор перехода legacy", callback_data="admin:transition_calc"))
+    b.row(
+        InlineKeyboardButton(text="🧮 Калькулятор перехода legacy", callback_data="admin:transition_calc"),
+        InlineKeyboardButton(text="📊 Калькулятор PAYG", callback_data="admin:calc_payg"),
+    )
     b.row(
         InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
@@ -123,7 +126,7 @@ def _admin_web_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎫 Тикеты", url=f"{admin_url}/tickets"),
             InlineKeyboardButton(text="⚙️ Настройки", url=f"{admin_url}/settings"),
         )
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
     return b.as_markup()
 
 
@@ -276,7 +279,7 @@ async def _render_admin_subs_screen(
         else placeholder
     )
     b.row(left_btn, mid_btn, right_btn)
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(*lines),
@@ -484,7 +487,7 @@ async def _render_admin_users_list_screen(
         else placeholder
     )
     b.row(left_btn, mid_btn, right_btn)
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
 
     await answer_callback_with_photo_screen(
         cq,
@@ -860,7 +863,7 @@ async def cb_admin_metrics(
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:metrics"))
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
     await cq.answer()
     await answer_callback_with_photo_screen(
         cq,
@@ -1480,7 +1483,7 @@ async def cb_admin_find_cancel(
     if db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
-    await cb_admin_panel(cq, db_user)
+    await cb_admin_section_users(cq, db_user)
 
 
 @router.message(StateFilter(AdminFindUserStates.waiting_telegram_id), F.text)
@@ -1574,7 +1577,7 @@ async def msg_admin_find_telegram_id(
                     callback_data=f"admin:u:{u.id}",
                 )
             )
-        b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+        b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
         sent = await send_profile_screen(
             message.bot,
             chat_id=message.chat.id,
@@ -1627,7 +1630,7 @@ async def msg_admin_find_telegram_id(
     ]
     adm = InlineKeyboardBuilder()
     adm.row(InlineKeyboardButton(text="🛠 Карточка", callback_data=f"admin:u:{u.id}"))
-    adm.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    adm.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
     if message.bot is None:
         return
     sent2 = await send_profile_screen(
@@ -1995,19 +1998,7 @@ async def cb_broadcast_cancel(
     await cq.answer("Отменено.")
     if db_user is None:
         return
-    settings = get_settings()
-    text = join_lines(
-        "🛠 " + bold("Админ-панель"),
-        "",
-        plain("Выберите действие."),
-        "",
-    )
-    await answer_callback_with_photo_screen(
-        cq,
-        caption=text,
-        reply_markup=admin_panel_keyboard(),
-        settings=settings,
-    )
+    await cb_admin_section_analytics(cq, db_user)
 
 
 @router.message(StateFilter(AdminBroadcastStates.waiting_text), F.text)

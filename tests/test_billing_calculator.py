@@ -36,10 +36,10 @@ class PayPerUseEstimateTests(unittest.TestCase):
         self.assertEqual(r["traffic_rub"], Decimal("75"))
         self.assertEqual(r["total_rub"], Decimal("150"))
 
-    def test_mobile_addon(self) -> None:
+    def test_mobile_addon_disabled_in_estimate(self) -> None:
         s = _settings()
         r = estimate_pay_per_use_30d_rub(s, device_count=1, gb_per_month=1, mobile_gb_per_month=2)
-        self.assertEqual(r["mobile_extra_rub"], Decimal("5"))
+        self.assertEqual(r["mobile_extra_rub"], Decimal("0"))
 
 
 class PaygScenarioTests(unittest.TestCase):

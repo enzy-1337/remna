@@ -317,7 +317,7 @@ class Settings(BaseSettings):
 
     # Триал
     trial_enabled: bool = Field(
-        default=True,
+        default=False,
         validation_alias="TRIAL_ENABLED",
         description="Если false — кнопка триала скрыта для всех пользователей",
     )

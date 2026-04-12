@@ -69,15 +69,16 @@ async def build_subscription_detail_caption(
     sub = await get_active_subscription(session, user.id)
     now = datetime.now(timezone.utc)
     if not sub:
-        return (
-            join_lines(
-                "🔑 " + bold("Подписка"),
-                "",
-                plain("Нет активной подписки."),
-                plain("Оформите тариф или активируйте триал."),
-            ),
-            None,
-        )
+        lines = [
+            "🔑 " + bold("Подписка"),
+            "",
+            plain("Нет активной записи подписки."),
+            plain("При гибридном биллинге после пополнения баланса доступ PAYG включается автоматически."),
+            plain("Пакетный тариф — кнопка «Тарифы» ниже, если нужен фиксированный пакет."),
+        ]
+        if settings.trial_enabled:
+            lines.append(plain("Либо активируйте триал с главного экрана профиля."))
+        return (join_lines(*lines), None)
 
     plan = sub.plan
     status_human = "🟢 Активна" if sub.status in ("active", "trial") else f"⚪ {esc(sub.status)}"

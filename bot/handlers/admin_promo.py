@@ -274,7 +274,7 @@ async def _render_promos_list(
         b.row(left, InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin:promos:noop"), right)
 
     b.row(InlineKeyboardButton(text="➕ Создать", callback_data="admin:promos:create"))
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
 
     await answer_callback_with_photo_screen(
         cq,

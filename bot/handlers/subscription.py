@@ -72,18 +72,29 @@ def _sub_main_keyboard(
                 InlineKeyboardButton(text="📎 Подключиться", url=subscription_url),
                 InlineKeyboardButton(text="🔳 QR-код", callback_data="sub:qr"),
             )
-        if show_reissue_subscription:
-            b.row(InlineKeyboardButton(text="🔑 Новая ссылка подписки", callback_data="sub:reissue:ask"))
         b.row(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
+        b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
         if show_billing_detail:
             b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
-        b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
         if show_optimized_toggle:
             label = "🛰 Оптим. маршрут: вкл" if optimized_on else "🛰 Оптим. маршрут: выкл"
             b.row(InlineKeyboardButton(text=label[:64], callback_data="sub:opt_route:toggle"))
+        if show_reissue_subscription:
+            b.row(
+                InlineKeyboardButton(
+                    text="🔑 Перевыпустить ключи подключения",
+                    callback_data="sub:reissue:ask",
+                )
+            )
+        b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
+    else:
+        b.row(
+            InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
+            InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
+        )
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
@@ -278,10 +289,10 @@ async def cb_sub_reissue_ask(
         return
     settings = get_settings()
     cap = join_lines(
-        "🔑 " + bold("Новая ссылка подписки"),
+        "🔑 " + bold("Перевыпуск ключей подключения"),
         "",
-        plain("Панель Remnawave перевыпустит ссылку: старая перестанет работать."),
-        plain("После этого обновите подписку во всех приложениях VPN."),
+        plain("Панель Remnawave перевыпустит ключи и ссылку подписки: старые перестанут работать."),
+        plain("Обновите подписку во всех приложениях VPN."),
         "",
         bold("Продолжить?"),
     )
@@ -323,7 +334,7 @@ async def cb_sub_reissue_do(
     raw_url = uinf.get("subscriptionUrl")
     new_url = subscription_url_for_telegram(raw_url if isinstance(raw_url, str) else None, settings)
     cap_ok = join_lines(
-        "✅ " + bold("Ссылка обновлена"),
+        "✅ " + bold("Ключи и ссылка обновлены"),
         "",
         plain("Новая ссылка подписки:"),
         code(new_url) if new_url else plain("—"),
@@ -688,13 +699,6 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
             + bold(str(settings.billing_device_daily_rub))
             + plain(" ₽ = ")
             + bold(str(row.device_amount_rub))
-            + plain(" ₽"),
-            plain("За Мобильный интернет: ")
-            + bold(str(row.mobile_gb_units))
-            + plain(" × ")
-            + bold(str(settings.billing_mobile_gb_extra_rub))
-            + plain(" ₽ = ")
-            + bold(str(row.mobile_amount_rub))
             + plain(" ₽"),
             "",
             plain("В общем: ") + bold(str(row.total_amount_rub)) + plain(" ₽ за сегодня"),

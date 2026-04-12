@@ -54,6 +54,7 @@ from shared.services.billing_calculator import (
     plan_fields_for_ppu_estimate,
     transition_credit_for_remaining_legacy_rub,
 )
+from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
 from shared.services.billing_v2.billing_calendar import (
@@ -904,7 +905,7 @@ def _layout(
         var u=new URL(window.location.href);
         var n=u.searchParams.get('n');
         var err=u.searchParams.get('err');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(err)window.remnaToast('error',err);
         if(n||err){
@@ -3242,6 +3243,20 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
           {ref_block}
+          <div class="divider my-0"></div>
+          <div class="rounded-xl border border-error/40 bg-error/5 p-4">
+            <h3 class="text-sm font-bold uppercase tracking-wide text-error">Опасная зона</h3>
+            <p class="text-xs opacity-80 mt-2">Полное удаление из PostgreSQL (подписки, транзакции и связанные данные по CASCADE) и удаление учётной записи в Remnawave, если задан UUID и не включён REMNAWAVE_STUB.</p>
+            <form method="post" action="/admin/users/{user_id}/delete" class="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end" onsubmit="return confirm('Удалить пользователя #{user_id} навсегда? Это необратимо.');">
+              <label class="form-control w-full max-w-xs">
+                <span class="label-text text-xs font-medium">Подтверждение: введите Telegram ID</span>
+                <input type="text" name="confirm_telegram_id" required inputmode="numeric" autocomplete="off" placeholder="{_esc(str(ud.telegram_id))}" class="input input-bordered input-sm h-9 min-h-9 font-mono" />
+              </label>
+              <button type="submit" class="btn btn-error btn-sm h-9 min-h-9 gap-1.5">
+                <i class="fa-solid fa-user-slash" aria-hidden="true"></i>Удалить из БД и панели
+              </button>
+            </form>
+          </div>
         </div>
       </div>
       <div class="flex flex-col gap-4">
@@ -3361,6 +3376,42 @@ async def admin_user_add_balance(
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=bal_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/delete")
+async def admin_user_delete_post(
+    request: Request,
+    user_id: int,
+    confirm_telegram_id: str = Form(""),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    ct = (confirm_telegram_id or "").strip()
+    linked = await _linked_bot_user_for_admin(request)
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        if ct != str(user.telegram_id):
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Введите в поле точный Telegram ID этого пользователя (как подтверждение).')}",
+                status_code=303,
+            )
+        if linked is not None and linked.id == user.id:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Нельзя удалить свою собственную учётную запись.')}",
+                status_code=303,
+            )
+        ok, msg = await delete_user_from_app(session, user_id=user_id, settings=settings)
+        if not ok:
+            await session.rollback()
+            err = str(msg).replace("\n", " ")[:800]
+            return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse("/admin/users?n=user_del", status_code=303)
 
 
 @router.post("/users/{user_id}/subscription/disable")

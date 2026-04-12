@@ -1,4 +1,4 @@
-"""Калькулятор «тариф vs pay-as-you-go» (фаза 8 мастер-плана)."""
+"""Калькулятор «тариф vs pay-as-you-go» — только для админов (раздел Аналитика)."""
 
 from __future__ import annotations
 
@@ -24,10 +24,17 @@ from shared.services.subscription_service import list_paid_plans
 
 router = Router(name="calculator")
 
-# calc:s:period_days:device_days:gb_steps:mobile_gb_steps:opt_flag
-_SCENARIO_PREFIX = "calc:s:"
-_COMPARE_PREFIX = "calc:c:"
-_MENU = "calc:menu"
+# acalc:s:period_days:device_days:gb_steps:mobile_gb_steps:opt_flag
+_SCENARIO_PREFIX = "acalc:s:"
+_COMPARE_PREFIX = "acalc:c:"
+_MENU = "acalc:menu"
+ADMIN_ENTRY = "admin:calc_payg"
+
+
+def _is_bot_admin(tg_id: int | None) -> bool:
+    if tg_id is None:
+        return False
+    return tg_id in get_settings().admin_telegram_ids
 
 
 def _scenario_cb(period_days: int, device_days: int, gb: int, mob: int, opt: int) -> str:
@@ -61,10 +68,7 @@ def _presets_keyboard() -> InlineKeyboardBuilder:
         InlineKeyboardButton(text="1×7 дн · 5 ГБ", callback_data=_scenario_cb(7, 7, 5, 0, 0)),
         InlineKeyboardButton(text="1×30 · 15 ГБ + опт.", callback_data=_scenario_cb(30, 30, 15, 0, 1)),
     )
-    b.row(
-        InlineKeyboardButton(text="1×30 · 10 ГБ + 2 моб.", callback_data=_scenario_cb(30, 30, 10, 2, 0)),
-    )
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
     return b
 
 
@@ -84,7 +88,7 @@ def _plans_keyboard(
             label = f"{p.name[:20]}… {p.price_rub}₽"
         b.row(InlineKeyboardButton(text=label, callback_data=_compare_cb(p.id, period_days, device_days, gb, mob, opt)))
     b.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
     return b
 
 
@@ -107,14 +111,14 @@ def _scenario_caption(
         "",
         plain(
             f"Период: {period_days} дн., усл. устройств: ~{approx_devices}, "
-            f"шагов ГБ: {gb}, моб. шагов: {mob}, оптим. маршрут: {'да' if opt else 'нет'}."
+            f"шагов ГБ: {gb}, оптим. маршрут: {'да' if opt else 'нет'}."
         ),
+        plain("(Отдельная «мобильная» надбавка в биллинге отключена — только оптимизированный маршрут.)"),
         "",
         plain("Оценка pay-as-you-go:"),
         plain(f"• Устройства: {_fmt_money(est['device_rub'])} ₽"),
         plain(f"• Трафик (шаги ГБ): {_fmt_money(est['traffic_rub'])} ₽"),
-        plain(f"• Моб. доплата: {_fmt_money(est['mobile_extra_rub'])} ₽"),
-        plain(f"• Оптим. маршрут: {_fmt_money(est['optimized_extra_rub'])} ₽"),
+        plain(f"• Оптим. маршрут (надбавка к шагам ГБ): {_fmt_money(est['optimized_extra_rub'])} ₽"),
         "",
         bold(f"Итого: {_fmt_money(est['total_rub'])} ₽"),
         "",
@@ -129,11 +133,32 @@ def _append_no_plans_note(cap: str, plans: list[Plan]) -> str:
     return cap + "\n\n" + plain("Активных платных тарифов в базе пока нет — сравнение недоступно.")
 
 
-@router.callback_query(F.data.in_(("menu:calc", _MENU)))
-async def cb_calc_menu(
+@router.callback_query(F.data == "menu:calc")
+async def cb_calc_deprecated_user(cq: CallbackQuery) -> None:
+    await safe_callback_answer(
+        cq,
+        "Калькулятор перенесён в админ-панель бота → раздел «Аналитика».",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data.startswith("calc:"))
+async def cb_calc_deprecated_old_prefix(cq: CallbackQuery) -> None:
+    await safe_callback_answer(
+        cq,
+        "Этот экран устарел. Откройте админ-панель → «Аналитика» → «Калькулятор PAYG».",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data.in_((ADMIN_ENTRY, _MENU)))
+async def cb_calc_menu_admin(
     cq: CallbackQuery,
     db_user: User | None,
 ) -> None:
+    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     settings = get_settings()
@@ -143,7 +168,7 @@ async def cb_calc_menu(
     cap = join_lines(
         "📊 " + bold("Калькулятор: пакет vs pay-as-you-go"),
         "",
-        plain("Выберите типичный сценарий — мы оценим списания по балансу и сравним с ценой тарифа."),
+        plain("Оценка списаний по балансу и сравнение с ценой тарифа (для администраторов)."),
         plain("Цифры ориентировочные; фактический расход зависит от трафика и устройств."),
     )
     await answer_callback_with_photo_screen(
@@ -155,11 +180,14 @@ async def cb_calc_menu(
 
 
 @router.callback_query(F.data.startswith(_SCENARIO_PREFIX))
-async def cb_calc_scenario(
+async def cb_calc_scenario_admin(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
 ) -> None:
+    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     settings = get_settings()
@@ -215,17 +243,20 @@ async def cb_calc_scenario(
     else:
         nb = InlineKeyboardBuilder()
         nb.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-        nb.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+        nb.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
         kb = nb.as_markup()
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
 
 @router.callback_query(F.data.startswith(_COMPARE_PREFIX))
-async def cb_calc_compare(
+async def cb_calc_compare_admin(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
 ) -> None:
+    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     settings = get_settings()
@@ -292,5 +323,5 @@ async def cb_calc_compare(
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)

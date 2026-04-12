@@ -269,8 +269,7 @@ async def apply_topup_from_webhook(
 
     tg_id = int(meta.get("telegram_id") or 0)
 
-    # Приветственный бонус ГБ на первом пополнении без активной подписки (см. BILLING_FIRST_TOPUP_WELCOME_GB).
-    has_active_sub = (
+    had_active_sub_before_payg = (
         await session.execute(
             select(Subscription.id)
             .where(
@@ -281,8 +280,15 @@ async def apply_topup_from_webhook(
             .limit(1)
         )
     ).scalar_one_or_none() is not None
+
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        from shared.services.subscription_service import provision_hybrid_payg_panel_if_needed
+
+        await provision_hybrid_payg_panel_if_needed(session, user=user, settings=settings)
+
+    # Приветственный бонус ГБ на первом пополнении без активной подписки (см. BILLING_FIRST_TOPUP_WELCOME_GB).
     welcome_gb = int(settings.billing_first_topup_welcome_gb)
-    if first_topup and not has_active_sub and welcome_gb > 0:
+    if first_topup and not had_active_sub_before_payg and welcome_gb > 0:
         bonus_payment_id = f"welcome_gb_bonus:{user.id}"
         already_bonus = (
             await session.execute(

@@ -23,10 +23,10 @@ def estimate_payg_scenario_rub(
     """
     dd = max(0, int(device_days))
     g = max(0, int(gb_steps))
-    m = max(0, int(mobile_gb_steps))
+    max(0, int(mobile_gb_steps))  # аргумент сохранён для совместимости; в тарификации не используется
     device_total = (Decimal(dd) * settings.billing_device_daily_rub).quantize(Decimal("0.01"))
     traffic_total = (settings.billing_gb_step_rub * Decimal(g)).quantize(Decimal("0.01"))
-    mobile_total = (settings.billing_mobile_gb_extra_rub * Decimal(m)).quantize(Decimal("0.01"))
+    mobile_total = Decimal("0")
     opt_extra = (
         (settings.billing_optimized_route_gb_extra_rub * Decimal(g)).quantize(Decimal("0.01"))
         if optimized_route

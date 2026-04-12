@@ -87,19 +87,19 @@ async def cmd_start(
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(user, has_act))
     kb = profile_main_keyboard(
-        has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
-        show_plan_calculator=settings.billing_v2_enabled,
     )
     profile_block = profile_caption(user, tg)
     no_sub_hint = ""
     if not has_act:
         no_sub_hint = join_lines(
             "",
-            "💡 " + bold("Для старта пополните баланс на 10 ₽."),
-            plain("После первого успешного пополнения начислим стартовый бонус 5 ГБ."),
+            "💡 " + bold("Старт без пакетного тарифа"),
+            plain("Пополните баланс через платёж в боте — при гибридном биллинге подключится списание pay-as-you-go (устройства и трафик)."),
+            plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
+            plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
         )
     body = join_lines(*intro_lines, "", profile_block, no_sub_hint)
     await send_profile_screen(
@@ -179,19 +179,19 @@ async def cb_channel_check(
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
     kb = profile_main_keyboard(
-        has_active_sub=has_act,
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
-        show_plan_calculator=settings.billing_v2_enabled,
     )
     cap = profile_caption(db_user, tg_user)
     no_sub_hint = ""
     if not has_act:
         no_sub_hint = join_lines(
             "",
-            "💡 " + bold("Для старта пополните баланс на 10 ₽."),
-            plain("После первого успешного пополнения начислим стартовый бонус 5 ГБ."),
+            "💡 " + bold("Старт без пакетного тарифа"),
+            plain("Пополните баланс через платёж в боте — при гибридном биллинге подключится списание pay-as-you-go (устройства и трафик)."),
+            plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
+            plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
         )
     caption = join_lines(*intro_lines, "", cap, no_sub_hint) if intro_lines else join_lines(cap, no_sub_hint)
     await send_profile_screen(

@@ -242,8 +242,8 @@ class RatingChargeGbIntegrationTests(IsolatedAsyncioTestCase):
             self.assertIsNotNone(sm)
             assert sm is not None
             self.assertEqual(sm.gb_units, 1)
-            self.assertEqual(sm.mobile_gb_units, 1)
-            self.assertEqual(sm.total_amount_rub, Decimal("7.50"))
+            self.assertEqual(sm.mobile_gb_units, 0)
+            self.assertEqual(sm.total_amount_rub, Decimal("5"))
             await session.commit()
 
     async def test_payg_optimized_route_extra_on_gb_step(self) -> None:

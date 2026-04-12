@@ -251,7 +251,9 @@ async def purchase_plan_with_balance(
 
     base = now
     if active and active.expires_at > now:
-        base = active.expires_at
+        # PAYG-заглушка после пополнения: длинный срок без пакета — первый платный тариф от «сейчас».
+        long_horizon = (active.expires_at - now).total_seconds() >= 86400 * 400
+        base = now if long_horizon else active.expires_at
     new_expires = base + timedelta(days=purchased_plan.duration_days)
 
     traffic_bytes = 0
@@ -754,3 +756,114 @@ async def admin_enable_subscription_record(
         except RemnaWaveError as e:
             logger.warning("admin_enable_subscription_record RW: %s", e)
     return True, plain("Подписка снова активна.")
+
+
+PAYG_BOOTSTRAP_PAYMENT_ID = "payg_bootstrap"
+
+
+async def provision_hybrid_payg_panel_if_needed(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+) -> bool:
+    """
+    Hybrid + v2: при пополнении без активной подписки — Remnawave + запись «Базовый» без списания с баланса,
+    чтобы работали списания pay-as-you-go; покупка тарифа позже пересчитает срок (см. purchase_plan_with_balance).
+    """
+    if not settings.billing_v2_enabled or user.billing_mode != "hybrid":
+        return False
+    if await get_active_subscription(session, user.id) is not None:
+        return False
+
+    marker = f"{PAYG_BOOTSTRAP_PAYMENT_ID}:{user.id}"
+    dup = (
+        await session.execute(
+            select(Transaction.id).where(Transaction.user_id == user.id, Transaction.payment_id == marker).limit(1)
+        )
+    ).scalar_one_or_none()
+    if dup is not None:
+        return False
+
+    base_plan = await get_base_subscription_plan(session)
+    if base_plan is None:
+        logger.warning("provision_payg: нет плана «Базовый» user_id=%s", user.id)
+        return False
+
+    now = datetime.now(timezone.utc)
+    payg_horizon = now + timedelta(days=800)
+
+    from shared.services.optimized_route_service import remnawave_squads_for_db_user
+
+    rw = RemnaWaveClient(settings)
+    squads = remnawave_squads_for_db_user(settings, user)
+    desc = build_remnawave_panel_description(user)
+
+    try:
+        if user.remnawave_uuid is None:
+            existing = await rw.find_user_by_telegram_id(user.telegram_id)
+            if existing is not None and existing.get("uuid"):
+                user.remnawave_uuid = uuid_lib.UUID(str(existing["uuid"]))
+            else:
+                uname = build_remnawave_username_from_db_user(user)
+                created = await _create_rw_user_retries(
+                    rw,
+                    base_username=uname,
+                    telegram_id=user.telegram_id,
+                    expire_at=payg_horizon,
+                    traffic_limit_bytes=0,
+                    description=desc,
+                    hwid_device_limit=MIN_DEVICES,
+                    active_internal_squads=squads,
+                )
+                uid = created.get("uuid")
+                if not uid:
+                    raise RemnaWaveError("Панель не вернула uuid пользователя")
+                user.remnawave_uuid = uuid_lib.UUID(str(uid))
+        await update_rw_user_respecting_hwid_limit(
+            rw,
+            str(user.remnawave_uuid),
+            devices_limit_for_panel=MIN_DEVICES,
+            expire_at=payg_horizon,
+            traffic_limit_bytes=0,
+            status="ACTIVE",
+            description=desc,
+            active_internal_squads=squads,
+        )
+    except RemnaWaveError:
+        logger.exception("provision_payg: Remnawave user_id=%s", user.id)
+        return False
+
+    uid = user.remnawave_uuid
+    assert uid is not None
+
+    sub = Subscription(
+        user_id=user.id,
+        plan_id=base_plan.id,
+        remnawave_sub_uuid=uid,
+        status="active",
+        devices_count=MIN_DEVICES,
+        started_at=now,
+        expires_at=payg_horizon,
+        auto_renew=False,
+    )
+    session.add(sub)
+    await session.flush()
+    for i in range(1, MIN_DEVICES + 1):
+        session.add(Device(subscription_id=sub.id, user_id=user.id, name=f"Устройство {i}"))
+    await ensure_placeholder_devices(session, sub)
+    session.add(
+        Transaction(
+            user_id=user.id,
+            type="payg_bootstrap",
+            amount=Decimal("0"),
+            currency="RUB",
+            payment_provider="billing_v2",
+            payment_id=marker,
+            status="completed",
+            description="Доступ PAYG после пополнения (без покупки тарифа)",
+            meta={"subscription_id": sub.id},
+        )
+    )
+    await session.flush()
+    return True
