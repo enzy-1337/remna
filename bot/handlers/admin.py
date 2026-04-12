@@ -556,6 +556,15 @@ async def _build_user_card(
     else:
         b.row(InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"admin:block:{u.id}"))
 
+    root = (get_settings().public_site_url or "").strip().rstrip("/")
+    if root:
+        b.row(
+            InlineKeyboardButton(
+                text="🌐 Профиль в Web-Admin",
+                url=f"{root}/admin/users/{u.id}",
+            )
+        )
+
     now = datetime.now(timezone.utc)
     if sub is not None:
         if sub.status in ("active", "trial") and sub.expires_at > now:
