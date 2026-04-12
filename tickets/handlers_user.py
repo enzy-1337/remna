@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -31,6 +32,8 @@ from tickets.services import (
     set_ticket_topic,
 )
 from tickets.config import config
+from shared.config import get_settings
+from shared.services.billing_v2.detail_service import format_hybrid_billing_today_for_support_topic
 
 router = Router(name="tickets_user")
 
@@ -210,16 +213,23 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
     created_line = "Дата: " + datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
     user_line = f"<a href=\"tg://user?id={int(message.from_user.id)}\">{disp}</a>"
     un = ("@" + message.from_user.username) if message.from_user.username else ""
+    settings = get_settings()
+    billing_html = await format_hybrid_billing_today_for_support_topic(
+        session, user=db_user, settings=settings
+    )
     cap = (
         f"<b>🎫 Тикет #{ticket_id}</b>\n"
         f"Пользователь: {user_line} {un}\n"
         f"{created_line}\n\n"
         f"<blockquote>{html.escape(raw)}</blockquote>"
     )
+    if billing_html:
+        cap += "\n\n" + billing_html
     await message.bot.send_message(
         chat_id=config.support_group_id,
         message_thread_id=int(topic.message_thread_id),
         text=cap,
+        parse_mode=ParseMode.HTML,
         reply_markup=kb,
         disable_web_page_preview=True,
     )
@@ -437,11 +447,17 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
 
     disp = (message.from_user.full_name or "Пользователь").strip()
     user_line = f"<a href=\"tg://user?id={int(message.from_user.id)}\">{disp}</a>"
+    settings = get_settings()
+    billing_html = await format_hybrid_billing_today_for_support_topic(
+        session, user=db_user, settings=settings
+    )
     topic_text = (
         f"<b>✉️ Новое сообщение в тикете #{active_id}</b>\n"
         f"От: {user_line}\n\n"
         f"<blockquote>{html.escape(txt)}</blockquote>"
     )
+    if billing_html:
+        topic_text += "\n\n" + billing_html
 
     # В топик тикета.
     try:
@@ -470,6 +486,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
                 chat_id=config.support_group_id,
                 message_thread_id=topic_id,
                 text=topic_text,
+                parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
             )
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,12 +18,19 @@ from bot.utils.screen_photo import (
     delete_message_safe,
     safe_callback_answer,
 )
-from shared.config import get_settings
+from shared.config import Settings, get_settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
+from shared.services.optimized_route_service import (
+    optimized_route_panel_ready,
+    sync_user_optimized_route_to_panel,
+)
 from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
 from shared.models.plan import Plan
 from shared.subscription_qr import subscription_url_qr_png
 from shared.services.subscription_service import (
+    BASE_SUBSCRIPTION_PLAN_NAME,
+    TRIAL_PLAN_NAME,
     calculate_discounted_plan_price,
     get_active_subscription,
     list_paid_plans,
@@ -53,6 +60,10 @@ def _sub_main_keyboard(
     *,
     has_active: bool,
     subscription_url: str | None = None,
+    show_billing_detail: bool = False,
+    show_optimized_toggle: bool = False,
+    optimized_on: bool = False,
+    show_reissue_subscription: bool = False,
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
@@ -61,14 +72,45 @@ def _sub_main_keyboard(
                 InlineKeyboardButton(text="📎 Подключиться", url=subscription_url),
                 InlineKeyboardButton(text="🔳 QR-код", callback_data="sub:qr"),
             )
+        if show_reissue_subscription:
+            b.row(InlineKeyboardButton(text="🔑 Новая ссылка подписки", callback_data="sub:reissue:ask"))
         b.row(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
-        b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
+        if show_billing_detail:
+            b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
         b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
+        if show_optimized_toggle:
+            label = "🛰 Оптим. маршрут: вкл" if optimized_on else "🛰 Оптим. маршрут: выкл"
+            b.row(InlineKeyboardButton(text=label[:64], callback_data="sub:opt_route:toggle"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
+
+
+def _sub_main_markup(
+    settings: Settings,
+    db_user: User,
+    *,
+    has_active: bool,
+    subscription_url: str | None,
+) -> InlineKeyboardMarkup:
+    show = (
+        settings.billing_v2_enabled
+        and db_user.billing_mode == "hybrid"
+        and has_active
+        and optimized_route_panel_ready(settings)
+    )
+    show_detail = settings.billing_v2_enabled and db_user.billing_mode == "hybrid" and has_active
+    show_reissue = bool(has_active and db_user.remnawave_uuid is not None)
+    return _sub_main_keyboard(
+        has_active=has_active,
+        subscription_url=subscription_url,
+        show_billing_detail=show_detail,
+        show_optimized_toggle=show,
+        optimized_on=db_user.optimized_route_enabled,
+        show_reissue_subscription=show_reissue,
+    ).as_markup()
 
 
 def _detail_menu_keyboard() -> InlineKeyboardBuilder:
@@ -77,6 +119,75 @@ def _detail_menu_keyboard() -> InlineKeyboardBuilder:
     b.row(InlineKeyboardButton(text="🗓 За месяц", callback_data="sub:detail:month"))
     b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
     return b
+
+
+def _plan_buyable_from_bot_catalog(plan: Plan | None) -> bool:
+    """Те же ограничения, что и у `list_paid_plans` + явный запрет системных имён."""
+    if plan is None or not plan.is_active or plan.price_rub <= 0:
+        return False
+    if plan.name in (BASE_SUBSCRIPTION_PLAN_NAME, TRIAL_PLAN_NAME):
+        return False
+    return True
+
+
+async def _render_tariff_list(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+    *,
+    banner: str | None = None,
+) -> None:
+    """Список тарифов для покупки (кнопки всегда из актуального `list_paid_plans`)."""
+    settings = get_settings()
+    plans = await list_paid_plans(session)
+    if not plans:
+        await safe_callback_answer(cq, "Нет доступных тарифов", show_alert=True)
+        return
+    has_act = await get_active_subscription(session, db_user.id) is not None
+    data = await state.get_data()
+    is_extend = bool(data.get("sub_tariffs_extend"))
+    if is_extend and has_act:
+        title = "🔄 " + bold("Продлить подписку") + "\n\n"
+    else:
+        title = "📋 " + bold("Тарифы") + "\n\n"
+    promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
+    body = title + plain(
+        "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
+    )
+    if banner:
+        body = join_lines(banner, "", body)
+    if discount_percent > 0 and promo_code:
+        body = join_lines(
+            body,
+            "",
+            plain("🎟 Активная скидка: ")
+            + bold(str(discount_percent))
+            + plain("% по коду ")
+            + code(promo_code)
+            + plain(" (применится к следующей покупке тарифа)."),
+        )
+    b = InlineKeyboardBuilder()
+    for p in plans:
+        label = (
+            plan_tariff_button_label_with_discount(p, discount_percent)
+            if discount_percent > 0
+            else plan_tariff_button_label(p)
+        )
+        b.row(
+            InlineKeyboardButton(
+                text=label[:64],
+                callback_data=f"sub:buy:{p.id}",
+            )
+        )
+    back_cb = "menu:sub_main" if has_act else "menu:main"
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=body,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
 
 
 async def _show_subscription_main(
@@ -91,10 +202,12 @@ async def _show_subscription_main(
         session, user=db_user, settings=settings, is_bot_admin=is_bot_admin
     )
     sub = await get_active_subscription(session, db_user.id)
-    kb = _sub_main_keyboard(
+    kb = _sub_main_markup(
+        settings,
+        db_user,
         has_active=sub is not None,
         subscription_url=sub_url,
-    ).as_markup()
+    )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
 
@@ -150,8 +263,8 @@ async def cb_subscription_main(
     await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)
 
 
-@router.callback_query(F.data.in_(("sub:plans", "sub:extend")))
-async def cb_plans_or_extend(
+@router.callback_query(F.data == "sub:reissue:ask")
+async def cb_sub_reissue_ask(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
@@ -159,52 +272,125 @@ async def cb_plans_or_extend(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
-    settings = get_settings()
-    plans = await list_paid_plans(session)
-    if not plans:
-        await cq.answer("Нет доступных тарифов", show_alert=True)
+    sub = await get_active_subscription(session, db_user.id)
+    if sub is None or db_user.remnawave_uuid is None:
+        await cq.answer("Нет активной подписки или учётной записи VPN.", show_alert=True)
         return
-    has_act = await get_active_subscription(session, db_user.id) is not None
-    is_extend = cq.data == "sub:extend"
-    if is_extend and has_act:
-        title = "🔄 " + bold("Продлить подписку") + "\n\n"
-    else:
-        title = "📋 " + bold("Тарифы") + "\n\n"
-    promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
-    body = title + plain(
-        "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
+    settings = get_settings()
+    cap = join_lines(
+        "🔑 " + bold("Новая ссылка подписки"),
+        "",
+        plain("Панель Remnawave перевыпустит ссылку: старая перестанет работать."),
+        plain("После этого обновите подписку во всех приложениях VPN."),
+        "",
+        bold("Продолжить?"),
     )
-    if discount_percent > 0 and promo_code:
-        body = join_lines(
-            body,
-            "",
-            plain("🎟 Активная скидка: ")
-            + bold(str(discount_percent))
-            + plain("% по коду ")
-            + code(promo_code)
-            + plain(" (применится к следующей покупке тарифа)."),
-        )
     b = InlineKeyboardBuilder()
-    for p in plans:
-        label = (
-            plan_tariff_button_label_with_discount(p, discount_percent)
-            if discount_percent > 0
-            else plan_tariff_button_label(p)
-        )
-        b.row(
-            InlineKeyboardButton(
-                text=label[:64],
-                callback_data=f"sub:buy:{p.id}",
-            )
-        )
-    back_cb = "menu:sub_main" if has_act else "menu:main"
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
+    b.row(
+        InlineKeyboardButton(text="✅ Да, перевыпустить", callback_data="sub:reissue:do"),
+        InlineKeyboardButton(text="⬅️ Отмена", callback_data="menu:sub_main"),
+    )
     await answer_callback_with_photo_screen(
         cq,
-        caption=body,
+        caption=cap,
         reply_markup=b.as_markup(),
         settings=settings,
     )
+
+
+@router.callback_query(F.data == "sub:reissue:do")
+async def cb_sub_reissue_do(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    sub = await get_active_subscription(session, db_user.id)
+    if sub is None or db_user.remnawave_uuid is None:
+        await cq.answer("Нет активной подписки или учётной записи VPN.", show_alert=True)
+        return
+    settings = get_settings()
+    rw = RemnaWaveClient(settings)
+    uid = str(db_user.remnawave_uuid)
+    try:
+        uinf = await rw.reset_user_subscription_credentials(uid, revoke_only_passwords=False)
+    except RemnaWaveError as e:
+        await cq.answer(strip_for_popup_alert(str(e))[:200], show_alert=True)
+        return
+    raw_url = uinf.get("subscriptionUrl")
+    new_url = subscription_url_for_telegram(raw_url if isinstance(raw_url, str) else None, settings)
+    cap_ok = join_lines(
+        "✅ " + bold("Ссылка обновлена"),
+        "",
+        plain("Новая ссылка подписки:"),
+        code(new_url) if new_url else plain("—"),
+        "",
+        plain("Импортируйте её в приложении VPN и удалите старую подписку, если она ещё отображается."),
+    )
+    b = InlineKeyboardBuilder()
+    if new_url:
+        b.row(InlineKeyboardButton(text="📎 Открыть ссылку", url=new_url))
+    b.row(InlineKeyboardButton(text="⬅️ К экрану подписки", callback_data="menu:sub_main"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap_ok,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "sub:opt_route:toggle")
+async def cb_opt_route_toggle(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Доступно только в гибридном биллинге.", show_alert=True)
+        return
+    if not optimized_route_panel_ready(settings):
+        await cq.answer(
+            "Не заданы REMNAWAVE_DEFAULT_SQUAD_UUID и REMNAWAVE_OPTIMIZED_SQUAD_UUID в настройках сервера.",
+            show_alert=True,
+        )
+        return
+    if db_user.remnawave_uuid is None:
+        await cq.answer("Нет учётной записи VPN в панели.", show_alert=True)
+        return
+    prev = db_user.optimized_route_enabled
+    db_user.optimized_route_enabled = not prev
+    await session.flush()
+    try:
+        await sync_user_optimized_route_to_panel(user=db_user, settings=settings)
+    except RemnaWaveError as e:
+        db_user.optimized_route_enabled = prev
+        await session.flush()
+        await cq.answer(strip_for_popup_alert(str(e))[:200], show_alert=True)
+        return
+    await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)
+
+
+@router.callback_query(F.data.in_(("sub:plans", "sub:extend")))
+async def cb_plans_or_extend(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    state: FSMContext,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    is_extend = cq.data == "sub:extend"
+    await state.update_data(sub_tariffs_extend=is_extend)
+    await _render_tariff_list(cq, session, db_user, state, banner=None)
 
 
 @router.callback_query(F.data.startswith("sub:buy:"))
@@ -223,11 +409,17 @@ async def cb_buy_plan(
         await cq.answer("Ошибка тарифа", show_alert=True)
         return
 
-    from shared.models.plan import Plan
     plan = await session.get(Plan, pid)
-    if plan is None or not plan.is_active or plan.price_rub <= 0:
-        await cq.answer("Тариф недоступен", show_alert=True)
+    if not _plan_buyable_from_bot_catalog(plan):
+        await _render_tariff_list(
+            cq,
+            session,
+            db_user,
+            state,
+            banner=plain("Этот тариф снят с продажи или удалён — список обновлён."),
+        )
         return
+    assert plan is not None
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
     original, discount_amount, final = calculate_discounted_plan_price(plan, discount_percent)
 
@@ -317,10 +509,12 @@ async def cb_buy_plan_confirm(
         )
         full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
-        kb = _sub_main_keyboard(
+        kb = _sub_main_markup(
+            settings,
+            db_user,
             has_active=sub is not None,
             subscription_url=sub_url,
-        ).as_markup()
+        )
         await answer_callback_with_photo_screen(
             cq,
             caption=full,
@@ -449,7 +643,11 @@ async def cb_renewal_toggle(
 async def cb_detail_menu(cq: CallbackQuery, db_user: User | None) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
+    assert db_user is not None
     settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines("📊 " + bold("Детализация расходов"), "", plain("Выберите период.")),
@@ -464,6 +662,9 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
         return
     assert db_user is not None
     settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
     today = billing_today(settings)
     row = await get_today_summary(session, user_id=db_user.id, today=today)
     from_dt = billing_local_day_start_utc(settings, today)
@@ -521,6 +722,9 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
         return
     assert db_user is not None
     settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
     anchor = billing_today(settings)
     rows = await get_month_summaries(session, user_id=db_user.id, anchor_day=anchor)
     month_start, next_month = month_bounds(anchor)

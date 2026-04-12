@@ -15,7 +15,9 @@ from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
+from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.remnawave_description import build_remnawave_panel_description
+from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 from shared.services.subscription_service import (
     get_base_subscription_plan,
     update_rw_user_respecting_hwid_limit,
@@ -61,9 +63,6 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
     candidates = list(r.scalars().all())
 
     rw = RemnaWaveClient(settings)
-    squads: list[str] | None = None
-    if settings.remnawave_default_squad_uuid:
-        squads = [settings.remnawave_default_squad_uuid.strip()]
 
     traffic_bytes = 0
     if base_plan.traffic_limit_gb is not None and base_plan.traffic_limit_gb > 0:
@@ -92,6 +91,7 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
 
         new_expires = sub.expires_at + timedelta(days=int(base_plan.duration_days))
         desc = build_remnawave_panel_description(user)
+        squads = remnawave_squads_for_db_user(settings, user)
         try:
             await update_rw_user_respecting_hwid_limit(
                 rw,
@@ -126,6 +126,8 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
                 },
             )
         )
+        if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+            await sync_hybrid_balance_floor_panel_state(session, user, settings)
         renewed += 1
 
     return renewed

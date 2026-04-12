@@ -6,8 +6,15 @@ from decimal import Decimal
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.config import Settings
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_usage_event import BillingUsageEvent
+from shared.models.user import User
+from shared.services.billing_v2.billing_calendar import (
+    billing_local_day_end_utc_exclusive,
+    billing_local_day_start_utc,
+    billing_today,
+)
 
 
 def month_bounds(anchor_day: date) -> tuple[date, date]:
@@ -20,6 +27,7 @@ def month_bounds(anchor_day: date) -> tuple[date, date]:
 
 
 async def get_today_summary(session: AsyncSession, *, user_id: int, today: date | None = None) -> BillingDailySummary | None:
+    """``day`` в ``BillingDailySummary`` — календарная дата в ``BILLING_CALENDAR_TIMEZONE``; для корректной выборки передавайте ``billing_today(settings)``."""
     d = today or datetime.now(timezone.utc).date()
     return (
         await session.execute(
@@ -107,3 +115,35 @@ async def usage_package_breakdown(
             else:
                 out["device_charged"] += 1
     return out
+
+
+async def format_hybrid_billing_today_for_support_topic(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+) -> str | None:
+    """
+    Краткая сводка списаний за текущие сутки по биллинговой таймзоне (для топика тикета / уведомлений поддержки).
+    Только hybrid + ``BILLING_V2_ENABLED``; иначе ``None``.
+    """
+    if not settings.billing_v2_enabled or user.billing_mode != "hybrid":
+        return None
+
+    today = billing_today(settings)
+    row = await get_today_summary(session, user_id=user.id, today=today)
+    from_dt = billing_local_day_start_utc(settings, today)
+    to_dt = billing_local_day_end_utc_exclusive(settings, today)
+    pack = await usage_package_breakdown(session, user_id=user.id, from_dt=from_dt, to_dt=to_dt)
+    tz_label = settings.billing_calendar_timezone
+    head = f"<b>Списания за сегодня</b> ({today.strftime('%d.%m.%Y')}, {tz_label})"
+    if row is None:
+        body = "За текущие сутки списаний нет."
+    else:
+        body = (
+            f"Всего: <b>{row.total_amount_rub} ₽</b> "
+            f"(ГБ {row.gb_amount_rub} ₽ · устройства {row.device_amount_rub} ₽ · моб. {row.mobile_amount_rub} ₽). "
+            f"Пакет: ГБ покрыто {pack['gb_covered']}, устр. {pack['device_covered']}; "
+            f"сверх пакета ГБ {pack['gb_charged']}, устр. {pack['device_charged']}."
+        )
+    return f"{head}\n{body}"

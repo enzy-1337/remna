@@ -212,7 +212,12 @@ async def grant_referrer_reward_from_topup(
     settings: Settings,
     internal_topup_txn_id: int,
 ) -> Decimal:
-    """Процент рефереру от успешного пополнения (идемпотентно по id внутренней транзакции topup)."""
+    """
+    Процент рефереру от успешного пополнения (идемпотентно по id внутренней транзакции topup).
+
+    Процент задаётся ``Settings.referral_payment_percent`` (в .env: ``REFERRAL_PAYMENT_PERCENT`` или
+    устаревшее имя ``REFERRAL_TOPUP_PERCENT``). Зачисление на ``referrer.balance`` + ``Transaction`` + ``ReferralReward``.
+    """
     return await grant_referrer_percent_of_referred_payment(
         session,
         referred_user=referred_user,

@@ -68,6 +68,7 @@ async def cb_main_menu(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_plan_calculator=settings.billing_v2_enabled,
     )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
@@ -146,6 +147,7 @@ async def cb_trial_activate(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_plan_calculator=settings.billing_v2_enabled,
     )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 

@@ -26,6 +26,7 @@ from shared.services.remnawave_username import build_remnawave_username_from_db_
 from shared.services.smart_cart import set_cart_plan
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
+from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ def calculate_discounted_plan_price(plan: Plan, discount_percent: Decimal) -> tu
 
 
 BASE_SUBSCRIPTION_PLAN_NAME = "Базовый"
+TRIAL_PLAN_NAME = "Триал"
 
 
 async def get_base_subscription_plan(session: AsyncSession) -> Plan | None:
@@ -230,6 +232,8 @@ async def purchase_plan_with_balance(
         return False, plain("Тариф не найден или недоступен."), "error"
     if plan.name == BASE_SUBSCRIPTION_PLAN_NAME:
         return False, plain("Этот тариф недоступен для покупки в магазине."), "error"
+    if plan.name == TRIAL_PLAN_NAME:
+        return False, plain("Тариф «Триал» недоступен для покупки в магазине."), "error"
 
     purchased_plan = plan
     base_plan = await get_base_subscription_plan(session)
@@ -260,9 +264,7 @@ async def purchase_plan_with_balance(
         )
 
     rw = RemnaWaveClient(settings)
-    squads: list[str] | None = None
-    if settings.remnawave_default_squad_uuid:
-        squads = [settings.remnawave_default_squad_uuid.strip()]
+    squads = remnawave_squads_for_db_user(settings, user)
 
     now = datetime.now(timezone.utc)
     active = await get_active_subscription(session, user.id)
@@ -336,6 +338,11 @@ async def purchase_plan_with_balance(
     )
     session.add(purchase_txn)
     await session.flush()
+
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
+
+        await sync_hybrid_balance_floor_panel_state(session, user, settings)
 
     rw_uuid = user.remnawave_uuid
     assert rw_uuid is not None
@@ -518,6 +525,10 @@ async def add_paid_device_slot(
     )
     session.add(slot_txn)
     await session.flush()
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
+
+        await sync_hybrid_balance_floor_panel_state(session, user, settings)
     await grant_referrer_percent_of_referred_payment(
         session,
         referred_user=user,

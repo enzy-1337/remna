@@ -91,6 +91,7 @@ async def cmd_start(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_plan_calculator=settings.billing_v2_enabled,
     )
     profile_block = profile_caption(user, tg)
     no_sub_hint = ""
@@ -182,6 +183,7 @@ async def cb_channel_check(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_plan_calculator=settings.billing_v2_enabled,
     )
     cap = profile_caption(db_user, tg_user)
     no_sub_hint = ""

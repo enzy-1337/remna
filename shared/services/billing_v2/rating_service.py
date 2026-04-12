@@ -12,6 +12,7 @@ from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.billing_v2.billing_calendar import billing_package_month_utc_bounds, billing_zoneinfo
 from shared.services.billing_v2.device_service import list_active_device_hwids
 from shared.services.billing_v2.ledger_service import apply_debit
 
@@ -50,15 +51,6 @@ async def _upsert_daily(
     return summary
 
 
-def _month_bounds(ts: datetime) -> tuple[date, date]:
-    first = date(ts.year, ts.month, 1)
-    if ts.month == 12:
-        nxt = date(ts.year + 1, 1, 1)
-    else:
-        nxt = date(ts.year, ts.month + 1, 1)
-    return first, nxt
-
-
 async def _active_package_plan(session: AsyncSession, *, user_id: int, now: datetime) -> Plan | None:
     row = (
         await session.execute(
@@ -89,18 +81,26 @@ async def charge_gb_step(
     is_mobile_internet: bool,
     settings: Settings,
 ) -> bool:
+    dup = (
+        await session.execute(
+            select(BillingUsageEvent.id).where(BillingUsageEvent.event_id == event_id).limit(1)
+        )
+    ).scalar_one_or_none()
+    if dup is not None:
+        return True
+
     plan = await _active_package_plan(session, user_id=user.id, now=event_ts)
     package_covered = False
     if plan is not None and plan.monthly_gb_limit is not None and plan.monthly_gb_limit > 0:
-        month_from, month_to = _month_bounds(event_ts)
+        month_start_utc, month_end_utc = billing_package_month_utc_bounds(settings, event_ts)
         used_gb_units = (
             await session.execute(
                 select(func.count(BillingUsageEvent.id)).where(
                     and_(
                         BillingUsageEvent.user_id == user.id,
                         BillingUsageEvent.event_type == "traffic_gb_step",
-                        BillingUsageEvent.event_ts >= datetime.combine(month_from, datetime.min.time(), tzinfo=timezone.utc),
-                        BillingUsageEvent.event_ts < datetime.combine(month_to, datetime.min.time(), tzinfo=timezone.utc),
+                        BillingUsageEvent.event_ts >= month_start_utc,
+                        BillingUsageEvent.event_ts < month_end_utc,
                     )
                 )
             )
@@ -110,21 +110,30 @@ async def charge_gb_step(
             monthly_gb_limit=int(plan.monthly_gb_limit),
         )
 
-    event = BillingUsageEvent(
-        user_id=user.id,
-        event_id=event_id,
-        event_type="traffic_gb_step",
-        event_ts=event_ts,
-        usage_gb_step=1,
-        is_mobile_internet=is_mobile_internet,
-        meta={"package_covered": package_covered},
-    )
-    session.add(event)
     if package_covered:
+        session.add(
+            BillingUsageEvent(
+                user_id=user.id,
+                event_id=event_id,
+                event_type="traffic_gb_step",
+                event_ts=event_ts,
+                usage_gb_step=1,
+                is_mobile_internet=is_mobile_internet,
+                meta={"package_covered": True},
+            )
+        )
         return True
+
     amount = settings.billing_gb_step_rub
     mobile_extra = settings.billing_mobile_gb_extra_rub if is_mobile_internet else Decimal("0")
-    total = amount + mobile_extra
+    opt_extra = (
+        settings.billing_optimized_route_gb_extra_rub if user.optimized_route_enabled else Decimal("0")
+    )
+    total = amount + mobile_extra + opt_extra
+    debit_meta: dict = {"is_mobile_internet": is_mobile_internet}
+    if opt_extra > 0:
+        debit_meta["optimized_route"] = True
+        debit_meta["optimized_route_extra_rub"] = str(opt_extra)
     lr = await apply_debit(
         session,
         user=user,
@@ -133,16 +142,35 @@ async def charge_gb_step(
         source="traffic",
         source_ref=event_id,
         settings=settings,
-        meta={"is_mobile_internet": is_mobile_internet},
+        meta=debit_meta,
     )
     if not lr.applied:
         return False
-    summary = await _upsert_daily(session, user_id=user.id, day=event_ts.date())
+
+    usage_meta: dict = {"package_covered": False, "is_mobile_internet": is_mobile_internet}
+    if opt_extra > 0:
+        usage_meta["optimized_route"] = True
+        usage_meta["optimized_route_extra_rub"] = str(opt_extra)
+    session.add(
+        BillingUsageEvent(
+            user_id=user.id,
+            event_id=event_id,
+            event_type="traffic_gb_step",
+            event_ts=event_ts,
+            usage_gb_step=1,
+            is_mobile_internet=is_mobile_internet,
+            meta=usage_meta,
+        )
+    )
+    summary_day = event_ts.astimezone(billing_zoneinfo(settings)).date()
+    summary = await _upsert_daily(session, user_id=user.id, day=summary_day)
     summary.gb_units += 1
     summary.gb_amount_rub += amount
     if is_mobile_internet:
         summary.mobile_gb_units += 1
         summary.mobile_amount_rub += mobile_extra
+    if opt_extra > 0:
+        summary.gb_amount_rub += opt_extra
     summary.total_amount_rub += total
     return True
 
@@ -181,18 +209,18 @@ async def charge_daily_device_once(
             device_limit=int(plan.device_limit),
         ):
             package_covered = True
-    session.add(
-        BillingUsageEvent(
-            user_id=user.id,
-            event_id=event_id,
-            event_type="device_daily",
-            event_ts=ev_ts,
-            device_hwid=device_hwid,
-            is_mobile_internet=False,
-            meta={"package_covered": package_covered},
-        )
-    )
     if package_covered:
+        session.add(
+            BillingUsageEvent(
+                user_id=user.id,
+                event_id=event_id,
+                event_type="device_daily",
+                event_ts=ev_ts,
+                device_hwid=device_hwid,
+                is_mobile_internet=False,
+                meta={"package_covered": True},
+            )
+        )
         return True
     daily_key = f"device:{user.id}:{device_hwid}:{day.isoformat()}"
     lr = await apply_debit(
@@ -206,6 +234,17 @@ async def charge_daily_device_once(
     )
     if not lr.applied:
         return False
+    session.add(
+        BillingUsageEvent(
+            user_id=user.id,
+            event_id=event_id,
+            event_type="device_daily",
+            event_ts=ev_ts,
+            device_hwid=device_hwid,
+            is_mobile_internet=False,
+            meta={"package_covered": False},
+        )
+    )
     summary = await _upsert_daily(session, user_id=user.id, day=day)
     summary.device_units += 1
     summary.device_amount_rub += settings.billing_device_daily_rub

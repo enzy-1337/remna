@@ -1,6 +1,8 @@
 """
 Точка входа Telegram-бота.
 Запуск из корня репозитория: python -m bot.main
+
+При TELEGRAM_WEBHOOK_ENABLED=true polling не используется — апдейты принимает API (POST /webhooks/telegram), см. api.main.
 """
 
 from __future__ import annotations
@@ -9,7 +11,6 @@ import asyncio
 import contextlib
 import logging
 import sys
-import socket
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,108 +20,16 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
-from sqlalchemy.exc import OperationalError
-
-from bot.handlers.admin import router as admin_router
-from bot.handlers.admin_promo import router as admin_promo_router
-from bot.handlers.balance import router as balance_router
-from bot.handlers.devices import router as devices_router
-from bot.handlers.fallback import router as fallback_router
-from bot.handlers.subscription import router as subscription_router
-from bot.handlers.menu import router as menu_router
-from bot.handlers.promo import router as promo_router
-from bot.handlers.referrals import router as referrals_router
-from bot.handlers.start import router as start_router
-from bot.middlewares.channel_sub import ChannelSubscriptionMiddleware
-from bot.middlewares.db_session import DbSessionMiddleware
-from bot.middlewares.maintenance import MaintenanceMiddleware
-from bot.middlewares.user_context import UserContextMiddleware
+from bot.background_loops import cancel_background_tasks, start_background_loops
+from bot.bootstrap_db import bootstrap_bot_database_schema
+from bot.factory import apply_ipv4_preferred_dns, create_bot_and_dispatcher
 from shared.config import get_settings
-from shared.database import get_session_factory
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin_plain
-from shared.services.admin_report_loop import admin_report_loop
-from shared.services.backup_loop import backup_loop
-from shared.services.autorenew_service import subscription_autorenew_loop
-from shared.services.expiry_notify_service import subscription_expiry_notify_loop
-from shared.services.plan_seed import ensure_default_plans_if_needed
-from shared.services.remnawave_sync import sync_loop
-from shared.services.schema_patches import (
-    ensure_promo_columns,
-    ensure_subscription_expiry_notify_columns,
-    ensure_user_bot_message_id_columns,
-)
-from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
-from shared.services.billing_v2.device_daily_midnight_loop import device_daily_midnight_loop
-from shared.services.billing_v2.negative_balance_notify_loop import negative_balance_notify_loop
-from shared.services.billing_v2.transition_service import legacy_transition_loop
-
-_DB_BOOTSTRAP_ATTEMPTS = 30
-_DB_BOOTSTRAP_DELAY_SEC = 1.0
-
-
-def _is_transient_db_connect_error(exc: BaseException) -> bool:
-    cur: BaseException | None = exc
-    for _ in range(12):
-        if cur is None:
-            return False
-        if isinstance(cur, (OperationalError, OSError)):
-            return True
-        cur = cur.__cause__
-    return False
-
-
-async def _bootstrap_database_schema() -> None:
-    """
-    Однократная подготовка схемы на старте. После reboot Docker DNS иногда кратковременно
-    не отдаёт имя сервиса (postgres) — без повторов бот падает с socket.gaierror.
-    """
-    log = logging.getLogger(__name__)
-    factory = get_session_factory()
-    last_err: BaseException | None = None
-    for attempt in range(1, _DB_BOOTSTRAP_ATTEMPTS + 1):
-        try:
-            async with factory() as s:
-                await ensure_default_plans_if_needed(s)
-                await ensure_subscription_expiry_notify_columns(s)
-                await ensure_promo_columns(s)
-                await ensure_user_bot_message_id_columns(s)
-                await s.commit()
-            if attempt > 1:
-                log.info("Подключение к БД восстановлено с попытки %s", attempt)
-            return
-        except Exception as e:
-            if not _is_transient_db_connect_error(e):
-                raise
-            last_err = e
-            log.warning(
-                "БД недоступна при старте (попытка %s/%s): %s",
-                attempt,
-                _DB_BOOTSTRAP_ATTEMPTS,
-                e,
-            )
-            if attempt >= _DB_BOOTSTRAP_ATTEMPTS:
-                break
-            await asyncio.sleep(_DB_BOOTSTRAP_DELAY_SEC)
-    assert last_err is not None
-    raise last_err
 
 
 async def main() -> None:
-    # Force IPv4-only DNS resolution to avoid Telegram IPv6 routing/TLS issues.
-    _real_getaddrinfo = socket.getaddrinfo
-
-    def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
-        if family in (0, socket.AF_UNSPEC, socket.AF_INET6, None):
-            family = socket.AF_INET
-        return _real_getaddrinfo(host, port, family, type, proto, flags)
-
-    socket.getaddrinfo = _getaddrinfo_ipv4  # type: ignore[assignment]
+    apply_ipv4_preferred_dns()
 
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -128,110 +37,34 @@ async def main() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    log = logging.getLogger(__name__)
 
-    await _bootstrap_database_schema()
+    if settings.telegram_webhook_enabled:
+        log.error(
+            "TELEGRAM_WEBHOOK_ENABLED=true: polling отключён. Запустите uvicorn api.main:app "
+            "и направьте TELEGRAM_WEBHOOK_URL на POST /webhooks/telegram этого сервиса."
+        )
+        raise SystemExit(2)
 
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
-    )
-    await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start", description="Перезапустить бота"),
-        ],
-        scope=BotCommandScopeAllPrivateChats(),
-    )
-    storage = MemoryStorage()
-    dp = Dispatcher(storage=storage)
+    await bootstrap_bot_database_schema()
 
-    dp.update.middleware(MaintenanceMiddleware(settings))
-    dp.update.middleware(ChannelSubscriptionMiddleware(settings))
-    dp.update.middleware(DbSessionMiddleware())
-    dp.update.middleware(UserContextMiddleware())
-
-    dp.include_router(admin_router)
-    dp.include_router(admin_promo_router)
-    dp.include_router(subscription_router)
-    dp.include_router(devices_router)
-    dp.include_router(referrals_router)
-    dp.include_router(promo_router)
-    dp.include_router(balance_router)
-    dp.include_router(menu_router)
-    dp.include_router(start_router)
-    dp.include_router(fallback_router)
+    bot, dp = await create_bot_and_dispatcher(settings)
     stop_event = asyncio.Event()
-    sync_task: asyncio.Task | None = None
-    report_task: asyncio.Task | None = None
-    backup_task: asyncio.Task | None = None
-    autorenew_task: asyncio.Task | None = None
-    expiry_notify_task: asyncio.Task | None = None
-    billing_cleanup_task: asyncio.Task | None = None
-    device_daily_task: asyncio.Task | None = None
-    negative_notify_task: asyncio.Task | None = None
-    legacy_transition_task: asyncio.Task | None = None
-    if settings.remnawave_sync_enabled and not settings.remnawave_stub:
-        sync_task = asyncio.create_task(sync_loop(settings, stop_event))
-    if settings.admin_report_enabled:
-        report_task = asyncio.create_task(admin_report_loop(settings, stop_event))
-    if settings.backup_enabled:
-        backup_task = asyncio.create_task(backup_loop(settings, stop_event))
-    autorenew_task = asyncio.create_task(subscription_autorenew_loop(settings, stop_event))
-    expiry_notify_task = asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event))
-    if settings.billing_v2_enabled:
-        billing_cleanup_task = asyncio.create_task(billing_cleanup_loop(settings, stop_event))
-        device_daily_task = asyncio.create_task(device_daily_midnight_loop(settings, stop_event))
-        if settings.billing_negative_notify_enabled:
-            negative_notify_task = asyncio.create_task(negative_balance_notify_loop(settings, stop_event))
-        legacy_transition_task = asyncio.create_task(legacy_transition_loop(settings, stop_event))
+    bg_tasks = start_background_loops(settings, stop_event)
     try:
         boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
         sent = await notify_admin_plain(
             settings,
-            text=f"🚀 Основной бот запущен\n{boot_ts}",
+            text=f"🚀 Основной бот запущен (polling)\n{boot_ts}",
             topic=AdminLogTopic.BOOT,
             event_type="bot_startup",
         )
         if sent:
-            logging.getLogger(__name__).info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
+            log.info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
         await dp.start_polling(bot)
     finally:
         stop_event.set()
-        if sync_task is not None:
-            sync_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await sync_task
-        if report_task is not None:
-            report_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await report_task
-        if backup_task is not None:
-            backup_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await backup_task
-        if autorenew_task is not None:
-            autorenew_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await autorenew_task
-        if expiry_notify_task is not None:
-            expiry_notify_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await expiry_notify_task
-        if billing_cleanup_task is not None:
-            billing_cleanup_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await billing_cleanup_task
-        if device_daily_task is not None:
-            device_daily_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await device_daily_task
-        if negative_notify_task is not None:
-            negative_notify_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await negative_notify_task
-        if legacy_transition_task is not None:
-            legacy_transition_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await legacy_transition_task
+        await cancel_background_tasks(bg_tasks)
 
 
 if __name__ == "__main__":

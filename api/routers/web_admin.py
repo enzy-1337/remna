@@ -56,6 +56,18 @@ from shared.services.billing_calculator import (
 )
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.referral_service import count_invited_users, list_invited_users
+from shared.services.billing_v2.billing_calendar import (
+    billing_local_day_end_utc_exclusive,
+    billing_local_day_start_utc,
+    billing_today,
+)
+from shared.services.billing_v2.detail_service import (
+    get_month_summaries,
+    get_today_summary,
+    month_bounds,
+    summarize_month_total,
+    usage_package_breakdown,
+)
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     admin_disable_subscription_record,
@@ -2701,6 +2713,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     if denied is not None:
         return denied
     settings = get_settings()
+    billing_detail_block = ""
     hwid_devices: list[dict] = []
     hwid_err: str | None = None
     async with await _session() as session:
@@ -2755,14 +2768,15 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         ).scalar_one()
         active_sub = await get_active_subscription(session, user.id)
         n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
-        today = datetime.now(UTC).date()
+        bill_anchor = billing_today(settings)
+        spend_from = bill_anchor - timedelta(days=2)
         spend_rows = list(
             (
                 await session.execute(
                     select(BillingDailySummary).where(
                         BillingDailySummary.user_id == user.id,
-                        BillingDailySummary.day >= today - timedelta(days=3),
-                        BillingDailySummary.day <= today,
+                        BillingDailySummary.day >= spend_from,
+                        BillingDailySummary.day <= bill_anchor,
                     )
                 )
             ).scalars()
@@ -2790,6 +2804,56 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+        if settings.billing_v2_enabled and user.billing_mode == "hybrid":
+            bt = bill_anchor
+            row_td = await get_today_summary(session, user_id=user.id, today=bt)
+            rows_m = await get_month_summaries(session, user_id=user.id, anchor_day=bt)
+            month_start, next_month = month_bounds(bt)
+            month_from = billing_local_day_start_utc(settings, month_start)
+            month_to = billing_local_day_start_utc(settings, next_month)
+            pack_td = await usage_package_breakdown(
+                session,
+                user_id=user.id,
+                from_dt=billing_local_day_start_utc(settings, bt),
+                to_dt=billing_local_day_end_utc_exclusive(settings, bt),
+            )
+            pack_m = await usage_package_breakdown(session, user_id=user.id, from_dt=month_from, to_dt=month_to)
+            month_total = summarize_month_total(rows_m)
+            if row_td is None:
+                today_html = '<p class="text-sm opacity-80">За сегодня списаний нет.</p>'
+            else:
+                today_html = (
+                    "<ul class=\"list-disc list-inside text-sm\">"
+                    f"<li>ГБ к оплате: {_esc(row_td.gb_amount_rub)} ₽ ({_esc(row_td.gb_units)} шт.)</li>"
+                    f"<li>Устройства: {_esc(row_td.device_amount_rub)} ₽ ({_esc(row_td.device_units)} шт.)</li>"
+                    f"<li>Моб. интернет: {_esc(row_td.mobile_amount_rub)} ₽ ({_esc(row_td.mobile_gb_units)} шт.)</li>"
+                    f"<li><b>Итого за день: {_esc(row_td.total_amount_rub)} ₽</b></li>"
+                    "</ul>"
+                    f"<p class=\"text-xs opacity-70\">Пакет: ГБ покрыто {_esc(pack_td['gb_covered'])}, устройства "
+                    f"{_esc(pack_td['device_covered'])}; сверх пакета ГБ {_esc(pack_td['gb_charged'])}, устройства "
+                    f"{_esc(pack_td['device_charged'])}.</p>"
+                )
+            days_rows = "".join(
+                f"<tr><td>{_esc(r.day.strftime('%d.%m.%Y'))}</td>"
+                f"<td class=\"text-right font-mono\">{_esc(r.total_amount_rub)} ₽</td></tr>"
+                for r in rows_m[:31]
+            )
+            billing_detail_block = f"""
+    <div class="card bg-base-100 border border-info/25 shadow-lg mt-4">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-chart-column text-info mr-2" aria-hidden="true"></i>Детализация списаний (гибрид v2)</h3>
+        <p class="text-xs opacity-70 mb-2">Сутки и месяц — по <code class="text-xs bg-base-300 px-1 rounded">{_esc(settings.billing_calendar_timezone)}</code>.</p>
+        <h4 class="text-sm font-semibold">Сегодня ({_esc(bt.strftime('%d.%m.%Y'))})</h4>
+        {today_html}
+        <div class="divider my-1"></div>
+        <h4 class="text-sm font-semibold">Текущий календарный месяц</h4>
+        <p class="text-sm"><b>Итого:</b> {_esc(month_total)} ₽</p>
+        <p class="text-xs opacity-70 mb-2">Пакет за месяц: ГБ покрыто {_esc(pack_m['gb_covered'])}, устройства {_esc(pack_m['device_covered'])}; сверх пакета ГБ {_esc(pack_m['gb_charged'])}, устройства {_esc(pack_m['device_charged'])}.</p>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10 max-h-60 overflow-y-auto"><table class="table table-zebra table-sm"><thead><tr><th>День</th><th class="text-right">Сумма</th></tr></thead><tbody>{days_rows or '<tr><td colspan="2" class="opacity-50">Нет строк</td></tr>'}</tbody></table></div>
+      </div>
+    </div>
+    """
 
         ud = SimpleNamespace(
             id=user.id,
@@ -3174,6 +3238,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             </form>
           </div>
           {negative_risk_block}
+          {billing_detail_block}
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
           {ref_block}
@@ -4273,7 +4338,9 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         "<thead><tr><th>Название</th><th>Дней</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
         "<th title='Эквивалент pay-per-use, 30 дн.'>≈ PPU 30д</th><th>Сорт.</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"10\" class=\"opacity-50\">Нет тарифов</td></tr>'}</tbody></table></div>"
-        "<p class='text-xs opacity-60'>Строка ведёт в редактирование. «Базовый» и «Триал» нельзя удалить и переименовать.</p>"
+        "<p class='text-xs opacity-60'>Строка ведёт в редактирование. «Базовый» и «Триал» нельзя удалить и переименовать. "
+        "Кнопки тарифов в боте строятся из БД при каждом открытии списка; при снятии с продажи или удалении устаревшее сообщение "
+        "можно закрыть и открыть «Тарифы» снова.</p>"
         "</div></div></div>"
     )
     return _layout("Тарифы", body, request=request)

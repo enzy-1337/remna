@@ -78,7 +78,7 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="1000 ₽", callback_data="topup:amt:1000"),
     )
     builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
-    builder.row(InlineKeyboardButton(text="🧾 История пополнений", callback_data="topup:history"))
+    builder.row(InlineKeyboardButton(text="🧾 История зачислений", callback_data="topup:history"))
     builder.row(InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"))
     return builder.as_markup()
 

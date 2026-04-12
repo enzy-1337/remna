@@ -12,6 +12,7 @@ def profile_main_keyboard(
     show_trial: bool,
     support_url: str | None,
     is_admin: bool = False,
+    show_plan_calculator: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if show_trial:
@@ -26,6 +27,8 @@ def profile_main_keyboard(
         b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
     else:
         b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
+    if show_plan_calculator:
+        b.row(InlineKeyboardButton(text="📊 Калькулятор тарифа", callback_data="menu:calc"))
     b.row(
         InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
         InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),

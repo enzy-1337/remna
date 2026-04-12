@@ -117,6 +117,50 @@ def device_hwid_from_payload(payload: dict) -> str:
     return ""
 
 
+def device_identity_meta_from_payload(payload: dict) -> dict[str, str]:
+    """
+    Необязательные поля устройства из вебхука Remnawave (аудит / поддержка).
+    На списание за день **не влияют** — идемпотентность по HWID и календарной дате биллинга.
+    """
+
+    def _str(v: object, max_len: int) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip()
+        return s[:max_len] if s else ""
+
+    def _scan(d: object, out: dict[str, str]) -> None:
+        if not isinstance(d, dict):
+            return
+        candidates: tuple[tuple[str, str], ...] = (
+            ("device_name", "name"),
+            ("device_name", "deviceName"),
+            ("device_name", "displayName"),
+            ("device_model", "model"),
+            ("device_model", "deviceModel"),
+            ("rw_device_uuid", "uuid"),
+            ("rw_device_uuid", "deviceUuid"),
+            ("rw_user_device_id", "id"),
+        )
+        for out_key, in_key in candidates:
+            if out.get(out_key):
+                continue
+            val = _str(d.get(in_key), 256)
+            if val:
+                out[out_key] = val
+
+    out: dict[str, str] = {}
+    _scan(payload, out)
+    data = payload.get("data")
+    if isinstance(data, dict):
+        _scan(data, out)
+        for nest in ("device", "hwidUserDevice", "userDevice"):
+            n = data.get(nest)
+            if isinstance(n, dict):
+                _scan(n, out)
+    return out
+
+
 def _parse_webhook_unix_ts(ts_header: str) -> int | None:
     """Секунды Unix; панель может слать миллисекунды (13 цифр) или float."""
     raw = (ts_header or "").strip()
@@ -330,6 +374,7 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                 )
             ).scalar_one()
             first_ever_device = int(hist_count or 0) == 0
+            hist_meta = {"source_event_id": row.event_id, **device_identity_meta_from_payload(payload)}
             await add_device_history_event(
                 session,
                 user_id=user.id,
@@ -338,7 +383,7 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                 event_type=event_type,
                 event_ts=now,
                 is_active=is_active,
-                meta={"source_event_id": row.event_id},
+                meta=hist_meta,
             )
             if is_active and applies_pay_per_use_charges(user, settings):
                 await charge_daily_device_once(

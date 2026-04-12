@@ -5,6 +5,9 @@
 Актуальные пути (Users): POST/PATCH ``/api/users``, GET ``/api/users/{uuid}``, GET ``/api/users`` с ``start``/``size``,
 GET ``/api/users/by-telegram-id/{telegramId}``, POST ``/api/users/bulk/update``. Обновление по UUID — через PATCH на
 коллекцию ``users`` с телом ``{ "uuid": "...", ... }``, а не PATCH ``/users/{uuid}``.
+Перевыпуск ссылки подписки (новый short UUID и ``subscriptionUrl``): POST ``/api/users/{uuid}/actions/revoke``
+(``UsersController_revokeUserSubscription``), тело ``{ "revokeOnlyPasswords": false }`` (или пустой объект — по умолчанию
+меняется UUID ссылки; при ``true`` сбрасываются только пароли без смены short UUID).
 """
 
 from __future__ import annotations
@@ -225,6 +228,29 @@ class RemnaWaveClient:
             body["activeInternalSquads"] = active_internal_squads
 
         data = await self._request("POST", "users", json_body=body)
+        return self._unwrap(data)
+
+    async def reset_user_subscription_credentials(
+        self,
+        user_uuid: str,
+        *,
+        revoke_only_passwords: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Перевыпуск подписки одной операцией панели: POST ``/api/users/{uuid}/actions/revoke``.
+
+        При ``revoke_only_passwords=False`` (по умолчанию) панель выдаёт новый short UUID и новую ``subscriptionUrl``.
+        При ``True`` — только сброс паролей узлов, URL подписки не меняется.
+        """
+        body: dict[str, Any] = {"revokeOnlyPasswords": bool(revoke_only_passwords)}
+        if self._s.remnawave_stub:
+            new_token = str(uuid_lib.uuid4())
+            return {
+                "uuid": user_uuid,
+                "subscriptionUrl": f"https://stub.remnawave.local/sub/{new_token}",
+                "shortUuid": new_token.replace("-", "")[:16],
+            }
+        data = await self._request("POST", f"users/{user_uuid}/actions/revoke", json_body=body)
         return self._unwrap(data)
 
     async def get_user(self, user_uuid: str) -> dict[str, Any]:

@@ -54,6 +54,14 @@ class User(Base):
 
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    optimized_route_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
+    balance_floor_rw_suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

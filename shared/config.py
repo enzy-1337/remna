@@ -78,6 +78,21 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="BOT_SECTION_PHOTO_URL",
     )
+    telegram_webhook_enabled: bool = Field(
+        default=False,
+        validation_alias="TELEGRAM_WEBHOOK_ENABLED",
+        description="Входящие апдейты бота через POST /webhooks/telegram (uvicorn); polling в bot.main отключается",
+    )
+    telegram_webhook_url: str = Field(
+        default="",
+        validation_alias="TELEGRAM_WEBHOOK_URL",
+        description="Полный HTTPS URL для Bot API setWebhook (должен совпадать с маршрутом API, например …/webhooks/telegram)",
+    )
+    telegram_webhook_secret: str = Field(
+        default="",
+        validation_alias="TELEGRAM_WEBHOOK_SECRET",
+        description="Секрет для заголовка X-Telegram-Bot-Api-Secret-Token (рекомендуется ≥16 символов)",
+    )
 
     # Админ-лог (шаг 12): чат или супергруппа; topic_id — ID темы в форуме
     admin_log_chat_id: str | int | None = Field(
@@ -164,6 +179,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="REMNAWAVE_DEFAULT_SQUAD_UUID",
     )
+    remnawave_optimized_squad_uuid: str | None = Field(
+        default=None,
+        validation_alias="REMNAWAVE_OPTIMIZED_SQUAD_UUID",
+        description="Squad «оптимизированного маршрута» (вкл. у пользователя в боте при гибридном биллинге)",
+    )
     remnawave_cookie: str | None = Field(
         default=None,
         validation_alias="REMNAWAVE_COOKIE",
@@ -219,7 +239,10 @@ class Settings(BaseSettings):
     billing_calendar_timezone: str = Field(
         default="Europe/Moscow",
         validation_alias="BILLING_CALENDAR_TIMEZONE",
-        description="Часовой пояс календарных суток для детализации и суточного списания за устройства",
+        description=(
+            "IANA-таймзона календарных суток: детализация, суточное списание за устройства, "
+            "граница месяца для пакетного лимита ГБ (traffic_gb_step)"
+        ),
     )
     billing_device_daily_job_interval_sec: int = Field(
         default=120,
@@ -230,8 +253,39 @@ class Settings(BaseSettings):
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
     billing_mobile_gb_extra_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_MOBILE_GB_EXTRA_RUB")
+    billing_optimized_route_gb_extra_rub: Decimal = Field(
+        default=Decimal("2.5"),
+        validation_alias="BILLING_OPTIMIZED_ROUTE_GB_EXTRA_RUB",
+        description="Доплата ₽ за 1 шаг pay-as-you-go ГБ при включённом «оптимизированном маршруте»",
+    )
     billing_balance_floor_rub: Decimal = Field(default=Decimal("-50"), validation_alias="BILLING_BALANCE_FLOOR_RUB")
     billing_min_topup_rub: Decimal = Field(default=Decimal("1"), validation_alias="BILLING_MIN_TOPUP_RUB")
+    billing_first_topup_extra_balance_percent: Decimal = Field(
+        default=Decimal("0"),
+        ge=Decimal("0"),
+        le=Decimal("500"),
+        validation_alias="BILLING_FIRST_TOPUP_EXTRA_BALANCE_PERCENT",
+        description=(
+            "Доп. начисление на баланс при **первом** успешном пополнении: процент от суммы **этого** платежа "
+            "(без учёта промо-бонуса). 0 = выключено. 100 = удвоение основной суммы при пороге ниже."
+        ),
+    )
+    billing_first_topup_extra_balance_min_rub: Decimal = Field(
+        default=Decimal("10"),
+        ge=Decimal("0"),
+        validation_alias="BILLING_FIRST_TOPUP_EXTRA_BALANCE_MIN_RUB",
+        description="Минимальная сумма пополнения (₽ из транзакции), с которой срабатывает BILLING_FIRST_TOPUP_EXTRA_BALANCE_PERCENT",
+    )
+    billing_first_topup_welcome_gb: int = Field(
+        default=5,
+        ge=0,
+        le=1024,
+        validation_alias="BILLING_FIRST_TOPUP_WELCOME_GB",
+        description=(
+            "ГБ к лимиту трафика в Remnawave при первом пополнении **без** активной подписки; 0 отключает welcome-бонус. "
+            "Идемпотентность по транзакции `welcome_gb_bonus:{user_id}` без изменений."
+        ),
+    )
     billing_legacy_lifetime_cutoff_year: int = Field(
         default=2099,
         ge=2030,
@@ -554,6 +608,15 @@ class Settings(BaseSettings):
         if not self.remnawave_stub:
             if not (self.remnawave_api_token or "").strip():
                 raise ValueError("Задайте REMNAWAVE_API_TOKEN или REMNAWAVE_STUB=true")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_telegram_webhook(self) -> "Settings":
+        if self.telegram_webhook_enabled:
+            if not (self.telegram_webhook_url or "").strip():
+                raise ValueError("TELEGRAM_WEBHOOK_ENABLED=true требует непустой TELEGRAM_WEBHOOK_URL (HTTPS)")
+            if len((self.telegram_webhook_secret or "").strip()) < 8:
+                raise ValueError("TELEGRAM_WEBHOOK_SECRET: не менее 8 символов при включённом вебхуке")
         return self
 
 

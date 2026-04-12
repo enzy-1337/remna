@@ -19,6 +19,7 @@ from shared.integrations.rw_traffic import (
 )
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
+from shared.services.optimized_route_service import optimized_route_panel_ready
 from shared.services.subscription_service import count_devices, get_active_subscription
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,24 @@ async def build_subscription_detail_caption(
         plain("📟 Слоты: ") + bold(str(n_occupied)) + plain(" / ") + denom_slots
     )
 
+    opt_route_lines: list = []
+    if settings.billing_v2_enabled and user.billing_mode == "hybrid":
+        ex = settings.billing_optimized_route_gb_extra_rub
+        if user.optimized_route_enabled:
+            opt_route_lines.append(
+                plain("🛰 Маршрут: ")
+                + bold("оптимизированный")
+                + plain(" (+")
+                + bold(str(ex))
+                + plain(" ₽ к шагу ГБ вне пакета)")
+            )
+        else:
+            opt_route_lines.append(plain("🛰 Маршрут: ") + bold("обычный"))
+        if not optimized_route_panel_ready(settings):
+            opt_route_lines.append(
+                italic("Переключение в боте: задайте оба UUID squad в .env панели.")
+            )
+
     exp = sub.expires_at
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
@@ -156,14 +175,15 @@ async def build_subscription_detail_caption(
     ]
     quote_lines.extend(
         [
-        plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
-        traffic_line,
-        devices_slots_line,
-        plain("🗓️ До: ")
-        + bold(exp_msk)
-        + plain(" (")
-        + esc(left_phrase)
-        + plain(")"),
+            plain("💎 Тариф: ") + bold(plan.name if plan else "—"),
+            traffic_line,
+            devices_slots_line,
+            *opt_route_lines,
+            plain("🗓️ До: ")
+            + bold(exp_msk)
+            + plain(" (")
+            + esc(left_phrase)
+            + plain(")"),
         ]
     )
     quoted_block = "\n".join("> " + line for line in quote_lines)

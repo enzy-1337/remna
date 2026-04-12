@@ -95,6 +95,15 @@ BILLING_MOBILE_GB_EXTRA_RUB=2.5
 - transitions (24ч),
 - risk 1ч / 24ч.
 
+### 5.1. Telegram webhook (вместо long polling)
+
+Когда `TELEGRAM_WEBHOOK_ENABLED=true`:
+
+- Запускайте **`uvicorn api.main:app`**: при старте вызывается `setWebhook`, поднимаются те же фоновые циклы, что у polling-бота, апдейты обрабатываются через **POST `/webhooks/telegram`**.
+- Не запускайте **`python -m bot.main`** параллельно с этим режимом (процесс завершится с кодом 2) — иначе дублирование апдейтов.
+- `TELEGRAM_WEBHOOK_URL` — полный HTTPS URL, совпадающий с путём вебхука (…`/webhooks/telegram`). `TELEGRAM_WEBHOOK_SECRET` — не менее 8 символов; Telegram передаёт его в заголовке `X-Telegram-Bot-Api-Secret-Token`.
+- FSM сейчас в памяти: при **нескольких воркерах** uvicorn состояние не разделяется — для продакшена с webhook используйте **один воркер** или вынесите storage в Redis (отдельная задача).
+
 ## 6. Rollback
 
 Если аномалия в списаниях:

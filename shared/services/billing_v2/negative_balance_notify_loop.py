@@ -12,6 +12,7 @@ from shared.config import Settings
 from shared.database import get_session_factory
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.user import User
+from shared.services.billing_v2.balance_floor_panel_service import reconcile_hybrid_balance_floor_panel_batch
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,8 @@ async def _avg_daily_spend_last_days(session: AsyncSession, *, user_id: int, day
 
 
 async def process_negative_balance_notifications(session: AsyncSession, settings: Settings) -> tuple[int, int]:
+    await reconcile_hybrid_balance_floor_panel_batch(session, settings)
+
     if not settings.billing_negative_notify_enabled:
         return 0, 0
     users = list(

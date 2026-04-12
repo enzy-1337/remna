@@ -101,8 +101,8 @@ docker compose run --rm migrate
 Частые причины: неверный пароль к Postgres (том `pgdata` создан с другими `POSTGRES_*`, чем в текущем `docker-compose.yml`), конфликт ревизий Alembic, недоступен `postgres`. Починить миграции **не** через `docker compose exec api alembic` (если контейнер `api` не запущен), а через `docker compose run --rm migrate` или `docker compose run --rm bot alembic upgrade head` с тем же `DATABASE_URL`, что в compose.
 
 - Сервис **`migrate`** — однократно `alembic upgrade head` до старта зависимых сервисов
-- Сервис **`bot`** — `python -m bot.main` (опционально через **proxychains4**, см. ниже)
-- Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей)
+- Сервис **`bot`** — `python -m bot.main` (опционально через **proxychains4**, см. ниже). При **`TELEGRAM_WEBHOOK_ENABLED=true`** polling не используется: апдейты бота принимает **`api`** на **`POST /webhooks/telegram`** (см. `docs/phase1-rollout.md` §5.1).
+- Сервис **`api`** — `uvicorn api.main:app` на порту **8000** (вебхуки платежей и опционально Telegram)
 - **Postgres** и **Redis** поднимаются автоматически; `DATABASE_URL` / `REDIS_URL` в compose переопределены под сеть Docker.
 - Порты **5432** и **6379** на хост **не пробрасываются** (чтобы не конфликтовать с уже установленным PostgreSQL/Redis на VPS). Подключение к БД из контейнеров идёт по имени `postgres` / `redis`. Нужен доступ с хоста — см. `docker-compose.override.example.yml`.
 

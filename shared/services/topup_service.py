@@ -21,6 +21,7 @@ from shared.services.smart_cart import clear_cart, get_cart
 from shared.services.telegram_notify import send_telegram_message
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
+from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 from shared.services.referral_service import grant_referrer_reward_from_topup
 
 logger = logging.getLogger(__name__)
@@ -116,27 +117,27 @@ async def apply_topup_from_webhook(
     provider_name: str,
     parsed: ParsedWebhookTopup,
     settings: Settings,
-) -> tuple[str, int | None, Decimal | None, int | None, Decimal | None]:
+) -> tuple[str, int | None, Decimal | None, int | None, Decimal | None, Decimal | None]:
     """
     Идемпотентное зачисление.
-    Возвращает (status, telegram_id, сумма_зачисления_₽, user_id при status=completed).
+    Возвращает (status, telegram_id, сумма_всего_на_баланс_₽, user_id, промо-бонус_₽, бонус_первого_пополнения_₽).
     status: completed | duplicate | rejected | not_found
     """
     r = await session.execute(select(Transaction).where(Transaction.id == parsed.internal_transaction_id))
     txn = r.scalar_one_or_none()
     if txn is None:
         logger.warning("topup webhook: txn id=%s not found", parsed.internal_transaction_id)
-        return "not_found", None, None, None, None
+        return "not_found", None, None, None, None, None
 
     if txn.type != "topup":
-        return "rejected", None, None, None, None
+        return "rejected", None, None, None, None, None
 
     if (txn.payment_provider or "").lower() != provider_name.lower():
         logger.warning("topup webhook: provider mismatch txn=%s expected=%s got=%s", txn.id, txn.payment_provider, provider_name)
-        return "rejected", None, None, None, None
+        return "rejected", None, None, None, None, None
 
     if txn.status == "completed":
-        return "duplicate", None, None, None, None
+        return "duplicate", None, None, None, None, None
 
     if txn.payment_id and parsed.external_payment_id and txn.payment_id != parsed.external_payment_id:
         logger.warning(
@@ -151,7 +152,7 @@ async def apply_topup_from_webhook(
         if provider_name.lower().strip() == "platega":
             txn.payment_id = parsed.external_payment_id
         else:
-            return "rejected", None, None, None, None
+            return "rejected", None, None, None, None, None
 
     # Сумма: доверяем нашей записи в БД; вебхук может уточнить для fiat
     credited = txn.amount
@@ -166,7 +167,7 @@ async def apply_topup_from_webhook(
 
     user = await session.get(User, txn.user_id)
     if user is None:
-        return "not_found", None, None, None, None
+        return "not_found", None, None, None, None, None
 
     user.balance += credited
 
@@ -211,18 +212,7 @@ async def apply_topup_from_webhook(
                 )
             )
         usage.topup_bonus_applied_at = now
-    txn.status = "completed"
-    meta = dict(txn.meta or {})
-    meta["webhook_parsed"] = {
-        "external_payment_id": parsed.external_payment_id,
-        "amount_rub_hook": str(parsed.amount_rub) if parsed.amount_rub else None,
-    }
-    txn.meta = meta
 
-    tg_id = int(meta.get("telegram_id") or 0)
-
-    # Приветственный бонус на первом пополнении пользователя без активной подписки:
-    # отмечаем в транзакциях и пробуем дать +5 ГБ в Remnawave, если аккаунт уже существует.
     first_topup = (
         await session.execute(
             select(Transaction.id)
@@ -235,6 +225,51 @@ async def apply_topup_from_webhook(
             .limit(1)
         )
     ).scalar_one_or_none() is None
+
+    ft_extra_total = Decimal("0")
+    if first_topup and settings.billing_first_topup_extra_balance_percent > Decimal("0"):
+        if credited >= settings.billing_first_topup_extra_balance_min_rub:
+            pct = settings.billing_first_topup_extra_balance_percent
+            extra = (credited * (pct / Decimal("100"))).quantize(Decimal("0.01"))
+            if extra > Decimal("0"):
+                bonus_pid = f"first_topup_balance_bonus:{txn.id}"
+                exists_b = (
+                    await session.execute(
+                        select(Transaction.id).where(Transaction.payment_id == bonus_pid).limit(1)
+                    )
+                ).scalar_one_or_none()
+                if exists_b is None:
+                    user.balance += extra
+                    ft_extra_total = extra
+                    session.add(
+                        Transaction(
+                            user_id=user.id,
+                            type="first_topup_balance_bonus",
+                            amount=extra,
+                            currency="RUB",
+                            payment_provider="billing_v2",
+                            payment_id=bonus_pid,
+                            status="completed",
+                            description=f"Бонус первого пополнения (+{pct:g}% к сумме платежа)",
+                            meta={
+                                "percent": str(pct),
+                                "from_topup_txn_id": txn.id,
+                                "from_amount_rub": str(credited),
+                            },
+                        )
+                    )
+
+    txn.status = "completed"
+    meta = dict(txn.meta or {})
+    meta["webhook_parsed"] = {
+        "external_payment_id": parsed.external_payment_id,
+        "amount_rub_hook": str(parsed.amount_rub) if parsed.amount_rub else None,
+    }
+    txn.meta = meta
+
+    tg_id = int(meta.get("telegram_id") or 0)
+
+    # Приветственный бонус ГБ на первом пополнении без активной подписки (см. BILLING_FIRST_TOPUP_WELCOME_GB).
     has_active_sub = (
         await session.execute(
             select(Subscription.id)
@@ -246,7 +281,8 @@ async def apply_topup_from_webhook(
             .limit(1)
         )
     ).scalar_one_or_none() is not None
-    if first_topup and not has_active_sub:
+    welcome_gb = int(settings.billing_first_topup_welcome_gb)
+    if first_topup and not has_active_sub and welcome_gb > 0:
         bonus_payment_id = f"welcome_gb_bonus:{user.id}"
         already_bonus = (
             await session.execute(
@@ -265,8 +301,8 @@ async def apply_topup_from_webhook(
                     payment_provider="billing_v2",
                     payment_id=bonus_payment_id,
                     status="completed",
-                    description="Стартовый бонус 5 ГБ после первого пополнения",
-                    meta={"bonus_gb": 5},
+                    description=f"Стартовый бонус {welcome_gb} ГБ после первого пополнения",
+                    meta={"bonus_gb": welcome_gb},
                 )
             )
             if user.remnawave_uuid is not None:
@@ -274,10 +310,10 @@ async def apply_topup_from_webhook(
                 try:
                     uinfo = await rw.get_user(str(user.remnawave_uuid))
                     current = int(uinfo.get("trafficLimitBytes") or 0)
-                    new_limit = current + 5 * (1024**3)
+                    new_limit = current + welcome_gb * (1024**3)
                     await rw.update_user(str(user.remnawave_uuid), traffic_limit_bytes=new_limit)
                 except RemnaWaveError:
-                    logger.warning("welcome 5GB bonus: failed to update rw user user_id=%s", user.id)
+                    logger.warning("welcome GB bonus: failed to update rw user user_id=%s", user.id)
 
     await grant_referrer_reward_from_topup(
         session,
@@ -289,8 +325,11 @@ async def apply_topup_from_webhook(
 
     await session.flush()
 
-    credited_total = credited + promo_bonus_total
-    return "completed", (tg_id if tg_id else None), credited_total, user.id, promo_bonus_total
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        await sync_hybrid_balance_floor_panel_state(session, user, settings)
+
+    credited_total = credited + promo_bonus_total + ft_extra_total
+    return "completed", (tg_id if tg_id else None), credited_total, user.id, promo_bonus_total, ft_extra_total
 
 
 async def notify_topup_success(
@@ -298,6 +337,7 @@ async def notify_topup_success(
     telegram_id: int | None,
     amount_rub: Decimal,
     promo_bonus_rub: Decimal | None = None,
+    first_topup_extra_rub: Decimal | None = None,
     settings: Settings,
     user_id: int | None = None,
     provider_name: str | None = None,
@@ -339,6 +379,8 @@ async def notify_topup_success(
         text += f"\n\n{extra}"
     if promo_bonus_rub is not None and promo_bonus_rub > 0:
         text += f"\n\n🎁 Промокод бонус: +{bold(str(promo_bonus_rub))} ₽."
+    if first_topup_extra_rub is not None and first_topup_extra_rub > 0:
+        text += f"\n\n🎁 Первое пополнение: +{bold(str(first_topup_extra_rub))} ₽."
     if tg is not None and tg > 0:
         if invoice_mid is not None:
             from shared.services.telegram_notify import delete_telegram_message
@@ -378,6 +420,8 @@ async def notify_topup_success(
                 ]
                 if promo_bonus_rub is not None and promo_bonus_rub > 0:
                     admin_lines.append(f"Бонус промокодов: {bold(str(promo_bonus_rub))} ₽")
+                if first_topup_extra_rub is not None and first_topup_extra_rub > 0:
+                    admin_lines.append(f"Бонус первого пополнения: {bold(str(first_topup_extra_rub))} ₽")
 
                 await notify_admin(
                     settings,
@@ -396,26 +440,26 @@ async def manual_check_and_apply_topup(
     *,
     txn_id: int,
     settings: Settings,
-) -> tuple[str, Decimal | None, Decimal | None, bool]:
+) -> tuple[str, Decimal | None, Decimal | None, bool, Decimal | None]:
     """
     Ручная проверка платежа пользователем (кнопка в боте).
-    Возвращает (status, credited_total_or_None, promo_bonus_or_None, should_notify).
+    Возвращает (status, credited_total_or_None, promo_bonus_or_None, should_notify, first_topup_extra_or_None).
     should_notify=True только если зачисление выполнено в этом вызове (не дубликат вебхука).
     status: completed | pending | rejected | not_found | error
     """
     r = await session.execute(select(Transaction).where(Transaction.id == txn_id))
     txn = r.scalar_one_or_none()
     if txn is None:
-        return "not_found", None, None, False
+        return "not_found", None, None, False, None
     if txn.type != "topup":
-        return "rejected", None, None, False
+        return "rejected", None, None, False, None
     if txn.status == "completed":
-        return "completed", txn.amount, None, False
+        return "completed", txn.amount, None, False, None
 
     provider = (txn.payment_provider or "").lower().strip()
     external_id = (txn.payment_id or "").strip()
     if not provider or not external_id:
-        return "error", None, None, False
+        return "error", None, None, False, None
 
     try:
         if provider == "cryptobot":
@@ -424,7 +468,7 @@ async def manual_check_and_apply_topup(
             prov = CryptoBotProvider(settings)
             paid, amt, raw = await prov.is_invoice_paid(external_id)
             if not paid:
-                return "pending", None, None, False
+                return "pending", None, None, False, None
             parsed = ParsedWebhookTopup(
                 internal_transaction_id=txn.id,
                 external_payment_id=external_id,
@@ -437,7 +481,7 @@ async def manual_check_and_apply_topup(
             prov = PlategaProvider(settings)
             st, amt, raw = await prov.get_transaction_status(external_id)
             if st not in ("CONFIRMED", "PAID", "SUCCESS", "COMPLETED"):
-                return "pending", None, None, False
+                return "pending", None, None, False, None
             parsed = ParsedWebhookTopup(
                 internal_transaction_id=txn.id,
                 external_payment_id=external_id,
@@ -446,21 +490,21 @@ async def manual_check_and_apply_topup(
             )
         else:
             # неизвестный провайдер
-            return "error", None, None, False
+            return "error", None, None, False, None
     except Exception:
         logger.exception("manual topup check failed txn=%s provider=%s", txn.id, provider)
-        return "error", None, None, False
+        return "error", None, None, False, None
 
-    status, _tg_id, credited_total, _user_id, promo_bonus = await apply_topup_from_webhook(
+    status, _tg_id, credited_total, _user_id, promo_bonus, ft_extra = await apply_topup_from_webhook(
         session,
         provider_name=provider,
         parsed=parsed,
         settings=settings,
     )
     if status == "completed":
-        return "completed", credited_total, promo_bonus, True
+        return "completed", credited_total, promo_bonus, True, ft_extra or Decimal("0")
     if status == "duplicate":
-        return "completed", txn.amount, None, False
+        return "completed", txn.amount, None, False, None
     if status in ("rejected", "not_found"):
-        return status, None, None, False
-    return "error", None, None, False
+        return status, None, None, False, None
+    return "error", None, None, False, None

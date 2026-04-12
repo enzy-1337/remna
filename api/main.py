@@ -6,6 +6,7 @@ FastAPI: вебхуки платежей и (далее) публичные эн
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from starlette.responses import Response
 
 from api.routers import public_pages, tickets_api, web_admin, webhooks
 from shared.config import get_settings
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin_plain
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,12 +36,58 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
-    logging.getLogger("api").info(
-        "API стартовал (cryptobot_stub=%s platega_stub=%s)",
+    log = logging.getLogger("api")
+    log.info(
+        "API стартовал (cryptobot_stub=%s platega_stub=%s telegram_webhook=%s)",
         s.cryptobot_stub,
         s.platega_stub,
+        s.telegram_webhook_enabled,
     )
-    yield
+    stop_event = asyncio.Event()
+    bg_tasks: list[asyncio.Task] = []
+    if s.telegram_webhook_enabled:
+        from bot.background_loops import cancel_background_tasks, start_background_loops
+        from bot.bootstrap_db import bootstrap_bot_database_schema
+        from bot.factory import apply_ipv4_preferred_dns, create_bot_and_dispatcher, webhook_allowed_updates
+
+        apply_ipv4_preferred_dns()
+        await bootstrap_bot_database_schema()
+        bot, dp = await create_bot_and_dispatcher(s)
+        app.state.telegram_bot = bot
+        app.state.telegram_dispatcher = dp
+        app.state.telegram_feed_lock = asyncio.Lock()
+        bg_tasks = start_background_loops(s, stop_event)
+        url = (s.telegram_webhook_url or "").strip()
+        secret = (s.telegram_webhook_secret or "").strip()
+        allowed = webhook_allowed_updates(dp)
+        sw_kwargs: dict[str, object] = {"url": url, "secret_token": secret}
+        if allowed is not None:
+            sw_kwargs["allowed_updates"] = allowed
+        await bot.set_webhook(**sw_kwargs)
+        log.info("Telegram setWebhook: %s", url)
+        try:
+            await notify_admin_plain(
+                s,
+                text=f"🌐 API: режим Telegram webhook\n{url}",
+                topic=AdminLogTopic.BOOT,
+                event_type="api_telegram_webhook_startup",
+            )
+        except Exception:
+            log.debug("admin notify webhook startup", exc_info=True)
+    try:
+        yield
+    finally:
+        if s.telegram_webhook_enabled:
+            stop_event.set()
+            from bot.background_loops import cancel_background_tasks
+
+            await cancel_background_tasks(bg_tasks)
+            try:
+                bot = getattr(app.state, "telegram_bot", None)
+                if bot is not None:
+                    await bot.delete_webhook(drop_pending_updates=False)
+            except Exception:
+                log.exception("Telegram delete_webhook")
 
 
 app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)

@@ -1,11 +1,45 @@
-"""Калькуляторы для админки: эквивалент pay-per-use за 30 дн. и кредит при переходе с legacy."""
+"""Калькуляторы: pay-as-you-go по сценарию, за 30 дн.; сравнение с планом; кредит при переходе с legacy."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 
 from shared.config import Settings
 from shared.models.plan import Plan
+
+
+def estimate_payg_scenario_rub(
+    settings: Settings,
+    *,
+    device_days: int,
+    gb_steps: int,
+    mobile_gb_steps: int = 0,
+    optimized_route: bool = False,
+) -> dict[str, Decimal]:
+    """
+    Оценка pay-as-you-go: сумма «устройство·сутки» × дневная ставка, шаги ГБ, моб. ГБ, при флаге —
+    доплата за ГБ оптимизированного маршрута (как в charge_gb_step).
+    """
+    dd = max(0, int(device_days))
+    g = max(0, int(gb_steps))
+    m = max(0, int(mobile_gb_steps))
+    device_total = (Decimal(dd) * settings.billing_device_daily_rub).quantize(Decimal("0.01"))
+    traffic_total = (settings.billing_gb_step_rub * Decimal(g)).quantize(Decimal("0.01"))
+    mobile_total = (settings.billing_mobile_gb_extra_rub * Decimal(m)).quantize(Decimal("0.01"))
+    opt_extra = (
+        (settings.billing_optimized_route_gb_extra_rub * Decimal(g)).quantize(Decimal("0.01"))
+        if optimized_route
+        else Decimal("0")
+    )
+    total = (device_total + traffic_total + mobile_total + opt_extra).quantize(Decimal("0.01"))
+    return {
+        "device_rub": device_total,
+        "traffic_rub": traffic_total,
+        "mobile_extra_rub": mobile_total,
+        "optimized_extra_rub": opt_extra,
+        "total_rub": total,
+    }
 
 
 def estimate_pay_per_use_30d_rub(
@@ -22,15 +56,18 @@ def estimate_pay_per_use_30d_rub(
     d = max(0, int(device_count))
     g = max(0, int(gb_per_month))
     m = max(0, int(mobile_gb_per_month))
-    device_total = (Decimal("30") * settings.billing_device_daily_rub * Decimal(d)).quantize(Decimal("0.01"))
-    traffic_total = (settings.billing_gb_step_rub * Decimal(g)).quantize(Decimal("0.01"))
-    mobile_total = (settings.billing_mobile_gb_extra_rub * Decimal(m)).quantize(Decimal("0.01"))
-    total = (device_total + traffic_total + mobile_total).quantize(Decimal("0.01"))
+    out = estimate_payg_scenario_rub(
+        settings,
+        device_days=30 * d,
+        gb_steps=g,
+        mobile_gb_steps=m,
+        optimized_route=False,
+    )
     return {
-        "device_rub": device_total,
-        "traffic_rub": traffic_total,
-        "mobile_extra_rub": mobile_total,
-        "total_rub": total,
+        "device_rub": out["device_rub"],
+        "traffic_rub": out["traffic_rub"],
+        "mobile_extra_rub": out["mobile_extra_rub"],
+        "total_rub": out["total_rub"],
     }
 
 
@@ -57,3 +94,26 @@ def plan_fields_for_ppu_estimate(plan: Plan) -> tuple[int, int]:
     else:
         gb = int(plan.traffic_limit_gb) if plan.traffic_limit_gb is not None and int(plan.traffic_limit_gb) > 0 else 0
     return devices, gb
+
+
+def plan_charge_for_compare_period_rub(plan: Plan, period_days: int) -> Decimal:
+    """Цена плана, пропорционально периоду сравнения (длительность плана из БД)."""
+    pd = max(1, int(period_days))
+    dur = max(1, int(plan.duration_days))
+    return (plan.price_rub * Decimal(pd) / Decimal(dur)).quantize(Decimal("0.01"))
+
+
+def compare_plan_vs_payg_estimate(
+    plan: Plan,
+    *,
+    period_days: int,
+    payg_estimate: Mapping[str, Decimal],
+) -> dict[str, Decimal]:
+    """Сравнение: стоимость плана за период vs оценка pay-as-you-go (delta > 0 — план дороже сценария)."""
+    plan_rub = plan_charge_for_compare_period_rub(plan, period_days)
+    payg_rub = payg_estimate["total_rub"]
+    return {
+        "plan_rub": plan_rub,
+        "payg_rub": payg_rub,
+        "delta_rub": (plan_rub - payg_rub).quantize(Decimal("0.01")),
+    }

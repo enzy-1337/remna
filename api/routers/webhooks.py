@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from aiogram.types import Update
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from shared.config import get_settings
@@ -58,7 +59,7 @@ async def webhook_cryptobot(request: Request) -> Response:
 
     factory = get_session_factory()
     async with factory() as session:
-        status, tg_id, amount, user_id, promo_bonus_rub = await apply_topup_from_webhook(
+        status, tg_id, amount, user_id, promo_bonus_rub, ft_extra = await apply_topup_from_webhook(
             session,
             provider_name="cryptobot",
             parsed=parsed,
@@ -71,6 +72,7 @@ async def webhook_cryptobot(request: Request) -> Response:
             telegram_id=tg_id,
             amount_rub=amount,
             promo_bonus_rub=promo_bonus_rub,
+            first_topup_extra_rub=ft_extra if ft_extra and ft_extra > 0 else None,
             settings=settings,
             user_id=user_id,
             provider_name="cryptobot",
@@ -105,7 +107,7 @@ async def webhook_platega(request: Request) -> Response:
 
     factory = get_session_factory()
     async with factory() as session:
-        status, tg_id, amount, user_id, promo_bonus_rub = await apply_topup_from_webhook(
+        status, tg_id, amount, user_id, promo_bonus_rub, ft_extra = await apply_topup_from_webhook(
             session,
             provider_name="platega",
             parsed=parsed,
@@ -118,6 +120,7 @@ async def webhook_platega(request: Request) -> Response:
             telegram_id=tg_id,
             amount_rub=amount,
             promo_bonus_rub=promo_bonus_rub,
+            first_topup_extra_rub=ft_extra if ft_extra and ft_extra > 0 else None,
             settings=settings,
             user_id=user_id,
             provider_name="platega",
@@ -207,4 +210,34 @@ async def webhook_remnawave(request: Request, background_tasks: BackgroundTasks)
         else:
             logger.info("Remnawave webhook duplicate event_id=%s", event_id)
         await session.commit()
+    return Response(status_code=200)
+
+
+@router.post("/telegram")
+async def webhook_telegram_bot(request: Request) -> Response:
+    """
+    Входящие апдейты Telegram Bot API (режим TELEGRAM_WEBHOOK_ENABLED).
+    Проверка: заголовок X-Telegram-Bot-Api-Secret-Token == TELEGRAM_WEBHOOK_SECRET.
+    """
+    settings = get_settings()
+    if not settings.telegram_webhook_enabled:
+        raise HTTPException(status_code=404, detail="telegram webhook disabled")
+    token = (settings.telegram_webhook_secret or "").strip()
+    hdr = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+    if hdr != token:
+        logger.warning("Telegram webhook: неверный secret token")
+        raise HTTPException(status_code=401, detail="unauthorized")
+    bot = getattr(request.app.state, "telegram_bot", None)
+    dp = getattr(request.app.state, "telegram_dispatcher", None)
+    lock = getattr(request.app.state, "telegram_feed_lock", None)
+    if bot is None or dp is None or lock is None:
+        logger.error("Telegram webhook: bot/dispatcher не смонтированы (lifespan API)")
+        raise HTTPException(status_code=503, detail="bot not ready")
+    body = await request.body()
+    try:
+        update = Update.model_validate_json(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid update")
+    async with lock:
+        await dp.feed_update(bot, update)
     return Response(status_code=200)

@@ -90,4 +90,8 @@ async def apply_debit(
         )
     )
     await session.flush()
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
+
+        await sync_hybrid_balance_floor_panel_state(session, user, settings)
     return LedgerResult(applied=True, user_balance=next_balance, entry_id=entry.id)

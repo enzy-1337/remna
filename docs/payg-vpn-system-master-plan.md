@@ -1,7 +1,7 @@
 # Мастер-план: pay-as-you-go VPN + тарифы + Remnawave (переработка remna)
 
-**Версия документа:** 1.0  
-**Дата:** 2026-04-11  
+**Версия документа:** 1.13  
+**Дата:** 2026-04-12  
 **Статус:** живой документ — при изменении scope, решений или стека **обновляйте этот файл** и дату версии.
 
 ---
@@ -29,6 +29,9 @@
 |----------|------------|
 | [phase1-rollout.md](./phase1-rollout.md) | Включение гибридного биллинга v1 в прод, env, проверки |
 | [mariadb-migration-future.md](./mariadb-migration-future.md) | Перенос на MariaDB **позже** (сейчас не делаем) |
+| [phase0-inventory.md](./phase0-inventory.md) | Инвентаризация кода после фазы 0 |
+| [billing-gb-state-machine.md](./billing-gb-state-machine.md) | Таблица событий ГБ: цель §2.9 vs текущая реализация |
+| [device-billing-idempotency.md](./device-billing-idempotency.md) | Ключ суточного списания за устройство (HWID + день биллинга) |
 
 ---
 
@@ -129,10 +132,10 @@ _Переносите ответы сюда, чтобы не потерять._
 
 | # | Вопрос | Ответ |
 |---|--------|--------|
-| Q1 | Точные поля Remnawave webhook для «первого байта» vs «шаг ГБ» — какая версия панели стоит в проде? | |
+| Q1 | Точные поля Remnawave webhook для «первого байта» vs «шаг ГБ» — какая версия панели стоит в проде? | **Панель 2.7.4.** В коде remna обрабатывается тип **`traffic.gb_step`** (`webhook_ingress_service` → `charge_gb_step`). Семантику шага (ровно 1 ГБ на событие vs первый байт) нужно сверить с официальным контрактом вебхуков 2.7.4 и логами `remnawave_webhook_events.payload`. |
 | Q2 | Имя для режима «оптимизированный маршрут» в UX (нейтральное) — финальный текст кнопки? | |
-| Q3 | Перевыпуск подписки: точное имя метода OpenAPI после проверки на панели? | |
-| Q4 | Калькулятор: период сравнения по умолчанию — 30 календарных дней или до конца текущего месяца подписки? | |
+| Q3 | Перевыпуск подписки: точное имя метода OpenAPI после проверки на панели? | **POST** ``/api/users/{uuid}/actions/revoke`` · ``UsersController_revokeUserSubscription`` · тело ``RevokeUserSubscriptionBodyDto`` (для новой ссылки: ``revokeOnlyPasswords: false`` или опустить). |
+| Q4 | Калькулятор: период сравнения по умолчанию — 30 календарных дней или до конца текущего месяца подписки? | **В боте:** пресеты с явным периодом (7 / 30 дн.); цена плана — пропорционально `Plan.duration_days` за выбранный период. |
 
 ---
 
@@ -142,80 +145,81 @@ _Переносите ответы сюда, чтобы не потерять._
 
 ### Фаза 0 — Инвентаризация и спека (без большого кода)
 
-- [ ] Снять текущую карту: `billing_v2/*`, `webhook_ingress_service`, `rating_service`, `Plan`, `Subscription`, тикеты (где показывать детализацию за день).
-- [ ] Описать **state machine** списания ГБ (п.5) в виде таблицы: состояние пользователя → событие → списание → новое состояние.
-- [ ] Сверить с [phase1-rollout.md](./phase1-rollout.md): что уже включено в проде, что выключено.
-- [ ] Заполнить Q1–Q4 по возможности.
+- [x] Снять текущую карту: `billing_v2/*`, `webhook_ingress_service`, `rating_service`, `Plan`, `Subscription`, тикеты (где показывать детализацию за день). → [phase0-inventory.md](./phase0-inventory.md)
+- [x] Описать **state machine** списания ГБ (п.5) в виде таблицы: состояние пользователя → событие → списание → новое состояние. → [billing-gb-state-machine.md](./billing-gb-state-machine.md)
+- [x] Сверить с [phase1-rollout.md](./phase1-rollout.md): что уже включено в проде, что выключено. → зафиксировано в phase0-inventory (фактические флаги на сервере — у DevOps).
+- [x] Заполнить Q1–Q4 по возможности. → **Q1** частично (версия панели + тип события в коде); **Q2–Q4** пока пусто.
 
-**Артефакт:** подпункты в §2.9 или отдельный `docs/billing-gb-state-machine.md` (если разрастётся).
+**Артефакт:** [billing-gb-state-machine.md](./billing-gb-state-machine.md), [phase0-inventory.md](./phase0-inventory.md).
 
 ### Фаза 1 — Модель ГБ «предоплата блока» + пакетный overage (п.5 + п.11)
 
-- [ ] Формализовать счётчики: «оплаченные ГБ-блоки», «used в текущем периоде панели», взаимодействие с **пакетным** `monthly_gb_limit`.
-- [ ] Адаптировать или заменить обработку вебхуков (`traffic.gb_step` и др.) под новую модель **без двойных списаний**.
-- [ ] Юнит-тесты на краевые случаи: 0 трафика; 0.01 ГБ; ровно 1 ГБ; пакет исчерпан → payg.
-- [ ] Обновить `.env.example` и комментарии в `Settings` для новых порогов/флагов.
+- [ ] Формализовать счётчики: «оплаченные ГБ-блоки», «used в текущем периоде панели», взаимодействие с **пакетным** `monthly_gb_limit`. *(часть 2026-04-12: месяц пакета = `BILLING_CALENDAR_TIMEZONE`; идемпотентность `event_id` в начале `charge_gb_step`; payg: debit → затем usage.)*
+- [x] Адаптировать обработку `traffic.gb_step` **без ложных usage при отказе debit** и **без расхождения месяца пакета с детализацией** (`rating_service` + `billing_calendar.billing_package_month_utc_bounds`).
+- [x] Юнит-/интеграционные тесты ключевых краёв: пакет исчерпан → payg; пол баланса без usage; идемпотентность `event_id`; сводка за день. *(Файлы: `tests/test_billing_calendar_package_month.py`, `tests/test_rating_charge_gb_integration.py` на SQLite+aiosqlite; 0.01 ГБ — уровень панели, здесь не симулируется.)*
+- [x] Обновить `.env.example` и комментарии в `Settings` для границ месяца пакета (`BILLING_CALENDAR_TIMEZONE`).
 
 ### Фаза 2 — Устройства: полный день при добавлении + идемпотентность (п.7–8)
 
-- [ ] Уточнить ключ идемпотентности (HWID + имя + …) в `charge_daily_device_once` / истории устройств.
-- [ ] Согласовать с Remnawave payload поля «имя» и «ключи».
-- [ ] Тесты: два attach одного логического устройства в один день.
+- [x] Уточнить ключ идемпотентности в `charge_daily_device_once` / истории устройств. → [device-billing-idempotency.md](./device-billing-idempotency.md) (`device_daily:{user_id}:{hwid}:{day}`).
+- [x] Поля «имя» / uuid из payload (best-effort) в `DeviceHistory.meta` через `device_identity_meta_from_payload` (Remnawave-совместимые вложенные ключи).
+- [x] Тесты: два вызова `charge_daily_device_once` за один день — одно списание; пол баланса без usage. *(Файлы: `tests/test_rating_device_daily_integration.py`, `tests/test_webhook_device_identity_meta.py`.)*
 
 ### Фаза 3 — «Оптимизированный маршрут» (п.6)
 
-- [ ] Миграция: флаг пользователя/подписки + опционально audit log.
-- [ ] Конфиг: UUID squad «обычный» / «оптимизированный» в `Settings`.
-- [ ] Вызовы Remnawave: переключение `active_internal_squads` (или эквивалент в вашей версии API).
-- [ ] Надбавка **+2,5 ₽/ГБ** в `rating_service` / событиях с пометкой в `BillingUsageEvent.meta`.
-- [ ] UX в боте: вкл/выкл + короткое объяснение.
+- [x] Миграция: флаг `users.optimized_route_enabled` (`0010_user_optimized_route`).
+- [x] Конфиг: `REMNAWAVE_DEFAULT_SQUAD_UUID` / `REMNAWAVE_OPTIMIZED_SQUAD_UUID`, `BILLING_OPTIMIZED_ROUTE_GB_EXTRA_RUB` в `Settings` и `.env.example`.
+- [x] Вызовы Remnawave: `sync_user_optimized_route_to_panel` (squads при создании/продлении/триале через `remnawave_squads_for_db_user`).
+- [x] Надбавка к payg-шагу ГБ в `charge_gb_step` при включённом флаге; `meta` + `BillingDailySummary.gb_amount_rub`.
+- [x] UX в боте: переключатель + строки в детализации подписки (`subscription_detail`); интеграционный тест `test_payg_optimized_route_extra_on_gb_step`.
 
 ### Фаза 4 — Баланс, пол, уведомления, отключение squads
 
-- [ ] Сверка с `BILLING_BALANCE_FLOOR_RUB`, циклами уведомлений.
-- [ ] Явное правило: при достижении пола → уведомление → **снятие squads** (и статус в RW) — один кодовый путь.
-- [ ] Тесты на границу −50 ₽.
+- [x] Пол `BILLING_BALANCE_FLOOR_RUB` в `apply_debit` (как было); предупреждения 24ч/1ч — `negative_balance_notify_loop` (без изменения порогов).
+- [x] Единый путь `sync_hybrid_balance_floor_panel_state`: при `balance <= floor` → Telegram + `DISABLED` + `activeInternalSquads=[]`; при `balance > floor` и ранее снятом доступе → `ACTIVE` + squads по тарифу (если есть активная подписка). Метка `users.balance_floor_rw_suspended_at` (`0011`). Вызовы: `apply_debit`, пополнение, покупка/слот, автопродление; пакетная догонка в начале `process_negative_balance_notifications`.
+- [x] Тесты: `tests/test_balance_floor_panel.py` (граница −50 ₽ через `apply_debit`, latch/restore, reconcile).
 
 ### Фаза 5 — Детализация: день / месяц (бот + web-admin + тикеты)
 
-- [ ] Бот: меню «Моя подписка → Детализация» (день / месяц, формат как в ТЗ).
-- [ ] Web-admin: профиль / биллинг — те же агрегаты.
-- [ ] Тикеты: **только текущие сутки** (таймзона из `BILLING_CALENDAR_TIMEZONE` или явно UTC — зафиксировать в коде и здесь).
-- [ ] Переиспользовать `billing_daily_summary` / `detail_service` где возможно.
+- [x] Бот: «Моя подписка → Детализация» (`sub:detail:*`), день/месяц по `BILLING_CALENDAR_TIMEZONE`; кнопка только при **hybrid + v2**.
+- [x] Web-admin: карточка «Детализация списаний (гибрид v2)» на `/admin/users/{id}` — сегодня + таблица дней месяца + пакет/сверх пакета; средний расход за 3 дня — по **той же** календарной шкале (`billing_today`).
+- [x] Тикеты: в топике при создании тикета и при новом сообщении пользователя — блок **только текущих суток** (`format_hybrid_billing_today_for_support_topic`, таймзона биллинга). API: `GET /billing/.../detail/today` — основной срез для поддержки; месяц — для админки/отчётов.
+- [x] Агрегаты из `BillingDailySummary` / `detail_service.usage_package_breakdown`.
 
 ### Фаза 6 — Первое пополнение и бонусы (п.10)
 
-- [ ] Параметризовать: минимальная сумма для +100%, бонус ГБ после первого пополнения.
-- [ ] Не ломать существующий `welcome_gb_bonus` — объединить логику или версионировать.
+- [x] Параметры в `Settings` / `.env`: `BILLING_FIRST_TOPUP_EXTRA_BALANCE_PERCENT`, `BILLING_FIRST_TOPUP_EXTRA_BALANCE_MIN_RUB`, `BILLING_FIRST_TOPUP_WELCOME_GB` (0 отключает welcome ГБ).
+- [x] Доп. баланс: транзакция `first_topup_balance_bonus`, идемпотентность `first_topup_balance_bonus:{topup_txn_id}`; реферал по-прежнему от базовой суммы пополнения.
+- [x] `welcome_gb_bonus:{user_id}` и сценарий «без активной подписки» сохранены; число ГБ из настройки вместо константы 5.
 
 ### Фаза 7 — Реферал 10% с пополнений на тот же баланс (п.9)
 
-- [ ] Проверить текущий `REFERRAL_TOPUP_PERCENT` и зачисление на `user.balance`.
-- [ ] Детализация транзакций в UI при необходимости.
+- [x] Проверено: `referral_payment_percent` в `Settings` (алиасы `REFERRAL_PAYMENT_PERCENT` / `REFERRAL_TOPUP_PERCENT`); `grant_referrer_reward_from_topup` → `referrer.balance` + `Transaction` (`referral_payment_percent`) + `ReferralReward` (идемпотентность `referral_pct:topup:{txn_id}`).
+- [x] Бот «Баланс → История зачислений»: строки для `referral_payment_percent` (источник из `meta.reward_source`), `referral_signup` / `referral_signup_invited`; тесты `tests/test_referrer_topup_reward.py`.
 
 ### Фаза 8 — Калькулятор «план vs pay-as-you-go» (п.12)
 
-- [ ] Хендлеры бота + клавиатура.
-- [ ] Загрузка активных планов из БД (только не удалённые / активные для кнопок).
-- [ ] Расширение `billing_calculator` или отдельный сервис «сравнение».
+- [x] Хендлеры бота + клавиатура (`bot/handlers/calculator.py`, кнопка в профиле при `BILLING_V2_ENABLED`).
+- [x] Загрузка активных планов из БД (`list_paid_plans`).
+- [x] Расширение `billing_calculator`: `estimate_payg_scenario_rub`, `plan_charge_for_compare_period_rub`, `compare_plan_vs_payg_estimate`; тесты в `tests/test_billing_calculator.py`.
 - [ ] По желанию: зеркало в web-admin.
 
 ### Фаза 9 — Перевыпуск подписки одной операцией RW (п.13)
 
-- [ ] По [docs.rw/api](https://docs.rw/api) найти эндпоинт «reset / rotate subscription».
-- [ ] Обернуть в `RemnaWaveClient` один метод `reset_user_subscription_credentials(...)` (имя уточнить по API).
-- [ ] Бот: подтверждение «Вы уверены?» → вызов → отображение новой ссылки/инструкций.
-- [ ] Записать в §5 Q3 финальный путь API.
+- [x] Эндпоинт панели: POST ``/api/users/{uuid}/actions/revoke`` (см. Q3).
+- [x] `RemnaWaveClient.reset_user_subscription_credentials` в `shared/integrations/remnawave.py`.
+- [x] Бот: «Моя подписка» → подтверждение → вызов → новая ссылка (`sub:reissue:*` в `bot/handlers/subscription.py`); тест `tests/test_remnawave_reissue_subscription.py`.
+- [x] §5 Q3 обновлён.
 
 ### Фаза 10 — Конструктор тарифов в админке + кнопки в боте (п.12 / п.11)
 
-- [ ] CRUD планов (название, цена, устройства, ГБ) — расширить существующий web-admin если уже частично есть.
-- [ ] Синхронизация inline-кнопок «Название — Цена» при удалении плана.
+- [x] CRUD планов в web-admin (`/admin/tariffs`, форма `_admin_plan_form`, удаление с проверкой истории подписок).
+- [x] Кнопки в боте из `list_paid_plans` при каждом открытии; при недоступном `sub:buy:*` — обновление списка (`_render_tariff_list`); запрет покупки «Триал» в `purchase_plan_with_balance`; подсказка на странице тарифов в админке.
 
 ### Фаза 11 — Опционально: Telegram webhook
 
-- [ ] `TELEGRAM_WEBHOOK_URL`, секрет, маршрут в API, снятие polling при включении.
-- [ ] Документация в README / phase1.
+- [x] `TELEGRAM_WEBHOOK_ENABLED`, `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET` в `Settings`; POST `/webhooks/telegram` в API; при включении — `setWebhook` + фоновые циклы в `api.main` lifespan; `python -m bot.main` завершается с кодом 2 (polling отключён).
+- [x] Документация: `docs/phase1-rollout.md` §5.1, `.env.example`; тест `tests/test_telegram_webhook_route.py`.
 
 ### Фаза 12 — MariaDB (отложено)
 
@@ -249,3 +253,16 @@ _Переносите ответы сюда, чтобы не потерять._
 | Версия | Дата | Изменения |
 |--------|------|-----------|
 | 1.0 | 2026-04-11 | Первый draft: требования, решения п.2–3–12, фазы, вопросы |
+| 1.1 | 2026-04-12 | Фаза 0: инвентаризация, state machine ГБ, ответ Q1 (RW 2.7.4 + `traffic.gb_step`), ссылки на новые docs |
+| 1.2 | 2026-04-12 | Фаза 1 (часть): месяц пакета по `BILLING_CALENDAR_TIMEZONE`, порядок debit→usage для payg, тесты границ месяца |
+| 1.3 | 2026-04-12 | Фаза 1: `charge_daily_device_once` — debit до usage для платного пути; `aiosqlite`; интеграционные тесты `charge_gb_step` |
+| 1.4 | 2026-04-12 | Фаза 2: документ идемпотентности устройств, meta из payload, тесты device daily + парсер meta; удалён неиспользуемый `was_device_billed_today` |
+| 1.5 | 2026-04-12 | Фаза 3: флаг в БД, squad «оптимизированный», доплата за ГБ, синк в панель, UI бота + тест |
+| 1.6 | 2026-04-12 | Фаза 4: пол баланса → RW DISABLED/пустые squads; восстановление при пополнении; миграция `balance_floor_rw_suspended_at`, тесты |
+| 1.7 | 2026-04-12 | Фаза 5: детализация в web-admin; тикеты — сводка за сегодня в топике; бот — детализация только hybrid+v2; риск-ETA по `billing_today` |
+| 1.8 | 2026-04-12 | Фаза 6: первое пополнение — настраиваемый % на баланс и welcome ГБ; уведомления и история баланса |
+| 1.9 | 2026-04-12 | Фаза 7: зафиксирована логика реф. % с пополнения; история зачислений в боте + тесты |
+| 1.10 | 2026-04-12 | Фаза 8: калькулятор в боте (сценарии, сравнение с планом), расширение `billing_calculator`, ответ Q4 по периоду сравнения |
+| 1.11 | 2026-04-12 | Фаза 9: перевыпуск ссылки подписки через `actions/revoke`, метод клиента, UX в боте, Q3 |
+| 1.12 | 2026-04-12 | Фаза 10: зафиксирован существующий CRUD тарифов; бот — актуальный список при протухшем тарифе, `TRIAL_PLAN_NAME` в покупке |
+| 1.13 | 2026-04-12 | Фаза 11: Telegram webhook в API, общая сборка `bot/factory.py` + фоновые циклы, отказ от polling при включённом флаге |

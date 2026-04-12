@@ -65,7 +65,16 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
         select(Transaction)
         .where(
             Transaction.user_id == user_id,
-            Transaction.type.in_(("topup", "promo_topup_bonus")),
+            Transaction.type.in_(
+                (
+                    "topup",
+                    "promo_topup_bonus",
+                    "first_topup_balance_bonus",
+                    "referral_payment_percent",
+                    "referral_signup",
+                    "referral_signup_invited",
+                )
+            ),
             Transaction.status == "completed",
         )
         .order_by(Transaction.id.desc())
@@ -73,7 +82,7 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
     )
     rows = r.scalars().all()
     if not rows:
-        return [plain("Успешных оплат пока нет.")]
+        return [plain("Зачислений по этим типам пока нет.")]
     lines: list[str] = []
     for t in rows:
         amt_s = f"{t.amount:.2f}"
@@ -90,6 +99,50 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
                 + plain(" ₽ · ")
                 + code(promo_code)
                 + plain(" · ")
+                + esc(dt_s)
+                + plain(" МСК")
+            )
+        elif t.type == "first_topup_balance_bonus":
+            lines.append(
+                "• "
+                + plain("Бонус первого пополнения ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
+                + esc(dt_s)
+                + plain(" МСК")
+            )
+        elif t.type == "referral_payment_percent":
+            src = str((t.meta or {}).get("reward_source") or "")
+            src_h = {
+                "payment_pct_topup": "пополнение друга",
+                "payment_pct_plan": "тариф друга",
+                "payment_pct_device": "слот друга",
+            }.get(src, "платёж друга")
+            lines.append(
+                "• "
+                + plain("Реферал: ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
+                + plain(src_h)
+                + plain(" · ")
+                + esc(dt_s)
+                + plain(" МСК")
+            )
+        elif t.type == "referral_signup":
+            lines.append(
+                "• "
+                + plain("Реферал: бонус за регистрацию друга ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
+                + esc(dt_s)
+                + plain(" МСК")
+            )
+        elif t.type == "referral_signup_invited":
+            lines.append(
+                "• "
+                + plain("Бонус за регистрацию по приглашению ")
+                + bold(amt_s)
+                + plain(" ₽ · ")
                 + esc(dt_s)
                 + plain(" МСК")
             )
@@ -119,7 +172,8 @@ def _balance_caption(user: User) -> str:
 
 def _history_caption(history: list[str]) -> str:
     return join_lines(
-        "🧾 " + bold("История пополнений"),
+        "🧾 " + bold("История зачислений"),
+        plain("(пополнения, промо, первое пополнение, реферал)"),
         "",
         "\n".join(history),
     )
@@ -447,7 +501,7 @@ async def cb_topup_check(
     await session.refresh(txn)
     settings = get_settings()
     if txn.status != "completed":
-        status, credited_total, promo_bonus, should_notify = await manual_check_and_apply_topup(
+        status, credited_total, promo_bonus, should_notify, ft_extra = await manual_check_and_apply_topup(
             session,
             txn_id=txn.id,
             settings=settings,
@@ -465,6 +519,7 @@ async def cb_topup_check(
                 telegram_id=int(db_user.telegram_id),
                 amount_rub=credited_total,
                 promo_bonus_rub=promo_bonus,
+                first_topup_extra_rub=ft_extra if ft_extra and ft_extra > 0 else None,
                 settings=settings,
                 user_id=int(db_user.id),
                 provider_name=str(txn.payment_provider or ""),

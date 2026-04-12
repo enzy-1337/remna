@@ -109,6 +109,7 @@ class TicketAssignIn(BaseModel):
 
 @router.get("/billing/{user_id}/detail/today")
 async def api_billing_detail_today(request: Request, user_id: int) -> dict:
+    """Текущие сутки по ``BILLING_CALENDAR_TIMEZONE`` — основной срез для тикетов и поддержки."""
     _require_api_login(request)
     settings = get_settings()
     async with await _session() as session:

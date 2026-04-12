@@ -16,6 +16,7 @@ from shared.models.subscription import Subscription
 from shared.models.user import User
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username
+from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.subscription_service import update_rw_user_respecting_hwid_limit
 
 
@@ -76,9 +77,7 @@ async def activate_trial(
     expire_at = datetime.now(timezone.utc) + timedelta(days=settings.trial_duration_days)
     traffic_bytes = settings.trial_traffic_gb * (1024**3)
 
-    squads: list[str] | None = None
-    if settings.remnawave_default_squad_uuid:
-        squads = [settings.remnawave_default_squad_uuid.strip()]
+    squads = remnawave_squads_for_db_user(settings, user)
 
     created: dict | None = None
     existing = await client.find_user_by_telegram_id(tg_user.id)

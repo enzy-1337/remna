@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.models.device_history import DeviceHistory
@@ -46,27 +46,3 @@ async def list_active_device_hwids(session: AsyncSession, *, user_id: int) -> li
         if row.device_hwid not in latest_by_hwid:
             latest_by_hwid[row.device_hwid] = bool(row.is_active)
     return sorted([hwid for hwid, active in latest_by_hwid.items() if active])
-
-
-async def was_device_billed_today(
-    session: AsyncSession,
-    *,
-    user_id: int,
-    device_hwid: str,
-    day_start: datetime,
-    day_end: datetime,
-) -> bool:
-    existing = (
-        await session.execute(
-            select(DeviceHistory.id).where(
-                and_(
-                    DeviceHistory.user_id == user_id,
-                    DeviceHistory.device_hwid == device_hwid,
-                    DeviceHistory.event_type == "device_daily_charged",
-                    DeviceHistory.event_ts >= day_start,
-                    DeviceHistory.event_ts < day_end,
-                )
-            )
-        )
-    ).first()
-    return existing is not None
