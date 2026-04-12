@@ -17,7 +17,7 @@ from shared.models.user import User
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.remnawave_username import build_remnawave_username
 from shared.services.optimized_route_service import remnawave_squads_for_db_user
-from shared.services.subscription_service import update_rw_user_respecting_hwid_limit
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 
 
 async def get_trial_plan(session: AsyncSession) -> Plan | None:

@@ -49,10 +49,8 @@ from shared.services.broadcast_service import (
 from shared.database import get_session_factory
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.referral_service import count_invited_users
-from shared.services.subscription_service import (
-    get_base_subscription_plan,
-    update_rw_user_respecting_hwid_limit,
-)
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.subscription_service import get_base_subscription_plan
 
 logger = logging.getLogger(__name__)
 

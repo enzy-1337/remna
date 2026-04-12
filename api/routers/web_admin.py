@@ -68,6 +68,7 @@ from shared.services.billing_v2.detail_service import (
     summarize_month_total,
     usage_package_breakdown,
 )
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     admin_disable_subscription_record,
@@ -79,7 +80,6 @@ from shared.services.subscription_service import (
     remove_device_slot,
     set_subscription_auto_renew,
     unlink_hwid_device_keep_slots,
-    update_rw_user_respecting_hwid_limit,
 )
 from shared.subscription_qr import subscription_url_qr_png
 

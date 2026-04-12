@@ -14,10 +14,8 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.user import User
 from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.remnawave_description import build_remnawave_panel_description
-from shared.services.subscription_service import (
-    get_active_subscription,
-    update_rw_user_respecting_hwid_limit,
-)
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.subscription_service import get_active_subscription
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)

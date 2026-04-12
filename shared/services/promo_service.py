@@ -251,7 +251,8 @@ async def apply_promo_code_for_user_v2(
         return True, join_lines(plain("✅ Начислено "), bold(str(gb)), plain(" ГБ.")), {"code": promo.code, "type": promo.type, "value": str(gb)}
 
     if promo.type == "extra_devices":
-        from shared.services.subscription_service import get_active_subscription, update_rw_user_respecting_hwid_limit
+        from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+        from shared.services.subscription_service import get_active_subscription
 
         add_slots = int(value)
         if add_slots <= 0:

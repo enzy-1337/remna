@@ -18,10 +18,8 @@ from shared.models.transaction import Transaction
 from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
-from shared.services.subscription_service import (
-    get_base_subscription_plan,
-    update_rw_user_respecting_hwid_limit,
-)
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.subscription_service import get_base_subscription_plan
 
 logger = logging.getLogger(__name__)
 

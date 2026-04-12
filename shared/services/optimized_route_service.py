@@ -5,7 +5,7 @@ from __future__ import annotations
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient
 from shared.models.user import User
-from shared.services.subscription_service import update_rw_user_respecting_hwid_limit
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 
 
 def remnawave_squads_for_db_user(settings: Settings, user: User) -> list[str] | None:

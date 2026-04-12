@@ -26,35 +26,13 @@ from shared.services.remnawave_username import build_remnawave_username_from_db_
 from shared.services.smart_cart import set_cart_plan
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
+from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 
 logger = logging.getLogger(__name__)
 
 MIN_DEVICES = 2
 MAX_DEVICES = 10
-
-
-async def update_rw_user_respecting_hwid_limit(
-    rw: RemnaWaveClient,
-    user_uuid: str,
-    *,
-    devices_limit_for_panel: int | None = None,
-    **kwargs: Any,
-) -> None:
-    """
-    PATCH пользователя в панели. ``hwidDeviceLimit`` добавляется только если в панели
-    для этого пользователя не отключён лимит HWID (см. ``should_apply_hwid_device_limit_to_panel``).
-    """
-    uinf: dict[str, Any] | None = None
-    try:
-        uinf = await rw.get_user(user_uuid)
-    except RemnaWaveError:
-        pass
-    if devices_limit_for_panel is not None and should_apply_hwid_device_limit_to_panel(uinf):
-        kwargs["hwid_device_limit"] = devices_limit_for_panel
-    if not kwargs:
-        return
-    await rw.update_user(user_uuid, **kwargs)
 
 
 def plan_tariff_button_label(plan: Plan) -> str:
