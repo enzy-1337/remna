@@ -26,7 +26,6 @@ from shared.services.remnawave_username import build_remnawave_username_from_db_
 from shared.services.smart_cart import set_cart_plan
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
-from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 
 logger = logging.getLogger(__name__)
@@ -262,6 +261,8 @@ async def purchase_plan_with_balance(
             ),
             "insufficient",
         )
+
+    from shared.services.optimized_route_service import remnawave_squads_for_db_user
 
     rw = RemnaWaveClient(settings)
     squads = remnawave_squads_for_db_user(settings, user)
