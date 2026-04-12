@@ -250,6 +250,20 @@ class Settings(BaseSettings):
         validation_alias="BILLING_DEVICE_DAILY_JOB_INTERVAL_SEC",
         description="Интервал проверки «догонки» суточного списания за устройства (сек)",
     )
+    billing_traffic_rw_meter_enabled: bool = Field(
+        default=True,
+        validation_alias="BILLING_TRAFFIC_RW_METER_ENABLED",
+        description=(
+            "Списание PAYG-ГБ по данным панели (ceil(used_gb) через опрос get_user); "
+            "вебхуки traffic.gb_step помечаются ignored_meter_poll и не списывают повторно."
+        ),
+    )
+    billing_traffic_meter_poll_interval_sec: int = Field(
+        default=120,
+        ge=30,
+        validation_alias="BILLING_TRAFFIC_METER_POLL_INTERVAL_SEC",
+        description="Интервал фонового опроса трафика в панели для счётчика ГБ (сек)",
+    )
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
     billing_mobile_gb_extra_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_MOBILE_GB_EXTRA_RUB")

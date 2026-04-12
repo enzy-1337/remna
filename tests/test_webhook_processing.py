@@ -71,8 +71,8 @@ def _test_user(
     )
 
 
-def _v2_settings(*, enabled: bool = True) -> SimpleNamespace:
-    return SimpleNamespace(billing_v2_enabled=enabled)
+def _v2_settings(*, enabled: bool = True, traffic_rw_meter: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(billing_v2_enabled=enabled, billing_traffic_rw_meter_enabled=traffic_rw_meter)
 
 
 class StoreRawWebhookEventTests(IsolatedAsyncioTestCase):
@@ -142,6 +142,20 @@ class ProcessRemnawaveEventTests(IsolatedAsyncioTestCase):
         settings = _v2_settings()
         await process_remnawave_event(s, row=row, settings=settings)
         self.assertEqual(row.status, "ignored")
+
+    async def test_traffic_ignored_when_rw_meter_enabled(self) -> None:
+        row = RemnawaveWebhookEvent(
+            event_id="e-meter",
+            event_type="traffic.gb_step",
+            payload={"telegram_id": 1001},
+            headers={},
+            signature_valid=True,
+            status="received",
+        )
+        s = _SessionUserQuery(_test_user(tg_id=1001))
+        settings = _v2_settings(traffic_rw_meter=True)
+        await process_remnawave_event(s, row=row, settings=settings)
+        self.assertEqual(row.status, "ignored_meter_poll")
 
     @patch(
         "shared.services.billing_v2.webhook_ingress_service.charge_gb_step",

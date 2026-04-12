@@ -11,14 +11,34 @@ from shared.services.billing_v2.device_daily_batch_service import catch_up_devic
 
 logger = logging.getLogger(__name__)
 
+_hwid_reconcile_phase = 0
+
 
 async def device_daily_midnight_loop(settings: Settings, stop_event: asyncio.Event) -> None:
+    global _hwid_reconcile_phase
     interval = max(60, int(settings.billing_device_daily_job_interval_sec))
     while not stop_event.is_set():
         try:
             if settings.billing_v2_enabled:
                 async with get_session_factory()() as session:
                     async with session.begin():
+                        from shared.services.billing_v2.hwid_panel_reconcile_service import (
+                            reconcile_hwid_devices_for_hybrid_users_sharded,
+                        )
+
+                        touched, ev = await reconcile_hwid_devices_for_hybrid_users_sharded(
+                            session,
+                            settings,
+                            phase=_hwid_reconcile_phase,
+                            phases=10,
+                        )
+                        _hwid_reconcile_phase += 1
+                        if ev:
+                            logger.info(
+                                "device_daily_midnight_loop: hwid_panel_reconcile users=%s events=%s",
+                                touched,
+                                ev,
+                            )
                         n = await catch_up_device_daily_charges(session, settings)
                 if n:
                     logger.info("device_daily_midnight_loop: processed charge attempts=%s", n)

@@ -866,4 +866,10 @@ async def provision_hybrid_payg_panel_if_needed(
         )
     )
     await session.flush()
+    try:
+        from shared.services.billing_v2.hwid_panel_reconcile_service import reconcile_hwid_devices_from_panel
+
+        await reconcile_hwid_devices_from_panel(session, user=user, settings=settings)
+    except Exception:
+        logger.exception("provision_payg: hwid reconcile user_id=%s", user.id)
     return True

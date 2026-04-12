@@ -11,6 +11,7 @@ from shared.services.autorenew_service import subscription_autorenew_loop
 from shared.services.backup_loop import backup_loop
 from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
 from shared.services.billing_v2.device_daily_midnight_loop import device_daily_midnight_loop
+from shared.services.billing_v2.traffic_meter_poll_loop import traffic_meter_poll_loop
 from shared.services.billing_v2.negative_balance_notify_loop import negative_balance_notify_loop
 from shared.services.billing_v2.transition_service import legacy_transition_loop
 from shared.services.admin_report_loop import admin_report_loop
@@ -34,6 +35,8 @@ def start_background_loops(settings: Settings, stop_event: asyncio.Event) -> lis
     if settings.billing_v2_enabled:
         tasks.append(asyncio.create_task(billing_cleanup_loop(settings, stop_event)))
         tasks.append(asyncio.create_task(device_daily_midnight_loop(settings, stop_event)))
+        if settings.billing_traffic_rw_meter_enabled:
+            tasks.append(asyncio.create_task(traffic_meter_poll_loop(settings, stop_event)))
         if settings.billing_negative_notify_enabled:
             tasks.append(asyncio.create_task(negative_balance_notify_loop(settings, stop_event)))
         tasks.append(asyncio.create_task(legacy_transition_loop(settings, stop_event)))

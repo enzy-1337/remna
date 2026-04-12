@@ -16,6 +16,13 @@ def billing_today(settings: Settings) -> date:
     return datetime.now(timezone.utc).astimezone(billing_zoneinfo(settings)).date()
 
 
+def billing_local_date_for_utc(settings: Settings, dt: datetime) -> date:
+    """Календарная дата в ``BILLING_CALENDAR_TIMEZONE`` для момента ``dt`` (UTC-aware)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(billing_zoneinfo(settings)).date()
+
+
 def billing_local_day_start_utc(settings: Settings, d: date) -> datetime:
     z = billing_zoneinfo(settings)
     local_start = datetime.combine(d, datetime.min.time()).replace(tzinfo=z)

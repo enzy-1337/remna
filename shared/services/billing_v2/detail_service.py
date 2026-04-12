@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Literal
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_usage_event import BillingUsageEvent
+from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.billing_v2.billing_calendar import (
     billing_local_day_end_utc_exclusive,
@@ -147,3 +149,85 @@ async def format_hybrid_billing_today_for_support_topic(
             f"сверх пакета ГБ {pack['gb_charged']}, устр. {pack['device_charged']}."
         )
     return f"{head}\n{body}"
+
+
+_TXN_TARIFF_TYPES = frozenset({"subscription", "subscription_autorenew"})
+
+_TXN_CREDIT_TYPES = frozenset(
+    {
+        "topup",
+        "admin_balance_add",
+        "promo_topup_bonus",
+        "first_topup_balance_bonus",
+        "referral_signup",
+        "referral_signup_invited",
+        "referral_payment_percent",
+    }
+)
+
+_TXN_DEBIT_DETAIL_TYPES = frozenset(
+    {
+        "usage_charge",
+        "subscription",
+        "subscription_autorenew",
+        "manual_add",
+        "billing_transition",
+    }
+)
+
+
+async def user_has_tariff_subscription_charges(session: AsyncSession, user_id: int) -> bool:
+    """Была ли оплата тарифа / автопродления с баланса (для вкладки «Тариф» в детализации)."""
+    n = (
+        await session.execute(
+            select(func.count())
+            .select_from(Transaction)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.status == "completed",
+                Transaction.type.in_(tuple(_TXN_TARIFF_TYPES)),
+                Transaction.amount > 0,
+            )
+        )
+    ).scalar_one()
+    return int(n or 0) > 0
+
+
+async def list_completed_transactions_billing_local_range(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    settings: Settings,
+    from_day: date,
+    to_day_inclusive: date,
+    *,
+    tariff_only: bool = False,
+) -> list[Transaction]:
+    """Транзакции ``completed`` за полуинтервал локальных суток ``[from_day, to_day_inclusive]``."""
+    t0 = billing_local_day_start_utc(settings, from_day)
+    t1 = billing_local_day_start_utc(settings, to_day_inclusive + timedelta(days=1))
+    q = (
+        select(Transaction)
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.status == "completed",
+            Transaction.created_at >= t0,
+            Transaction.created_at < t1,
+        )
+        .order_by(Transaction.created_at.desc())
+    )
+    rows = list((await session.execute(q)).scalars())
+    if not tariff_only:
+        return rows
+    return [r for r in rows if r.type in _TXN_TARIFF_TYPES and r.amount > 0]
+
+
+def transaction_detail_bucket(txn: Transaction) -> Literal["credit", "debit", "skip"]:
+    """Группировка строк для экрана детализации (без дублей смысла)."""
+    if txn.type == "payg_bootstrap" or txn.amount == 0 and txn.type not in _TXN_CREDIT_TYPES:
+        return "skip"
+    if txn.type in _TXN_CREDIT_TYPES and txn.amount > 0:
+        return "credit"
+    if txn.type in _TXN_DEBIT_DETAIL_TYPES and txn.amount > 0:
+        return "debit"
+    return "skip"

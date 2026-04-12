@@ -3,6 +3,7 @@
 from __future__ import annotations
 import secrets
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -24,7 +25,8 @@ from shared.services.optimized_route_service import (
     optimized_route_panel_ready,
     sync_user_optimized_route_to_panel,
 )
-from shared.md2 import bold, code, join_lines, plain, strip_for_popup_alert
+from shared.md2 import bold, code, esc, italic, join_lines, plain, strip_for_popup_alert
+from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.models.plan import Plan
 from shared.subscription_qr import subscription_url_qr_png
@@ -44,13 +46,17 @@ from shared.services.billing_v2.billing_calendar import (
     billing_local_day_end_utc_exclusive,
     billing_local_day_start_utc,
     billing_today,
+    billing_zoneinfo,
 )
 from shared.services.billing_v2.detail_service import (
     get_month_summaries,
     get_today_summary,
+    list_completed_transactions_billing_local_range,
     month_bounds,
     summarize_month_total,
+    transaction_detail_bucket,
     usage_package_breakdown,
+    user_has_tariff_subscription_charges,
 )
 from shared.services.promo_service import get_pending_purchase_discount_info
 router = Router(name="subscription")
@@ -124,12 +130,91 @@ def _sub_main_markup(
     ).as_markup()
 
 
-def _detail_menu_keyboard() -> InlineKeyboardBuilder:
+def _detail_menu_keyboard(*, show_tariff_tab: bool) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📅 За сегодня", callback_data="sub:detail:today"))
     b.row(InlineKeyboardButton(text="🗓 За месяц", callback_data="sub:detail:month"))
+    if show_tariff_tab:
+        b.row(InlineKeyboardButton(text="💎 Тариф / абонемент", callback_data="sub:detail:tariff:menu"))
     b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
     return b
+
+
+def _detail_tariff_menu_keyboard() -> InlineKeyboardBuilder:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📅 Тариф: сегодня", callback_data="sub:detail:tariff:today"))
+    b.row(InlineKeyboardButton(text="🗓 Тариф: месяц", callback_data="sub:detail:tariff:month"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="sub:detail:menu"))
+    return b
+
+
+def _txn_stamp(settings: Settings, dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(billing_zoneinfo(settings)).strftime("%d.%m %H:%M")
+
+
+def _txn_title_for_detail(txn: Transaction) -> str:
+    labels = {
+        "admin_balance_add": "Начисление администратором",
+        "topup": "Пополнение баланса",
+        "promo_topup_bonus": "Бонус к пополнению (промокод)",
+        "first_topup_balance_bonus": "Бонус первого пополнения",
+        "referral_signup": "Реферал: регистрация",
+        "referral_signup_invited": "Реферал: приглашённый",
+        "referral_payment_percent": "Реферал: процент с оплаты",
+        "usage_charge": "PAYG (трафик / устройства)",
+        "subscription": "Тариф (покупка с баланса)",
+        "subscription_autorenew": "Тариф (автопродление)",
+        "manual_add": "Дополнительное устройство",
+        "billing_transition": "Переход на гибридный биллинг",
+    }
+    base = labels.get(txn.type, txn.type)
+    if txn.description and txn.type in ("usage_charge", "subscription", "subscription_autorenew"):
+        short = txn.description.strip()
+        if len(short) > 48:
+            short = short[:45] + "…"
+        return f"{base}: {short}"
+    return base
+
+
+def _append_transaction_detail_lines(
+    parts: list[str],
+    settings: Settings,
+    txns: list[Transaction],
+    *,
+    max_lines: int = 22,
+) -> None:
+    credits: list[Transaction] = []
+    debits: list[Transaction] = []
+    for t in txns:
+        b = transaction_detail_bucket(t)
+        if b == "credit":
+            credits.append(t)
+        elif b == "debit":
+            debits.append(t)
+    if not credits and not debits:
+        parts.extend(["", plain("Движения по балансу за период: нет записей.")])
+        return
+    n = 0
+
+    def dump_block(title: str, items: list[Transaction], sign: str) -> None:
+        nonlocal n
+        if not items:
+            return
+        parts.extend(["", plain(title)])
+        for t in items:
+            if n >= max_lines:
+                parts.append(italic("… остальные строки сокращены"))
+                return
+            stamp = _txn_stamp(settings, t.created_at)
+            title_h = esc(_txn_title_for_detail(t))
+            amt = str(t.amount.quantize(Decimal("0.01")))
+            parts.append(plain(f"· {stamp} ") + bold(sign + amt) + plain(" ₽ — ") + title_h)
+            n += 1
+
+    dump_block("Зачисления на баланс:", credits, "+")
+    dump_block("Списания и тарифы:", debits, "−")
 
 
 def _plan_buyable_from_bot_catalog(plan: Plan | None) -> bool:
@@ -651,7 +736,7 @@ async def cb_renewal_toggle(
 
 
 @router.callback_query(F.data == "sub:detail:menu")
-async def cb_detail_menu(cq: CallbackQuery, db_user: User | None) -> None:
+async def cb_detail_menu(cq: CallbackQuery, session: AsyncSession, db_user: User | None) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
@@ -659,10 +744,11 @@ async def cb_detail_menu(cq: CallbackQuery, db_user: User | None) -> None:
     if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
         await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
         return
+    show_tar = await user_has_tariff_subscription_charges(session, db_user.id)
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines("📊 " + bold("Детализация расходов"), "", plain("Выберите период.")),
-        reply_markup=_detail_menu_keyboard().as_markup(),
+        reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
         settings=settings,
     )
 
@@ -682,9 +768,9 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
     to_dt = billing_local_day_end_utc_exclusive(settings, today)
     pack = await usage_package_breakdown(session, user_id=db_user.id, from_dt=from_dt, to_dt=to_dt)
     if row is None:
-        text = join_lines("📅 " + bold("Сегодня"), "", plain("Списаний пока нет."))
+        head = join_lines("📅 " + bold("Сегодня"), "", plain("Сводка PAYG за сегодня пуста."))
     else:
-        text = join_lines(
+        head = join_lines(
             "📅 " + bold(f"Сегодня | {row.day.strftime('%d.%m.%Y')}"),
             plain("За гигабайты: ")
             + bold(str(row.gb_units))
@@ -712,10 +798,22 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
             + plain(", устройства ")
             + bold(str(pack["device_charged"])),
         )
+    txns = await list_completed_transactions_billing_local_range(
+        session,
+        user_id=db_user.id,
+        settings=settings,
+        from_day=today,
+        to_day_inclusive=today,
+        tariff_only=False,
+    )
+    extra: list[str] = []
+    _append_transaction_detail_lines(extra, settings, txns)
+    text = join_lines(head, *extra) if extra else head
+    show_tar = await user_has_tariff_subscription_charges(session, db_user.id)
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
-        reply_markup=_detail_menu_keyboard().as_markup(),
+        reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
         settings=settings,
     )
 
@@ -735,8 +833,9 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
     month_from = billing_local_day_start_utc(settings, month_start)
     month_to = billing_local_day_start_utc(settings, next_month)
     pack = await usage_package_breakdown(session, user_id=db_user.id, from_dt=month_from, to_dt=month_to)
+    last_cal_day = next_month - timedelta(days=1)
     if not rows:
-        text = join_lines("🗓 " + bold("За месяц"), "", plain("Списаний пока нет."))
+        head = join_lines("🗓 " + bold("За месяц"), "", plain("Сводка PAYG за месяц пуста."))
     else:
         lines = ["🗓 " + bold("За месяц"), ""]
         for row in rows[:31]:
@@ -760,10 +859,132 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
                 + bold(str(pack["device_charged"])),
             ]
         )
-        text = join_lines(*lines)
+        head = join_lines(*lines)
+    txns_m = await list_completed_transactions_billing_local_range(
+        session,
+        user_id=db_user.id,
+        settings=settings,
+        from_day=month_start,
+        to_day_inclusive=last_cal_day,
+        tariff_only=False,
+    )
+    extra_m: list[str] = []
+    _append_transaction_detail_lines(extra_m, settings, txns_m, max_lines=28)
+    text = join_lines(head, *extra_m) if extra_m else head
+    show_tar = await user_has_tariff_subscription_charges(session, db_user.id)
     await answer_callback_with_photo_screen(
         cq,
         caption=text,
-        reply_markup=_detail_menu_keyboard().as_markup(),
+        reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "sub:detail:tariff:menu")
+async def cb_detail_tariff_menu(cq: CallbackQuery, session: AsyncSession, db_user: User | None) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
+    if not await user_has_tariff_subscription_charges(session, db_user.id):
+        await cq.answer("Нет оплат тарифа с баланса.", show_alert=True)
+        return
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "💎 " + bold("Тариф / абонемент"),
+            "",
+            plain("Покупки тарифа и автопродление с баланса за выбранный период."),
+        ),
+        reply_markup=_detail_tariff_menu_keyboard().as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "sub:detail:tariff:today")
+async def cb_detail_tariff_today(cq: CallbackQuery, session: AsyncSession, db_user: User | None) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
+    if not await user_has_tariff_subscription_charges(session, db_user.id):
+        await cq.answer("Нет оплат тарифа с баланса.", show_alert=True)
+        return
+    today = billing_today(settings)
+    txns = await list_completed_transactions_billing_local_range(
+        session,
+        user_id=db_user.id,
+        settings=settings,
+        from_day=today,
+        to_day_inclusive=today,
+        tariff_only=True,
+    )
+    lines: list[str] = [
+        "💎 " + bold(f"Тариф за сегодня | {today.strftime('%d.%m.%Y')}"),
+        "",
+    ]
+    if not txns:
+        lines.append(plain("Записей за сегодня нет."))
+    else:
+        for t in txns[:20]:
+            stamp = _txn_stamp(settings, t.created_at)
+            title_h = esc(_txn_title_for_detail(t))
+            amt = str(t.amount.quantize(Decimal("0.01")))
+            lines.append(plain(f"· {stamp} ") + bold("−" + amt) + plain(" ₽ — ") + title_h)
+    text = join_lines(*lines)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=_detail_tariff_menu_keyboard().as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data == "sub:detail:tariff:month")
+async def cb_detail_tariff_month(cq: CallbackQuery, session: AsyncSession, db_user: User | None) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    if not settings.billing_v2_enabled or db_user.billing_mode != "hybrid":
+        await cq.answer("Детализация доступна в гибридном биллинге (v2).", show_alert=True)
+        return
+    if not await user_has_tariff_subscription_charges(session, db_user.id):
+        await cq.answer("Нет оплат тарифа с баланса.", show_alert=True)
+        return
+    anchor = billing_today(settings)
+    month_start, next_month = month_bounds(anchor)
+    last_cal_day = next_month - timedelta(days=1)
+    txns = await list_completed_transactions_billing_local_range(
+        session,
+        user_id=db_user.id,
+        settings=settings,
+        from_day=month_start,
+        to_day_inclusive=last_cal_day,
+        tariff_only=True,
+    )
+    lines: list[str] = [
+        "💎 " + bold("Тариф за календарный месяц"),
+        "",
+    ]
+    if not txns:
+        lines.append(plain("Записей за месяц нет."))
+    else:
+        for t in txns[:40]:
+            stamp = _txn_stamp(settings, t.created_at)
+            title_h = esc(_txn_title_for_detail(t))
+            amt = str(t.amount.quantize(Decimal("0.01")))
+            lines.append(plain(f"· {stamp} ") + bold("−" + amt) + plain(" ₽ — ") + title_h)
+    text = join_lines(*lines)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=text,
+        reply_markup=_detail_tariff_menu_keyboard().as_markup(),
         settings=settings,
     )

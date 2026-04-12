@@ -342,6 +342,11 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
 
     now = datetime.now(timezone.utc)
     if event_type == "traffic.gb_step":
+        if settings.billing_traffic_rw_meter_enabled:
+            row.status = "ignored_meter_poll"
+            row.processed_at = now
+            await session.flush()
+            return
         if not applies_pay_per_use_charges(user, settings):
             row.status = "ignored"
             row.processed_at = now

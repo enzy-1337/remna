@@ -4,6 +4,7 @@ from shared.models.base import Base
 from shared.models.billing_cron_checkpoint import BillingCronCheckpoint
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
+from shared.models.billing_traffic_meter import BillingTrafficMeter
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.device_history import DeviceHistory
@@ -18,6 +19,7 @@ from shared.models.user import User
 
 __all__ = [
     "Base",
+    "BillingTrafficMeter",
     "BillingUsageEvent",
     "BillingLedgerEntry",
     "BillingCronCheckpoint",
