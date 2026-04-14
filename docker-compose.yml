@@ -17,6 +17,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # Однократно применяет Alembic (в т.ч. новые колонки) до старта ботов/API.
   migrate:
@@ -37,6 +38,7 @@ services:
     environment:
       <<: *tz-env
     # Пробрасываем на хост нестандартный порт под `network_mode: host`.
+    restart: unless-stopped
 
   bot:
     build: .
@@ -127,7 +129,7 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    restart: "no"
+    restart: unless-stopped
 
 volumes:
   pgdata:
