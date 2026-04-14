@@ -2574,9 +2574,14 @@ async def admin_users(
                 # Защита от переполнения bigint в БД: слишком длинный numeric-запрос
                 # не должен падать 500, а просто давать пустую выборку.
                 tid = int(needle)
-                if tid <= 9_223_372_036_854_775_807:
-                    query = query.where(or_(User.telegram_id == tid, User.id == tid))
-                    count_query = count_query.where(or_(User.telegram_id == tid, User.id == tid))
+                int64_max = 9_223_372_036_854_775_807
+                int32_max = 2_147_483_647
+                if tid <= int64_max:
+                    conds = [User.telegram_id == tid]
+                    if tid <= int32_max:
+                        conds.append(User.id == tid)
+                    query = query.where(or_(*conds))
+                    count_query = count_query.where(or_(*conds))
                 else:
                     query = query.where(text("1=0"))
                     count_query = count_query.where(text("1=0"))

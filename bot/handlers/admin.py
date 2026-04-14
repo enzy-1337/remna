@@ -1523,21 +1523,28 @@ async def msg_admin_find_telegram_id(
     users: list[User] = []
     if typed.isdigit():
         n = int(typed)
-        sub_user_id = (
-            await session.execute(
-                select(Subscription.user_id).where(Subscription.id == n).limit(1)
+        int64_max = 9_223_372_036_854_775_807
+        int32_max = 2_147_483_647
+        if n <= int64_max:
+            conds = [User.telegram_id == n]
+            if n <= int32_max:
+                conds.append(User.id == n)
+                sub_user_id = (
+                    await session.execute(
+                        select(Subscription.user_id).where(Subscription.id == n).limit(1)
+                    )
+                ).scalar_one_or_none()
+                if sub_user_id is not None:
+                    conds.append(User.id == int(sub_user_id))
+            users = list(
+                (
+                    await session.execute(
+                        select(User).where(or_(*conds)).order_by(desc(User.id)).limit(20)
+                    )
+                ).scalars()
             )
-        ).scalar_one_or_none()
-        conds = [User.id == n, User.telegram_id == n]
-        if sub_user_id is not None:
-            conds.append(User.id == int(sub_user_id))
-        users = list(
-            (
-                await session.execute(
-                    select(User).where(or_(*conds)).order_by(desc(User.id)).limit(20)
-                )
-            ).scalars()
-        )
+        else:
+            users = []
     else:
         users = list(
             (
