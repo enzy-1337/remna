@@ -25,6 +25,7 @@ from bot.handlers.subscription import router as subscription_router
 from bot.middlewares.channel_sub import ChannelSubscriptionMiddleware
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
+from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
 from shared.config import Settings
 
@@ -45,6 +46,7 @@ def apply_ipv4_preferred_dns() -> None:
 
 
 def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
+    dp.update.middleware(PrivateChatOnlyMiddleware())
     dp.update.middleware(MaintenanceMiddleware(settings))
     dp.update.middleware(ChannelSubscriptionMiddleware(settings))
     dp.update.middleware(DbSessionMiddleware())

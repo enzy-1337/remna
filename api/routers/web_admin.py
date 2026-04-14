@@ -23,7 +23,7 @@ import httpx
 import re
 import redis.asyncio as redis_async
 from fastapi import APIRouter, BackgroundTasks, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1685,6 +1685,53 @@ async def admin_status(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    placeholder = """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
+      <div class="card-body gap-2">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
+        <p class="text-sm opacity-70">Страница открывается сразу, проверки статусов выполняются в фоне.</p>
+      </div>
+    </div>
+    <div id="status-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg"><div class="card-body"><span class="loading loading-spinner loading-sm"></span><p class="text-sm opacity-70">Загрузка статусов...</p></div></div>
+    </div>
+    <div id="status-nodes" class="mt-4"></div>
+    <script>
+    (function(){
+      function esc(s){return String(s||'').replace(/[&<>\"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]||ch;});}
+      function card(it){
+        var ok=!!it.ok;
+        var badge=ok?'badge-success':'badge-error';
+        var st=ok?'Онлайн':'Ошибка';
+        var lat=it.latency?('<p class="text-xs opacity-60 mt-1">'+esc(it.latency)+'</p>'):'';
+        return '<div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="'+esc(it.icon)+' text-primary mr-2" aria-hidden="true"></i>'+esc(it.title)+'</h3><span class="badge '+badge+' badge-sm">'+st+'</span></div><p class="text-sm opacity-90 break-words">'+esc(it.detail)+'</p>'+lat+'</div></div>';
+      }
+      async function load(){
+        try{
+          const r=await fetch('/admin/status/data',{credentials:'same-origin'});
+          const j=await r.json();
+          const grid=document.getElementById('status-grid');
+          const nodes=document.getElementById('status-nodes');
+          if(!r.ok||!j||!Array.isArray(j.services)){throw new Error((j&&j.error)||('HTTP '+r.status));}
+          grid.innerHTML=j.services.map(card).join('');
+          nodes.innerHTML=j.nodes_html||'';
+        }catch(e){
+          const grid=document.getElementById('status-grid');
+          grid.innerHTML='<div class="alert alert-error"><span>Не удалось загрузить статусы: '+esc(e&&e.message?e.message:e)+'</span></div>';
+        }
+      }
+      load();
+    })();
+    </script>
+    """
+    return _layout("Статус сервисов", placeholder, request=request)
+
+
+@router.get("/status/data")
+async def admin_status_data(request: Request) -> JSONResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
@@ -1766,23 +1813,44 @@ async def admin_status(request: Request) -> HTMLResponse:
     </div>
     """
 
-    body = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
-      <div class="card-body gap-2">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
-        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод (без отдельного запроса к каждой), Telegram-бот и бот тикетов через <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
-      </div>
-    </div>
-    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {_status_service_card(title="Панель Remnawave (API)", icon="fa-solid fa-server", ok=panel_ok, detail=panel_msg, latency=panel_lat)}
-      {_status_service_card(title="Telegram-бот", icon="fa-brands fa-telegram", ok=bot_ok, detail=bot_msg, latency=bot_lat)}
-      {_status_service_card(title="Бот тикетов", icon="fa-solid fa-headset", ok=tickets_bot_ok, detail=tickets_bot_msg, latency=tickets_bot_lat)}
-      {_status_service_card(title="База данных", icon="fa-solid fa-database", ok=db_ok, detail=db_msg, latency=db_lat)}
-      {_status_service_card(title="Redis", icon="fa-solid fa-bolt", ok=redis_ok, detail=redis_msg, latency=redis_lat)}
-    </div>
-    {nodes_table_html}
-    """
-    return _layout("Статус сервисов", body, request=request)
+    services = [
+        {
+            "title": "Панель Remnawave (API)",
+            "icon": "fa-solid fa-server",
+            "ok": panel_ok,
+            "detail": panel_msg,
+            "latency": panel_lat,
+        },
+        {
+            "title": "Telegram-бот",
+            "icon": "fa-brands fa-telegram",
+            "ok": bot_ok,
+            "detail": bot_msg,
+            "latency": bot_lat,
+        },
+        {
+            "title": "Бот тикетов",
+            "icon": "fa-solid fa-headset",
+            "ok": tickets_bot_ok,
+            "detail": tickets_bot_msg,
+            "latency": tickets_bot_lat,
+        },
+        {
+            "title": "База данных",
+            "icon": "fa-solid fa-database",
+            "ok": db_ok,
+            "detail": db_msg,
+            "latency": db_lat,
+        },
+        {
+            "title": "Redis",
+            "icon": "fa-solid fa-bolt",
+            "ok": redis_ok,
+            "detail": redis_msg,
+            "latency": redis_lat,
+        },
+    ]
+    return JSONResponse({"services": services, "nodes_html": nodes_table_html})
 
 
 @router.get("/dashboard")
@@ -1937,22 +2005,6 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
-        <form method="post" action="/admin/payg/mass-convert" onsubmit="return confirm('Запустить массовую конвертацию legacy подписок в PAYG?');" class="flex flex-wrap items-end gap-2">
-          <label class="form-control">
-            <span class="label-text text-xs opacity-70">Подтверждение: введите PAYG</span>
-            <input
-              type="text"
-              name="confirm_word"
-              required
-              autocomplete="off"
-              class="input input-bordered input-sm h-9 min-h-9 w-44 font-mono uppercase"
-              placeholder="PAYG"
-            />
-          </label>
-          <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-rotate" aria-hidden="true"></i>Конвертировать legacy в PAYG
-          </button>
-        </form>
         <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
         <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
         · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
@@ -4036,9 +4088,41 @@ async def admin_settings(request: Request) -> HTMLResponse:
         </form>
       </div>
     </div>
-    <div role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
-      <div class="card-body gap-4">
+    <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <summary class="card-body cursor-pointer select-none">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-rotate text-warning mr-2" aria-hidden="true"></i>Конвертация legacy в PAYG</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
+      </summary>
+      <div class="card-body gap-4 pt-0">
+        <p class="text-sm opacity-70 max-w-4xl">Массово переводит пользователей со старыми подписками на PAYG: начисляет кредит в баланс по калькулятору перехода и обновляет срок/ограничения подписки под текущую PAYG-модель.</p>
+        <div class="alert alert-warning shadow-sm">
+          <i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>
+          <span>Операция массовая. Перед запуском проверьте настройки BILLING_TRANSITION_* и BILLING_PAYG_SUBSCRIPTION_DAYS.</span>
+        </div>
+        <form method="post" action="/admin/payg/mass-convert" onsubmit="return confirm('Запустить массовую конвертацию legacy подписок в PAYG?');" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Подтверждение: введите PAYG</span>
+            <input
+              type="text"
+              name="confirm_word"
+              required
+              autocomplete="off"
+              class="input input-bordered input-sm h-9 min-h-9 w-44 font-mono uppercase"
+              placeholder="PAYG"
+            />
+          </label>
+          <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-rotate" aria-hidden="true"></i>Запустить конвертацию
+          </button>
+        </form>
+      </div>
+    </details>
+    <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <summary class="card-body cursor-pointer select-none">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-triangle-exclamation text-error mr-2" aria-hidden="true"></i>Опасная зона</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
+      </summary>
+      <div class="card-body gap-4 pt-0">
         <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
         <form method="post" action="/admin/settings/factory-reset" class="flex flex-wrap items-end gap-2">
           <input class="input input-bordered input-sm h-9 min-h-9 w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
@@ -4046,7 +4130,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
         </form>
         <p class="text-sm opacity-60">То же, что сброс из Telegram-админки, с подтверждением в браузере.</p>
       </div>
-    </div>
+    </details>
     {env_tabs_script}
     """
     return _layout("Web-admin Settings", body, request=request)
