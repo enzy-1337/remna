@@ -26,7 +26,7 @@ async def traffic_meter_poll_loop(settings: Settings, stop_event: asyncio.Event)
                             session,
                             settings,
                             phase=_traffic_meter_phase,
-                            phases=10,
+                            phases=1,
                         )
                         _traffic_meter_phase += 1
                         if charges:

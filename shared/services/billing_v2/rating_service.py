@@ -89,7 +89,9 @@ async def charge_gb_step(
     if dup is not None:
         return True
 
-    plan = await _active_package_plan(session, user_id=user.id, now=event_ts)
+    # В hybrid-режиме тарификация всегда помегабайтная/погигабайтная (PAYG):
+    # не применяем пакетное покрытие monthly_gb_limit.
+    plan = None if user.billing_mode == "hybrid" else await _active_package_plan(session, user_id=user.id, now=event_ts)
     package_covered = False
     if plan is not None and plan.monthly_gb_limit is not None and plan.monthly_gb_limit > 0:
         month_start_utc, month_end_utc = billing_package_month_utc_bounds(settings, event_ts)
