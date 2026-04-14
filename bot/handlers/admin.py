@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 PAGE_SIZE = 8
+_INT32_MAX = 2_147_483_647
+_INT64_MAX = 9_223_372_036_854_775_807
 
 
 def _is_admin(tg_id: int | None) -> bool:
@@ -1522,12 +1524,13 @@ async def msg_admin_find_telegram_id(
     q_cf = typed_username.casefold()
     users: list[User] = []
     if typed.isdigit():
-        n = int(typed)
-        int64_max = 9_223_372_036_854_775_807
-        int32_max = 2_147_483_647
-        if n <= int64_max:
+        if len(typed) <= 19:
+            n = int(typed)
+        else:
+            n = _INT64_MAX + 1
+        if n <= _INT64_MAX:
             conds = [User.telegram_id == n]
-            if n <= int32_max:
+            if n <= _INT32_MAX:
                 conds.append(User.id == n)
                 sub_user_id = (
                     await session.execute(

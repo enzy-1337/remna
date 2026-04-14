@@ -107,6 +107,8 @@ _DASHBOARD_HTML_CACHE: tuple[float, str] | None = None
 _DASHBOARD_HTML_TTL_SEC = 20.0
 _USERS_HTML_CACHE: dict[tuple[str, int, str, str, str], tuple[float, str]] = {}
 _USERS_HTML_TTL_SEC = 15.0
+_INT32_MAX = 2_147_483_647
+_INT64_MAX = 9_223_372_036_854_775_807
 
 
 def _avatar_fetch_lock(user_id: int) -> asyncio.Lock:
@@ -1068,6 +1070,36 @@ def _status_service_card(
     </div>"""
 
 
+async def _telegram_bot_getme_status(
+    client: httpx.AsyncClient,
+    *,
+    token: str,
+    missing_token_msg: str,
+    ok_fallback_msg: str,
+) -> tuple[bool, str, str | None]:
+    tok = (token or "").strip()
+    if not tok:
+        return (False, missing_token_msg, None)
+    t0 = time.perf_counter()
+    try:
+        r = await client.get(f"https://api.telegram.org/bot{tok}/getMe")
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        latency = f"Задержка: {ms} мс"
+        if r.status_code == 200:
+            try:
+                j = r.json()
+            except Exception:
+                j = {}
+            res = j.get("result") if isinstance(j, dict) else None
+            if j.get("ok") and isinstance(res, dict):
+                un = str(res.get("username") or "")
+                return (True, f"@{un}" if un else ok_fallback_msg, latency)
+            return (False, str(j)[:220], latency)
+        return (False, f"HTTP {r.status_code}", latency)
+    except Exception as e:
+        return (False, str(e)[:220], None)
+
+
 def _parse_date_any(raw: str) -> datetime | None:
     t = (raw or "").strip()
     if not t or t == "-":
@@ -1649,65 +1681,19 @@ async def admin_status(request: Request) -> HTMLResponse:
     node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency(ping_each=False)
     panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
-    bot_ok = False
-    bot_msg = "—"
-    bot_lat: str | None = None
-    tok = (settings.bot_token or "").strip()
-    if not tok:
-        bot_msg = "BOT_TOKEN не задан в окружении"
-    else:
-        t0 = time.perf_counter()
-        try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                r = await client.get(f"https://api.telegram.org/bot{tok}/getMe")
-            ms = round((time.perf_counter() - t0) * 1000, 1)
-            bot_lat = f"Задержка: {ms} мс"
-            if r.status_code == 200:
-                try:
-                    j = r.json()
-                except Exception:
-                    j = {}
-                res = j.get("result") if isinstance(j, dict) else None
-                if j.get("ok") and isinstance(res, dict):
-                    bot_ok = True
-                    un = str(res.get("username") or "")
-                    bot_msg = f"@{un}" if un else "бот отвечает (getMe OK)"
-                else:
-                    bot_msg = str(j)[:220]
-            else:
-                bot_msg = f"HTTP {r.status_code}"
-        except Exception as e:
-            bot_msg = str(e)[:220]
-
-    tickets_bot_ok = False
-    tickets_bot_msg = "—"
-    tickets_bot_lat: str | None = None
-    tickets_tok = (tickets_config.bot_token or "").strip()
-    if not tickets_tok:
-        tickets_bot_msg = "TICKETS_BOT_TOKEN не задан в окружении"
-    else:
-        t0 = time.perf_counter()
-        try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                r = await client.get(f"https://api.telegram.org/bot{tickets_tok}/getMe")
-            ms = round((time.perf_counter() - t0) * 1000, 1)
-            tickets_bot_lat = f"Задержка: {ms} мс"
-            if r.status_code == 200:
-                try:
-                    j = r.json()
-                except Exception:
-                    j = {}
-                res = j.get("result") if isinstance(j, dict) else None
-                if j.get("ok") and isinstance(res, dict):
-                    tickets_bot_ok = True
-                    un = str(res.get("username") or "")
-                    tickets_bot_msg = f"@{un}" if un else "бот тикетов отвечает (getMe OK)"
-                else:
-                    tickets_bot_msg = str(j)[:220]
-            else:
-                tickets_bot_msg = f"HTTP {r.status_code}"
-        except Exception as e:
-            tickets_bot_msg = str(e)[:220]
+    async with httpx.AsyncClient(timeout=12.0) as tg_client:
+        bot_ok, bot_msg, bot_lat = await _telegram_bot_getme_status(
+            tg_client,
+            token=settings.bot_token,
+            missing_token_msg="BOT_TOKEN не задан в окружении",
+            ok_fallback_msg="бот отвечает (getMe OK)",
+        )
+        tickets_bot_ok, tickets_bot_msg, tickets_bot_lat = await _telegram_bot_getme_status(
+            tg_client,
+            token=tickets_config.bot_token,
+            missing_token_msg="TICKETS_BOT_TOKEN не задан в окружении",
+            ok_fallback_msg="бот тикетов отвечает (getMe OK)",
+        )
 
     db_ok = False
     db_msg = "—"
@@ -2573,18 +2559,20 @@ async def admin_users(
             if needle.isdigit():
                 # Защита от переполнения bigint в БД: слишком длинный numeric-запрос
                 # не должен падать 500, а просто давать пустую выборку.
-                tid = int(needle)
-                int64_max = 9_223_372_036_854_775_807
-                int32_max = 2_147_483_647
-                if tid <= int64_max:
-                    conds = [User.telegram_id == tid]
-                    if tid <= int32_max:
-                        conds.append(User.id == tid)
-                    query = query.where(or_(*conds))
-                    count_query = count_query.where(or_(*conds))
-                else:
+                if len(needle) > 19:
                     query = query.where(text("1=0"))
                     count_query = count_query.where(text("1=0"))
+                else:
+                    tid = int(needle)
+                    if tid > _INT64_MAX:
+                        query = query.where(text("1=0"))
+                        count_query = count_query.where(text("1=0"))
+                    else:
+                        conds = [User.telegram_id == tid]
+                        if tid <= _INT32_MAX:
+                            conds.append(User.id == tid)
+                        query = query.where(or_(*conds))
+                        count_query = count_query.where(or_(*conds))
             else:
                 search_filter = or_(
                     User.username.ilike(f"%{needle}%"),
