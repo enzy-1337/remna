@@ -886,6 +886,8 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
     На баланс начисляется кредит по калькулятору transition_credit_for_remaining_legacy_rub от duration_days плана.
     Exempt: lifetime (>= cutoff year) и админы/флаги exempt (через billing_mode/lifetime_exempt обработку на месте).
     """
+    from shared.services.optimized_route_service import remnawave_squads_for_db_user
+
     now = datetime.now(timezone.utc)
     cutoff = datetime(settings.billing_legacy_lifetime_cutoff_year, 1, 1, tzinfo=timezone.utc)
     base_plan = await get_base_subscription_plan(session)
