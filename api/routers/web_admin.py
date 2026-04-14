@@ -1692,8 +1692,24 @@ async def admin_status(request: Request) -> HTMLResponse:
         <p class="text-sm opacity-70">Страница открывается сразу, проверки статусов выполняются в фоне.</p>
       </div>
     </div>
+    <style>
+      .status-skel{position:relative;overflow:hidden;background:color-mix(in oklab, var(--fallback-b2, #e5e7eb) 78%, #fff);}
+      .status-skel::after{
+        content:"";
+        position:absolute;
+        inset:0;
+        transform:translateX(-100%);
+        background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);
+        animation:statusShimmer 1.25s ease-in-out infinite;
+      }
+      @keyframes statusShimmer{100%{transform:translateX(100%);}}
+    </style>
     <div id="status-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg"><div class="card-body"><span class="loading loading-spinner loading-sm"></span><p class="text-sm opacity-70">Загрузка статусов...</p></div></div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Панель Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-бот</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Бот тикетов</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>База данных</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-bolt text-primary mr-2" aria-hidden="true"></i>Redis</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
     </div>
     <div id="status-nodes" class="mt-4"></div>
     <script>
@@ -1735,7 +1751,7 @@ async def admin_status_data(request: Request) -> JSONResponse:
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
-    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency(ping_each=False)
+    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency(ping_each=True)
     panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
     async with httpx.AsyncClient(timeout=12.0) as tg_client:
@@ -1792,20 +1808,28 @@ async def admin_status_data(request: Request) -> JSONResponse:
         for n in node_rows:
             pms = n.get("ping_ms")
             ms_s = f"{pms} мс" if pms is not None else "—"
+            st_raw = str(n.get("status") or "UNKNOWN").upper()
+            if st_raw == "ACTIVE":
+                st_badge = "<span class='badge badge-success badge-sm'>ACTIVE</span>"
+            elif st_raw == "DISABLED":
+                st_badge = "<span class='badge badge-warning badge-sm'>DISABLED</span>"
+            elif st_raw in ("ERROR", "OFFLINE", "DOWN"):
+                st_badge = "<span class='badge badge-error badge-sm'>ERROR</span>"
+            else:
+                st_badge = f"<span class='badge badge-ghost badge-sm'>{_esc(st_raw)}</span>"
             trs.append(
                 f"<tr><td class='max-w-[14rem] truncate' title='{_esc_attr(n.get('name'))}'>{_esc(n.get('name'))}</td>"
                 f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(n.get('uuid'))}</code></td>"
-                f"<td>{_esc(n.get('status'))}</td><td class='font-mono text-sm'>{_esc(ms_s)}</td>"
-                f"<td class='text-xs opacity-80 max-w-xs'>{_esc(n.get('ping_note'))}</td></tr>"
+                f"<td>{st_badge}</td><td class='font-mono text-sm'>{_esc(ms_s)}</td></tr>"
             )
         nodes_table_html = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
         <h3 class="card-title text-lg"><i class="fa-solid fa-network-wired text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
-        <p class="text-sm opacity-60">{_esc(cat_note)}статус и UUID из списка нод панели; отдельный замер к каждой ноде отключён.</p>
+        <p class="text-sm opacity-60">{_esc(cat_note)}статус и UUID из списка нод панели; задержка — отдельный запрос к ноде через API.</p>
         <div class="overflow-x-auto rounded-lg border border-base-content/10">
           <table class="table table-zebra table-sm">
-            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th><th>Примечание</th></tr></thead>
+            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th></tr></thead>
             <tbody>{''.join(trs)}</tbody>
           </table>
         </div>

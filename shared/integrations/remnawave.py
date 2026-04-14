@@ -389,6 +389,29 @@ class RemnaWaveClient:
                 return None, ""
 
         last_list_err: str | None = None
+        def _node_status(n: dict[str, Any]) -> str:
+            raw = (
+                n.get("status")
+                or n.get("state")
+                or n.get("health")
+                or n.get("connectionStatus")
+                or n.get("nodeStatus")
+            )
+            s = str(raw or "").strip().upper()
+            if s in {"ONLINE", "ACTIVE", "UP", "RUNNING", "CONNECTED", "HEALTHY"}:
+                return "ACTIVE"
+            if s in {"OFFLINE", "DOWN", "UNAVAILABLE", "DISCONNECTED"}:
+                return "ERROR"
+            if s in {"DISABLED", "INACTIVE", "STOPPED"}:
+                return "DISABLED"
+            if bool(n.get("isDisabled")):
+                return "DISABLED"
+            if bool(n.get("isOnline")):
+                return "ACTIVE"
+            if raw is not None and s:
+                return s[:80]
+            return "UNKNOWN"
+
         for path in ("nodes", "internal-nodes"):
             t0 = time.perf_counter()
             try:
@@ -402,7 +425,7 @@ class RemnaWaveClient:
                 for n in nodes[:max_nodes]:
                     nu = str(n.get("uuid") or n.get("id") or n.get("nodeUuid") or "").strip()
                     name = str(n.get("name") or n.get("tag") or n.get("address") or nu or "—")[:120]
-                    st = str(n.get("status") or n.get("state") or "—")[:80]
+                    st = _node_status(n)
                     if nu:
                         if ping_each:
                             pms, subp = await _ping_uuid(nu)
