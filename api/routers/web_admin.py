@@ -83,6 +83,7 @@ from shared.services.subscription_service import (
     unlink_hwid_device_keep_slots,
 )
 from shared.subscription_qr import subscription_url_qr_png
+from tickets.config import config as tickets_config
 
 _RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
 
@@ -1678,6 +1679,36 @@ async def admin_status(request: Request) -> HTMLResponse:
         except Exception as e:
             bot_msg = str(e)[:220]
 
+    tickets_bot_ok = False
+    tickets_bot_msg = "—"
+    tickets_bot_lat: str | None = None
+    tickets_tok = (tickets_config.bot_token or "").strip()
+    if not tickets_tok:
+        tickets_bot_msg = "TICKETS_BOT_TOKEN не задан в окружении"
+    else:
+        t0 = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.get(f"https://api.telegram.org/bot{tickets_tok}/getMe")
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            tickets_bot_lat = f"Задержка: {ms} мс"
+            if r.status_code == 200:
+                try:
+                    j = r.json()
+                except Exception:
+                    j = {}
+                res = j.get("result") if isinstance(j, dict) else None
+                if j.get("ok") and isinstance(res, dict):
+                    tickets_bot_ok = True
+                    un = str(res.get("username") or "")
+                    tickets_bot_msg = f"@{un}" if un else "бот тикетов отвечает (getMe OK)"
+                else:
+                    tickets_bot_msg = str(j)[:220]
+            else:
+                tickets_bot_msg = f"HTTP {r.status_code}"
+        except Exception as e:
+            tickets_bot_msg = str(e)[:220]
+
     db_ok = False
     db_msg = "—"
     db_lat: str | None = None
@@ -1743,12 +1774,13 @@ async def admin_status(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
       <div class="card-body gap-2">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
-        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод (без отдельного запроса к каждой), Telegram <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
+        <p class="text-sm opacity-70">Проверки при каждой загрузке страницы: API панели Remnawave, список нод (без отдельного запроса к каждой), Telegram-бот и бот тикетов через <code class="bg-base-300 px-1 rounded text-xs">getMe</code>, БД <code class="bg-base-300 px-1 rounded text-xs">SELECT 1</code>, Redis <code class="bg-base-300 px-1 rounded text-xs">PING</code>.</p>
       </div>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {_status_service_card(title="Панель Remnawave (API)", icon="fa-solid fa-server", ok=panel_ok, detail=panel_msg, latency=panel_lat)}
       {_status_service_card(title="Telegram-бот", icon="fa-brands fa-telegram", ok=bot_ok, detail=bot_msg, latency=bot_lat)}
+      {_status_service_card(title="Бот тикетов", icon="fa-solid fa-headset", ok=tickets_bot_ok, detail=tickets_bot_msg, latency=tickets_bot_lat)}
       {_status_service_card(title="База данных", icon="fa-solid fa-database", ok=db_ok, detail=db_msg, latency=db_lat)}
       {_status_service_card(title="Redis", icon="fa-solid fa-bolt", ok=redis_ok, detail=redis_msg, latency=redis_lat)}
     </div>
