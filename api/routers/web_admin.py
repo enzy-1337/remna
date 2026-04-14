@@ -72,6 +72,7 @@ from shared.services.billing_v2.detail_service import (
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
+    admin_convert_monthly_subscriptions_to_payg_balance,
     admin_disable_subscription_record,
     admin_enable_subscription_record,
     count_devices,
@@ -938,12 +939,21 @@ def _layout(
         var u=new URL(window.location.href);
         var n=u.searchParams.get('n');
         var err=u.searchParams.get('err');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
+        var c=u.searchParams.get('c');
+        var rw=u.searchParams.get('rw');
+        var amt=u.searchParams.get('amt');
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
         if(n&&map[n])window.remnaToast('success',map[n]);
+        if(n==='mass_payg_done'){
+          window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
+        }
         if(err)window.remnaToast('error',err);
-        if(n||err){
+        if(n||err||c||rw||amt){
           u.searchParams.delete('n');
           u.searchParams.delete('err');
+          u.searchParams.delete('c');
+          u.searchParams.delete('rw');
+          u.searchParams.delete('amt');
           var qs=u.searchParams.toString();
           window.history.replaceState({},'',u.pathname+(qs?'?'+qs:''));
         }
@@ -1927,6 +1937,22 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
+        <form method="post" action="/admin/payg/mass-convert" onsubmit="return confirm('Запустить массовую конвертацию legacy подписок в PAYG?');" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Подтверждение: введите PAYG</span>
+            <input
+              type="text"
+              name="confirm_word"
+              required
+              autocomplete="off"
+              class="input input-bordered input-sm h-9 min-h-9 w-44 font-mono uppercase"
+              placeholder="PAYG"
+            />
+          </label>
+          <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-rotate" aria-hidden="true"></i>Конвертировать legacy в PAYG
+          </button>
+        </form>
         <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
         <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
         · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
@@ -2121,6 +2147,42 @@ async def admin_tickets(request: Request) -> HTMLResponse:
     </script>
     """
     return _layout("Web-admin Tickets", body, request=request)
+
+
+@router.post("/payg/mass-convert")
+async def admin_payg_mass_convert(
+    request: Request,
+    confirm_word: str = Form(""),
+) -> RedirectResponse:
+    global _DASHBOARD_HTML_CACHE
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    if (confirm_word or "").strip().upper() != "PAYG":
+        return RedirectResponse(
+            "/admin?err=" + quote_plus("Подтверждение не прошло: введите PAYG."),
+            status_code=303,
+        )
+    async with await _session() as session:
+        changed, rw_changed, total_credit = await admin_convert_monthly_subscriptions_to_payg_balance(
+            session,
+            settings=get_settings(),
+        )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    _DASHBOARD_HTML_CACHE = None
+    return RedirectResponse(
+        "/admin?"
+        + "&".join(
+            [
+                "n=mass_payg_done",
+                f"c={quote_plus(str(changed))}",
+                f"rw={quote_plus(str(rw_changed))}",
+                f"amt={quote_plus(str(total_credit))}",
+            ]
+        ),
+        status_code=303,
+    )
 
 
 @router.get("/tickets/{ticket_id}")
@@ -3328,6 +3390,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 <i class="fa-solid fa-plus" aria-hidden="true"></i>Выдать
               </button>
             </form>
+            <form method="post" action="/admin/users/{user_id}/reset-balance" onsubmit="return confirm('Обнулить баланс пользователя #{user_id}?');">
+              <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
+                <i class="fa-solid fa-eraser" aria-hidden="true"></i>Обнулить
+              </button>
+            </form>
           </div>
           {negative_risk_block}
           {billing_detail_block}
@@ -3467,6 +3534,47 @@ async def admin_user_add_balance(
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=bal_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/reset-balance")
+async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    wauth = request.session.get("wauth") or {}
+    admin_tg = int(wauth.get("telegram_id") or 0)
+    async with await _session() as session:
+        u = await session.get(User, user_id)
+        if u is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        admin_db_id = None
+        if admin_tg:
+            au = (await session.execute(select(User).where(User.telegram_id == admin_tg))).scalar_one_or_none()
+            if au is not None:
+                admin_db_id = au.id
+        before = u.balance
+        u.balance = Decimal("0")
+        session.add(
+            Transaction(
+                user_id=u.id,
+                type="admin_balance_reset",
+                amount=Decimal("0"),
+                currency="RUB",
+                payment_provider="admin",
+                payment_id=None,
+                status="completed",
+                description=f"Админ (web user) обнулил баланс: {before} ₽ -> 0 ₽",
+                meta={
+                    "admin_id": admin_db_id,
+                    "source": "web_user",
+                    "balance_before": str(before),
+                    "balance_after": "0",
+                },
+            )
+        )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=bal_reset", status_code=303)
 
 
 @router.post("/users/{user_id}/delete")

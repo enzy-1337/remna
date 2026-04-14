@@ -28,6 +28,7 @@ from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
+from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 
 logger = logging.getLogger(__name__)
 
@@ -791,7 +792,7 @@ async def provision_hybrid_payg_panel_if_needed(
         return False
 
     now = datetime.now(timezone.utc)
-    payg_horizon = now + timedelta(days=800)
+    payg_horizon = now + timedelta(days=int(settings.billing_payg_subscription_days))
 
     from shared.services.optimized_route_service import remnawave_squads_for_db_user
 
@@ -845,7 +846,7 @@ async def provision_hybrid_payg_panel_if_needed(
         devices_count=MIN_DEVICES,
         started_at=now,
         expires_at=payg_horizon,
-        auto_renew=False,
+        auto_renew=True,
     )
     session.add(sub)
     await session.flush()
@@ -873,3 +874,106 @@ async def provision_hybrid_payg_panel_if_needed(
     except Exception:
         logger.exception("provision_payg: hwid reconcile user_id=%s", user.id)
     return True
+
+
+async def admin_convert_monthly_subscriptions_to_payg_balance(
+    session: AsyncSession,
+    *,
+    settings: Settings,
+) -> tuple[int, int, Decimal]:
+    """
+    Массовый переход: активные/триал подписки от 30 дней -> hybrid + годовой horizon + unlimited traffic.
+    На баланс начисляется кредит по калькулятору transition_credit_for_remaining_legacy_rub от duration_days плана.
+    Exempt: lifetime (>= cutoff year) и админы/флаги exempt (через billing_mode/lifetime_exempt обработку на месте).
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = datetime(settings.billing_legacy_lifetime_cutoff_year, 1, 1, tzinfo=timezone.utc)
+    base_plan = await get_base_subscription_plan(session)
+    if base_plan is None:
+        return 0, 0, Decimal("0")
+
+    rows = (
+        await session.execute(
+            select(Subscription, User, Plan)
+            .join(User, User.id == Subscription.user_id)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(
+                Subscription.status.in_(("active", "trial")),
+                Subscription.expires_at > now,
+                Subscription.expires_at < cutoff,
+                Plan.duration_days >= 30,
+            )
+            .order_by(Subscription.expires_at.desc())
+        )
+    ).all()
+    if not rows:
+        return 0, 0, Decimal("0")
+
+    # Берём последнюю запись на пользователя.
+    latest_by_user: dict[int, tuple[Subscription, User, Plan]] = {}
+    for sub, user, plan in rows:
+        if user.id not in latest_by_user:
+            latest_by_user[user.id] = (sub, user, plan)
+
+    changed = 0
+    rw_changed = 0
+    total_credit = Decimal("0")
+
+    rw = RemnaWaveClient(settings)
+    for sub, user, plan in latest_by_user.values():
+        duration_days = int(plan.duration_days or 0)
+        if duration_days < 30:
+            continue
+        credit = transition_credit_for_remaining_legacy_rub(settings, remaining_days=duration_days)
+        if credit > 0:
+            user.balance += credit
+            total_credit += credit
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="billing_transition",
+                    amount=credit,
+                    currency="RUB",
+                    payment_provider="system",
+                    payment_id=f"transition_credit:{user.id}:{sub.id}",
+                    status="completed",
+                    description="Массовая конвертация legacy подписки в баланс PAYG",
+                    meta={
+                        "source": "admin_mass_convert",
+                        "subscription_id": sub.id,
+                        "plan_id": plan.id,
+                        "plan_duration_days": duration_days,
+                        "payg_subscription_days": int(settings.billing_payg_subscription_days),
+                        "base_month_rub": str(settings.billing_transition_base_month_rub),
+                        "fee_percent": str(settings.billing_transition_fee_percent),
+                    },
+                )
+            )
+
+        user.billing_mode = "hybrid"
+        sub.plan_id = base_plan.id
+        sub.expires_at = now + timedelta(days=int(settings.billing_payg_subscription_days))
+        sub.status = "active"
+        sub.auto_renew = True
+
+        if user.remnawave_uuid is not None:
+            try:
+                squads = remnawave_squads_for_db_user(settings, user)
+                desc = build_remnawave_panel_description(user)
+                await update_rw_user_respecting_hwid_limit(
+                    rw,
+                    str(user.remnawave_uuid),
+                    devices_limit_for_panel=sub.devices_count,
+                    expire_at=sub.expires_at,
+                    traffic_limit_bytes=0,
+                    status="ACTIVE",
+                    description=desc,
+                    active_internal_squads=squads,
+                )
+                rw_changed += 1
+            except RemnaWaveError:
+                logger.exception("mass convert: remnawave sync failed user_id=%s", user.id)
+        changed += 1
+
+    await session.flush()
+    return changed, rw_changed, total_credit

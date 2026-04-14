@@ -181,6 +181,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Как часто проверять подписки на напоминания.",
             ),
             (
+                "BILLING_PAYG_SUBSCRIPTION_DAYS",
+                "Срок PAYG-подписки (дней)",
+                lambda s: str(s.billing_payg_subscription_days),
+                "На сколько дней выдаётся/продлевается PAYG-подписка (по умолчанию 365).",
+            ),
+            (
                 "BILLING_FIRST_TOPUP_WELCOME_ENABLED",
                 "Бонус ГБ при первом пополнении (вкл.)",
                 lambda s: "true" if s.billing_first_topup_welcome_enabled else "false",

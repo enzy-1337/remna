@@ -377,6 +377,13 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC",
         description="Как часто проверять подписки на напоминания (сек)",
     )
+    billing_payg_subscription_days: int = Field(
+        default=365,
+        ge=30,
+        le=3650,
+        validation_alias="BILLING_PAYG_SUBSCRIPTION_DAYS",
+        description="Срок PAYG-подписки в днях при выдаче/автопродлении (обычно 365).",
+    )
 
     # Рефералы: бонус при /start по ссылке + процент с платежей приглашённого (пополнение, тариф/слот с баланса)
     referral_signup_bonus_rub: Decimal = Field(

@@ -50,7 +50,10 @@ from shared.database import get_session_factory
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.referral_service import count_invited_users
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
-from shared.services.subscription_service import get_base_subscription_plan
+from shared.services.subscription_service import (
+    admin_convert_monthly_subscriptions_to_payg_balance,
+    get_base_subscription_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,12 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
     b.row(
         InlineKeyboardButton(text="🧮 Калькулятор перехода legacy", callback_data="admin:transition_calc"),
         InlineKeyboardButton(text="📊 Калькулятор PAYG", callback_data="admin:calc_payg"),
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="🔁 Конвертировать подписки в PAYG",
+            callback_data="admin:mass_convert_payg",
+        )
     )
     b.row(
         InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
@@ -597,6 +606,12 @@ async def _build_user_card(
             callback_data=f"admin:ab:{u.id}",
         )
     )
+    b.row(
+        InlineKeyboardButton(
+            text="🧹 Обнулить баланс",
+            callback_data=f"admin:rb:{u.id}",
+        )
+    )
 
     if viewer_telegram_id is not None and viewer_telegram_id != u.telegram_id:
         b.row(
@@ -726,6 +741,39 @@ async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None) -> None:
         cq,
         caption=cap,
         reply_markup=_admin_web_keyboard(),
+        settings=s,
+    )
+
+
+@router.callback_query(F.data == "admin:mass_convert_payg")
+async def cb_admin_mass_convert_payg(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    s = get_settings()
+    changed, rw_changed, total_credit = await admin_convert_monthly_subscriptions_to_payg_balance(
+        session,
+        settings=s,
+    )
+    await session.commit()
+    await cq.answer("Готово")
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "🔁 " + bold("Конвертация legacy → PAYG"),
+            "",
+            plain("Обновлено пользователей: ") + bold(str(changed)),
+            plain("Синхронизировано в панели: ") + bold(str(rw_changed)),
+            plain("Начислено в баланс: ") + bold(str(total_credit)) + plain(" ₽"),
+        ),
+        reply_markup=_admin_analytics_section_keyboard(),
         settings=s,
     )
 
@@ -1317,6 +1365,47 @@ async def cb_admin_add_balance_start(
         )
     else:
         await state.update_data(admin_add_balance_user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:rb:"))
+async def cb_admin_reset_balance(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    u = await session.get(User, uid)
+    if u is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    before = u.balance
+    u.balance = Decimal("0")
+    session.add(
+        Transaction(
+            user_id=u.id,
+            type="admin_balance_reset",
+            amount=Decimal("0"),
+            currency="RUB",
+            payment_provider="admin",
+            payment_id=None,
+            status="completed",
+            description=f"Админ обнулил баланс: {before} ₽ -> 0 ₽ (admin #{db_user.id})",
+            meta={"admin_id": db_user.id, "balance_before": str(before), "balance_after": "0"},
+        )
+    )
+    await session.commit()
+    await cq.answer("Баланс обнулён")
+    await _render_user_card(cq, session, user_id=uid)
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_add_balance), F.text)

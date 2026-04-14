@@ -14,6 +14,7 @@ from shared.config import Settings
 from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
+from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.transaction import Transaction
 from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.remnawave_description import build_remnawave_panel_description
@@ -38,12 +39,8 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
         logger.warning("autorenew: нет активного плана «Базовый»")
         return 0
 
-    price = base_plan.price_rub
-    if price <= 0:
-        return 0
-
     now = datetime.now(timezone.utc)
-    window = timedelta(seconds=max(60, int(settings.subscription_autorenew_window_sec)))
+    window = timedelta(days=30)
     horizon = now + window
 
     stmt = (
@@ -62,10 +59,6 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
 
     rw = RemnaWaveClient(settings)
 
-    traffic_bytes = 0
-    if base_plan.traffic_limit_gb is not None and base_plan.traffic_limit_gb > 0:
-        traffic_bytes = int(base_plan.traffic_limit_gb) * (1024**3)
-
     renewed = 0
     for sub in candidates:
         user = sub.user
@@ -74,20 +67,47 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
         # повторная проверка окна после блокировки
         if not (sub.expires_at > now and sub.expires_at <= horizon):
             continue
-        if user.balance < price:
+        if user.billing_mode != "hybrid":
+            continue
+        if user.balance < 0:
             logger.info(
-                "autorenew: skip user=%s sub=%s balance=%s need=%s",
+                "autorenew: skip user=%s sub=%s balance=%s",
                 user.id,
                 sub.id,
                 user.balance,
-                price,
             )
+            continue
+        usage_since = now - timedelta(days=14)
+        has_device = (
+            await session.execute(
+                select(BillingUsageEvent.id)
+                .where(
+                    BillingUsageEvent.user_id == user.id,
+                    BillingUsageEvent.event_type == "device_daily",
+                    BillingUsageEvent.event_ts >= usage_since,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        has_gb = (
+            await session.execute(
+                select(BillingUsageEvent.id)
+                .where(
+                    BillingUsageEvent.user_id == user.id,
+                    BillingUsageEvent.event_type == "traffic_gb_step",
+                    BillingUsageEvent.event_ts >= usage_since,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if has_device is None or has_gb is None:
             continue
         if user.remnawave_uuid is None:
             logger.warning("autorenew: skip user=%s no remnawave_uuid", user.id)
             continue
 
-        new_expires = sub.expires_at + timedelta(days=int(base_plan.duration_days))
+        payg_days = int(settings.billing_payg_subscription_days)
+        new_expires = sub.expires_at + timedelta(days=payg_days)
         desc = build_remnawave_panel_description(user)
         squads = remnawave_squads_for_db_user(settings, user)
         try:
@@ -96,7 +116,7 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
                 str(user.remnawave_uuid),
                 devices_limit_for_panel=sub.devices_count,
                 expire_at=new_expires,
-                traffic_limit_bytes=traffic_bytes,
+                traffic_limit_bytes=0,
                 status="ACTIVE",
                 description=desc,
                 active_internal_squads=squads,
@@ -105,22 +125,23 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
             logger.warning("autorenew: RW failed user=%s: %s", user.id, e)
             continue
 
-        user.balance -= price
         sub.expires_at = new_expires
         sub.plan_id = base_plan.id
         session.add(
             Transaction(
                 user_id=user.id,
                 type="subscription_autorenew",
-                amount=price,
+                amount=0,
                 currency="RUB",
-                payment_provider="balance",
+                payment_provider="system",
                 payment_id=None,
                 status="completed",
-                description=f"Автопродление «{base_plan.name}» (+{base_plan.duration_days} дн.)",
+                description=f"Автопродление PAYG-подписки на {payg_days} дней",
                 meta={
                     "plan_id": base_plan.id,
                     "subscription_id": sub.id,
+                    "renewal_days": payg_days,
+                    "charged_rub": "0",
                 },
             )
         )
