@@ -15,6 +15,7 @@ from shared.models.user import User
 from shared.services.billing_v2.billing_calendar import billing_package_month_utc_bounds, billing_zoneinfo
 from shared.services.billing_v2.device_service import list_active_device_hwids
 from shared.services.billing_v2.ledger_service import apply_debit
+from shared.services.subscription_service import get_active_subscription_at
 
 
 def is_gb_step_covered_by_package(*, used_steps_in_month: int, monthly_gb_limit: int | None) -> bool:
@@ -195,6 +196,20 @@ async def charge_daily_device_once(
         return True
 
     ev_ts = eval_at or datetime.now(timezone.utc)
+    if await get_active_subscription_at(session, user.id, ev_ts) is None:
+        session.add(
+            BillingUsageEvent(
+                user_id=user.id,
+                event_id=event_id,
+                event_type="device_daily",
+                event_ts=ev_ts,
+                device_hwid=device_hwid,
+                is_mobile_internet=False,
+                meta={"skipped": True, "reason": "no_active_subscription"},
+            )
+        )
+        return True
+
     plan = await _active_package_plan(session, user_id=user.id, now=ev_ts)
     package_covered = False
     if plan is not None and plan.device_limit is not None and plan.device_limit > 0:

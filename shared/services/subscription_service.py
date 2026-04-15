@@ -101,20 +101,26 @@ async def list_paid_plans(session: AsyncSession) -> list[Plan]:
     return list(r.scalars().all())
 
 
-async def get_active_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
-    now = datetime.now(timezone.utc)
+async def get_active_subscription_at(
+    session: AsyncSession, user_id: int, at: datetime
+) -> Subscription | None:
+    """Подписка со статусом active/trial, действующая строго после момента `at`."""
     r = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
         .where(
             Subscription.user_id == user_id,
             Subscription.status.in_(("active", "trial")),
-            Subscription.expires_at > now,
+            Subscription.expires_at > at,
         )
         .order_by(Subscription.expires_at.desc())
         .limit(1)
     )
     return r.scalar_one_or_none()
+
+
+async def get_active_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
+    return await get_active_subscription_at(session, user_id, datetime.now(timezone.utc))
 
 
 async def count_devices(session: AsyncSession, subscription_id: int) -> int:

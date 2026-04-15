@@ -140,6 +140,45 @@ class RatingDeviceDailyIntegrationTests(IsolatedAsyncioTestCase):
             self.assertIsNone(row)
             await session.commit()
 
+    async def test_device_daily_no_charge_when_subscription_expired(self) -> None:
+        settings = _settings()
+        day = date(2026, 4, 12)
+        eval_at = datetime(2026, 4, 12, 12, 0, 0, tzinfo=timezone.utc)
+        async with self.factory() as session:
+            u = await self._mk_hybrid(session, balance=Decimal("100"))
+            p = await self._mk_plan_no_device_package(session)
+            now = datetime.now(timezone.utc)
+            session.add(
+                Subscription(
+                    user_id=u.id,
+                    plan_id=p.id,
+                    status="active",
+                    expires_at=now - timedelta(days=1),
+                )
+            )
+            await session.flush()
+            bal0 = u.balance
+            ok = await charge_daily_device_once(
+                session,
+                user=u,
+                device_hwid="hw-exp",
+                day=day,
+                settings=settings,
+                eval_at=eval_at,
+            )
+            self.assertTrue(ok)
+            self.assertEqual(u.balance, bal0)
+            row = (
+                await session.execute(
+                    select(BillingUsageEvent).where(
+                        BillingUsageEvent.event_id == f"device_daily:{u.id}:hw-exp:{day.isoformat()}"
+                    )
+                )
+            ).scalar_one_or_none()
+            self.assertIsNotNone(row)
+            self.assertEqual(row.meta.get("reason"), "no_active_subscription")
+            await session.commit()
+
 
 if __name__ == "__main__":
     import unittest
