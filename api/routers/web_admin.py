@@ -1619,7 +1619,9 @@ async def admin_login_telegram_widget(
             if id_token:
                 claims = _jwt_payload_unverified(id_token)
                 try:
-                    tid = int(claims.get("sub") or 0)
+                    # Telegram OIDC may expose numeric user id in `id`,
+                    # while `sub` can be a non-telegram internal subject string.
+                    tid = int(claims.get("id") or claims.get("sub") or 0)
                 except (TypeError, ValueError):
                     tid = 0
                 tg_username = str(claims.get("preferred_username") or "").strip()
