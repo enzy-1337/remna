@@ -4251,9 +4251,33 @@ async def admin_profile(request: Request) -> HTMLResponse:
             "Открыть панель Remnawave</a></p>"
         )
 
-    ties = "\n".join(parts)
-
     linked = await _linked_bot_user_for_admin(request)
+    ties = "\n".join(parts)
+    auth_link_button = ""
+    if kind == "telegram":
+        auth_link_button = (
+            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login/github/start?mode=link">'
+            '<i class="fa-brands fa-github" aria-hidden="true"></i>Привязать GitHub</a>'
+        )
+    elif kind == "github":
+        auth_link_button = (
+            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
+            '<i class="fa-brands fa-telegram" aria-hidden="true"></i>Привязать Telegram</a>'
+        )
+    else:
+        auth_link_button = (
+            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
+            '<i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub</a>'
+        )
+    unlink_github_button = ""
+    if linked is not None and (linked.github_username or "").strip():
+        unlink_github_button = """
+          <form method="post" action="/admin/profile/github/unlink" onsubmit="return confirm('Отвязать GitHub от этого Telegram-профиля?');">
+            <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9 gap-1.5">
+              <i class="fa-brands fa-github" aria-hidden="true"></i>Отвязать GitHub
+            </button>
+          </form>
+        """
     profile_notice = ""
     ncode = (request.query_params.get("n") or "").strip()
     err = (request.query_params.get("err") or "").strip()
@@ -4263,6 +4287,8 @@ async def admin_profile(request: Request) -> HTMLResponse:
         profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub успешно привязан к вашему Telegram-профилю.</span></div>"
     elif ncode == "linked_tg":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram успешно привязан. Теперь профиль работает с приоритетом Telegram ID.</span></div>"
+    elif ncode == "gh_unlinked":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub отвязан от профиля.</span></div>"
     elif ncode == "2fa_setup":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>Секрет 2FA создан. Отсканируйте QR и подтвердите код.</span></div>"
     elif ncode == "2fa_on":
@@ -4453,15 +4479,8 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
         <div class="flex flex-wrap gap-2 pt-1">
-          <a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">
-            <i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub
-          </a>
-          <a class="btn btn-ghost btn-sm h-9 min-h-9 gap-1.5" href="/admin/login/github/start?mode=link">
-            <i class="fa-brands fa-github" aria-hidden="true"></i>Привязать GitHub к Telegram
-          </a>
-          <a class="btn btn-ghost btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">
-            <i class="fa-brands fa-telegram" aria-hidden="true"></i>Привязать Telegram к GitHub
-          </a>
+          {auth_link_button}
+          {unlink_github_button}
         </div>
         <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
@@ -4614,6 +4633,36 @@ async def admin_profile_2fa_disable(request: Request, code: str = Form("")) -> R
     request.session.pop("admin_2fa_setup_secret", None)
     request.session.pop("admin_2fa_setup_user_id", None)
     return RedirectResponse("/admin/profile?n=2fa_off", status_code=303)
+
+
+@router.post("/profile/github/unlink")
+async def admin_profile_github_unlink(request: Request) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
+            status_code=303,
+        )
+    async with await _session() as session:
+        user = await session.get(User, linked.id)
+        if user is None:
+            return RedirectResponse(
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
+                status_code=303,
+            )
+        user.github_id = None
+        user.github_username = None
+        user.github_profile_url = None
+        await session.commit()
+    wauth = _auth_data(request)
+    if isinstance(wauth, dict):
+        wauth.pop("github_login", None)
+        wauth.pop("github_avatar_url", None)
+        request.session["wauth"] = wauth
+    return RedirectResponse("/admin/profile?n=gh_unlinked", status_code=303)
 
 
 @router.get("/settings")
