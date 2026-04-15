@@ -1437,21 +1437,24 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if _is_logged(request) and not link_mode:
         return RedirectResponse("/admin/dashboard", status_code=303)
-    tg_href = "/admin/login/telegram/start"
+    bot_username = (get_settings().bot_username or "").strip()
+    telegram_block = "<p class='text-sm opacity-60'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
+    base = (get_settings().public_site_url or "").strip().rstrip("/")
+    auth_url = "/admin/login/telegram/widget"
     if link_mode:
-        tg_href += "?link=1"
-    telegram_block = (
-        f'<a class="btn btn-info gap-2" href="{_esc(tg_href)}">'
-        '<i class="fa-brands fa-telegram text-lg" aria-hidden="true"></i>'
-        + ("Привязать Telegram" if link_mode else "Войти через Telegram")
-        + "</a>"
-    )
+        auth_url += "?link=1"
+    if base:
+        auth_url = f"{base}{auth_url}"
+    if bot_username:
+        telegram_block = f"""
+      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
+"""
     login_notice = ""
     err = (request.query_params.get("err") or "").strip()
     if err == "telegram_login_config":
         login_notice = (
             "<div class='alert alert-warning text-sm'>"
-            "<span>Для Telegram-логина задайте корректный PUBLIC_SITE_URL (https://...) и BOT_TOKEN.</span>"
+            "<span>Для Telegram-логина задайте корректный PUBLIC_SITE_URL (https://...) и BOT_USERNAME.</span>"
             "</div>"
         )
     github_href = "/admin/login/github/start"
@@ -1481,30 +1484,11 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
 
 @router.get("/login/telegram/start")
 async def admin_login_telegram_start(request: Request, link: str = "") -> RedirectResponse:
-    settings = get_settings()
-    bot_id = _telegram_bot_id_from_token(settings.bot_token)
-    oauth_client_id = (settings.web_admin_telegram_client_id or "").strip()
-    base = (settings.public_site_url or "").strip().rstrip("/")
-    if not base.startswith(("http://", "https://")):
-        return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
-    callback = (settings.web_admin_telegram_redirect_uri or "").strip() or f"{base}/admin/login/telegram/widget"
-    if oauth_client_id:
-        bot_id = int(oauth_client_id) if oauth_client_id.isdigit() else None
-    if bot_id is None:
-        return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
-    # Redirect flow without embedded widget: opens Telegram auth page.
-    state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
-    request.session["tg_oauth_state"] = state
-    request.session["tg_oauth_mode"] = "link" if (link or "").strip().lower() in {"1", "true", "yes", "bind"} else "login"
-    oauth_url = (
-        "https://oauth.telegram.org/auth"
-        f"?bot_id={bot_id}"
-        f"&origin={quote_plus(base)}"
-        f"&return_to={quote_plus(callback)}"
-        f"&state={quote_plus(state)}"
-        "&request_access=write"
-    )
-    return RedirectResponse(oauth_url, status_code=303)
+    # oauth.telegram.org/auth returns deprecated for many bots.
+    # Keep this route for backward compatibility and redirect to widget-based login page.
+    if (link or "").strip().lower() in {"1", "true", "yes", "bind"}:
+        return RedirectResponse("/admin/login?link=1", status_code=303)
+    return RedirectResponse("/admin/login", status_code=303)
 
 
 @router.get("/login/2fa")
