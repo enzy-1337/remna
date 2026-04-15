@@ -40,7 +40,7 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "PUBLIC_SITE_URL",
                 "Публичный URL",
                 lambda s: s.public_site_url or "",
-                "HTTPS-origin без слэша в конце — тот же домен, что в nginx для API. Нужен для Telegram Login Widget и абсолютных ссылок; в BotFather /setdomain — тот же хост.",
+                "HTTPS-origin без слэша в конце — тот же домен, что в nginx для API. Нужен для Telegram OAuth/OpenID и абсолютных ссылок; в BotFather Web Login — тот же хост.",
             ),
             (
                 "BOT_USERNAME",

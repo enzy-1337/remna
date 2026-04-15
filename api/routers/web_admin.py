@@ -1408,16 +1408,6 @@ def _verify_telegram_login(payload: dict[str, str], bot_token: str) -> bool:
     return hmac.compare_digest(calc_hash, check_hash)
 
 
-def _telegram_bot_id_from_token(token: str) -> int | None:
-    tok = (token or "").strip()
-    if ":" not in tok:
-        return None
-    lead = tok.split(":", 1)[0].strip()
-    if not lead.isdigit():
-        return None
-    return int(lead)
-
-
 def _jwt_payload_unverified(token: str) -> dict:
     parts = (token or "").split(".")
     if len(parts) < 2:
@@ -1437,24 +1427,21 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if _is_logged(request) and not link_mode:
         return RedirectResponse("/admin/dashboard", status_code=303)
-    bot_username = (get_settings().bot_username or "").strip()
-    telegram_block = "<p class='text-sm opacity-60'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
-    base = (get_settings().public_site_url or "").strip().rstrip("/")
-    auth_url = "/admin/login/telegram/widget"
+    tg_href = "/admin/login/telegram/start"
     if link_mode:
-        auth_url += "?link=1"
-    if base:
-        auth_url = f"{base}{auth_url}"
-    if bot_username:
-        telegram_block = f"""
-      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
-"""
+        tg_href += "?link=1"
+    telegram_block = (
+        f'<a class="btn btn-info gap-2" href="{_esc(tg_href)}">'
+        '<i class="fa-brands fa-telegram text-lg" aria-hidden="true"></i>'
+        + ("Привязать Telegram" if link_mode else "Войти через Telegram")
+        + "</a>"
+    )
     login_notice = ""
     err = (request.query_params.get("err") or "").strip()
     if err == "telegram_login_config":
         login_notice = (
             "<div class='alert alert-warning text-sm'>"
-            "<span>Для Telegram-логина задайте корректный PUBLIC_SITE_URL (https://...) и BOT_USERNAME.</span>"
+            "<span>Для Telegram OAuth задайте PUBLIC_SITE_URL, WEB_ADMIN_TELEGRAM_CLIENT_ID, WEB_ADMIN_TELEGRAM_CLIENT_SECRET и WEB_ADMIN_TELEGRAM_REDIRECT_URI.</span>"
             "</div>"
         )
     github_href = "/admin/login/github/start"
@@ -1484,11 +1471,26 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
 
 @router.get("/login/telegram/start")
 async def admin_login_telegram_start(request: Request, link: str = "") -> RedirectResponse:
-    # oauth.telegram.org/auth returns deprecated for many bots.
-    # Keep this route for backward compatibility and redirect to widget-based login page.
-    if (link or "").strip().lower() in {"1", "true", "yes", "bind"}:
-        return RedirectResponse("/admin/login?link=1", status_code=303)
-    return RedirectResponse("/admin/login", status_code=303)
+    settings = get_settings()
+    client_id = (settings.web_admin_telegram_client_id or "").strip()
+    client_secret = (settings.web_admin_telegram_client_secret or "").strip()
+    redirect_uri = (settings.web_admin_telegram_redirect_uri or "").strip()
+    if not client_id or not client_secret or not redirect_uri:
+        return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
+    state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    mode = "link" if (link or "").strip().lower() in {"1", "true", "yes", "bind"} else "login"
+    request.session["tg_oauth_state"] = state
+    request.session["tg_oauth_mode"] = mode
+    # New Telegram OIDC endpoint (oauth.tg.dev).
+    url = (
+        "https://oauth.tg.dev/auth"
+        f"?client_id={quote_plus(client_id)}"
+        f"&redirect_uri={quote_plus(redirect_uri)}"
+        "&response_type=code"
+        "&scope=openid%20profile"
+        f"&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
 
 
 @router.get("/login/2fa")
@@ -1582,19 +1584,30 @@ async def admin_login_telegram_widget(
             return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                t_resp = await client.post(
-                    "https://oauth.telegram.org/token",
-                    headers={"Accept": "application/json"},
-                    data={
-                        "grant_type": "authorization_code",
-                        "code": code.strip(),
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "redirect_uri": redirect_uri,
-                    },
-                )
-                t_resp.raise_for_status()
-                t_data = t_resp.json()
+                t_data: dict | None = None
+                last_err: Exception | None = None
+                for token_url in ("https://oauth.tg.dev/token", "https://oauth.telegram.org/token"):
+                    try:
+                        t_resp = await client.post(
+                            token_url,
+                            headers={"Accept": "application/json"},
+                            data={
+                                "grant_type": "authorization_code",
+                                "code": code.strip(),
+                                "client_id": client_id,
+                                "client_secret": client_secret,
+                                "redirect_uri": redirect_uri,
+                            },
+                        )
+                        t_resp.raise_for_status()
+                        payload = t_resp.json()
+                        if isinstance(payload, dict):
+                            t_data = payload
+                            break
+                    except Exception as e:
+                        last_err = e
+                if t_data is None:
+                    raise RuntimeError("telegram token exchange failed") from last_err
         except Exception:
             return RedirectResponse("/admin/login", status_code=303)
         tid = 0
