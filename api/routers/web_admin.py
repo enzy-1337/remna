@@ -1408,21 +1408,38 @@ def _verify_telegram_login(payload: dict[str, str], bot_token: str) -> bool:
     return hmac.compare_digest(calc_hash, check_hash)
 
 
+def _telegram_bot_id_from_token(token: str) -> int | None:
+    tok = (token or "").strip()
+    if ":" not in tok:
+        return None
+    lead = tok.split(":", 1)[0].strip()
+    if not lead.isdigit():
+        return None
+    return int(lead)
+
+
 @router.get("/login")
 async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if _is_logged(request) and not link_mode:
         return RedirectResponse("/admin/dashboard", status_code=303)
-    bot_username = (get_settings().bot_username or "").strip()
-    telegram_block = "<p class='text-sm opacity-60'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
-    base = (get_settings().public_site_url or "").strip().rstrip("/")
-    auth_url = "/admin/login/telegram/widget"
-    if base:
-        auth_url = f"{base}/admin/login/telegram/widget"
-    if bot_username:
-        telegram_block = f"""
-      <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
-"""
+    tg_href = "/admin/login/telegram/start"
+    if link_mode:
+        tg_href += "?link=1"
+    telegram_block = (
+        f'<a class="btn btn-info gap-2" href="{_esc(tg_href)}">'
+        '<i class="fa-brands fa-telegram text-lg" aria-hidden="true"></i>'
+        + ("Привязать Telegram" if link_mode else "Войти через Telegram")
+        + "</a>"
+    )
+    login_notice = ""
+    err = (request.query_params.get("err") or "").strip()
+    if err == "telegram_login_config":
+        login_notice = (
+            "<div class='alert alert-warning text-sm'>"
+            "<span>Для Telegram-логина задайте корректный PUBLIC_SITE_URL (https://...) и BOT_TOKEN.</span>"
+            "</div>"
+        )
     github_href = "/admin/login/github/start"
     if link_mode:
         github_href += "?mode=link"
@@ -1435,6 +1452,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         </h2>
         <div class="flex w-full flex-col items-center gap-4">
           {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
+          {login_notice}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
           <a class="btn btn-primary gap-2" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
@@ -1445,6 +1463,27 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     </div>
     """
     return _layout("Вход", body, request=request, show_nav=False)
+
+
+@router.get("/login/telegram/start")
+async def admin_login_telegram_start(request: Request, link: str = "") -> RedirectResponse:
+    settings = get_settings()
+    bot_id = _telegram_bot_id_from_token(settings.bot_token)
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if bot_id is None or not base.startswith(("http://", "https://")):
+        return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
+    callback = f"{base}/admin/login/telegram/widget"
+    # Redirect flow without embedded widget: opens Telegram auth page.
+    oauth_url = (
+        "https://oauth.telegram.org/auth"
+        f"?bot_id={bot_id}"
+        f"&origin={quote_plus(base)}"
+        f"&return_to={quote_plus(callback)}"
+        "&request_access=write"
+    )
+    if (link or "").strip().lower() in {"1", "true", "yes", "bind"}:
+        oauth_url += "&state=link"
+    return RedirectResponse(oauth_url, status_code=303)
 
 
 @router.get("/login/2fa")
@@ -4253,31 +4292,20 @@ async def admin_profile(request: Request) -> HTMLResponse:
 
     linked = await _linked_bot_user_for_admin(request)
     ties = "\n".join(parts)
-    auth_link_button = ""
-    if kind == "telegram":
-        auth_link_button = (
-            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login/github/start?mode=link">'
-            '<i class="fa-brands fa-github" aria-hidden="true"></i>Привязать GitHub</a>'
-        )
-    elif kind == "github":
-        auth_link_button = (
-            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
-            '<i class="fa-brands fa-telegram" aria-hidden="true"></i>Привязать Telegram</a>'
-        )
-    else:
-        auth_link_button = (
-            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
-            '<i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub</a>'
-        )
-    unlink_github_button = ""
+    account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
-        unlink_github_button = """
-          <form method="post" action="/admin/profile/github/unlink" onsubmit="return confirm('Отвязать GitHub от этого Telegram-профиля?');">
+        account_link_button = """
+          <form method="post" action="/admin/profile/github/unlink" onsubmit="return confirm('Отменить связку Telegram и GitHub?');">
             <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9 gap-1.5">
-              <i class="fa-brands fa-github" aria-hidden="true"></i>Отвязать GitHub
+              <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отменить связку аккаунтов
             </button>
           </form>
         """
+    else:
+        account_link_button = (
+            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
+            '<i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub</a>'
+        )
     profile_notice = ""
     ncode = (request.query_params.get("n") or "").strip()
     err = (request.query_params.get("err") or "").strip()
@@ -4479,8 +4507,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
         <div class="flex flex-wrap gap-2 pt-1">
-          {auth_link_button}
-          {unlink_github_button}
+          {account_link_button}
         </div>
         <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
