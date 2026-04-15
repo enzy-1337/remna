@@ -1418,6 +1418,20 @@ def _telegram_bot_id_from_token(token: str) -> int | None:
     return int(lead)
 
 
+def _jwt_payload_unverified(token: str) -> dict:
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    payload_b64 = parts[1]
+    padding = "=" * ((4 - len(payload_b64) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((payload_b64 + padding).encode("ascii"))
+        obj = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
 @router.get("/login")
 async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
@@ -1469,20 +1483,27 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
 async def admin_login_telegram_start(request: Request, link: str = "") -> RedirectResponse:
     settings = get_settings()
     bot_id = _telegram_bot_id_from_token(settings.bot_token)
+    oauth_client_id = (settings.web_admin_telegram_client_id or "").strip()
     base = (settings.public_site_url or "").strip().rstrip("/")
-    if bot_id is None or not base.startswith(("http://", "https://")):
+    if not base.startswith(("http://", "https://")):
         return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
-    callback = f"{base}/admin/login/telegram/widget"
+    callback = (settings.web_admin_telegram_redirect_uri or "").strip() or f"{base}/admin/login/telegram/widget"
+    if oauth_client_id:
+        bot_id = int(oauth_client_id) if oauth_client_id.isdigit() else None
+    if bot_id is None:
+        return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
     # Redirect flow without embedded widget: opens Telegram auth page.
+    state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["tg_oauth_state"] = state
+    request.session["tg_oauth_mode"] = "link" if (link or "").strip().lower() in {"1", "true", "yes", "bind"} else "login"
     oauth_url = (
         "https://oauth.telegram.org/auth"
         f"?bot_id={bot_id}"
         f"&origin={quote_plus(base)}"
         f"&return_to={quote_plus(callback)}"
+        f"&state={quote_plus(state)}"
         "&request_access=write"
     )
-    if (link or "").strip().lower() in {"1", "true", "yes", "bind"}:
-        oauth_url += "&state=link"
     return RedirectResponse(oauth_url, status_code=303)
 
 
@@ -1554,6 +1575,8 @@ async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> Redi
 @router.get("/login/telegram/widget")
 async def admin_login_telegram_widget(
     request: Request,
+    code: str = "",
+    state: str = "",
     id: str = "",
     first_name: str = "",
     last_name: str = "",
@@ -1562,6 +1585,89 @@ async def admin_login_telegram_widget(
     auth_date: str = "",
     hash: str = "",
 ):
+    settings = get_settings()
+    # New Telegram OAuth/OpenID flow (authorization code).
+    if (code or "").strip():
+        if state != request.session.get("tg_oauth_state"):
+            return RedirectResponse("/admin/login", status_code=303)
+        client_id = (settings.web_admin_telegram_client_id or "").strip()
+        client_secret = (settings.web_admin_telegram_client_secret or "").strip()
+        base = (settings.public_site_url or "").strip().rstrip("/")
+        redirect_uri = (settings.web_admin_telegram_redirect_uri or "").strip() or f"{base}/admin/login/telegram/widget"
+        if not client_id or not client_secret or not redirect_uri:
+            return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                t_resp = await client.post(
+                    "https://oauth.telegram.org/token",
+                    headers={"Accept": "application/json"},
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code.strip(),
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "redirect_uri": redirect_uri,
+                    },
+                )
+                t_resp.raise_for_status()
+                t_data = t_resp.json()
+        except Exception:
+            return RedirectResponse("/admin/login", status_code=303)
+        tid = 0
+        tg_username = ""
+        tg_label = ""
+        tg_photo = ""
+        if isinstance(t_data, dict):
+            id_token = str(t_data.get("id_token") or "").strip()
+            if id_token:
+                claims = _jwt_payload_unverified(id_token)
+                try:
+                    tid = int(claims.get("sub") or 0)
+                except (TypeError, ValueError):
+                    tid = 0
+                tg_username = str(claims.get("preferred_username") or "").strip()
+                tg_label = str(claims.get("name") or "").strip()
+                tg_photo = str(claims.get("picture") or "").strip()
+            if not tid:
+                uobj = t_data.get("user")
+                if isinstance(uobj, dict):
+                    try:
+                        tid = int(uobj.get("id") or 0)
+                    except (TypeError, ValueError):
+                        tid = 0
+                    tg_username = tg_username or str(uobj.get("username") or "").strip()
+                    tg_label = tg_label or str(uobj.get("first_name") or "").strip()
+                    tg_photo = tg_photo or str(uobj.get("photo_url") or "").strip()
+                else:
+                    try:
+                        tid = int(t_data.get("id") or 0)
+                    except (TypeError, ValueError):
+                        tid = 0
+                    tg_username = tg_username or str(t_data.get("username") or "").strip()
+                    tg_label = tg_label or str(t_data.get("first_name") or "").strip()
+                    tg_photo = tg_photo or str(t_data.get("photo_url") or "").strip()
+        request.session.pop("tg_oauth_state", None)
+        if not tid or not _admin_allowed_by_tg(tid):
+            return RedirectResponse("/admin/login", status_code=303)
+        current = _auth_data(request)
+        if str(current.get("kind") or "") == "github" and str(request.session.get("tg_oauth_mode") or "") == "link":
+            request.session.pop("tg_oauth_mode", None)
+            # Reuse existing merge/link flow by injecting payload-compatible auth.
+            id = str(tid)
+            first_name = tg_label
+            username = tg_username
+            photo_url = tg_photo
+        else:
+            request.session.pop("tg_oauth_mode", None)
+            _set_wauth_telegram(
+                request,
+                tid=tid,
+                label=tg_label or tg_username or f"tg:{tid}",
+                avatar_url=tg_photo,
+                username=tg_username,
+            )
+            return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
+
     payload = {
         "id": id.strip(),
         "first_name": first_name.strip(),
@@ -1573,7 +1679,7 @@ async def admin_login_telegram_widget(
     }
     if not payload["id"].isdigit():
         return RedirectResponse("/admin/login", status_code=303)
-    if not _verify_telegram_login(payload, get_settings().bot_token):
+    if not _verify_telegram_login(payload, settings.bot_token):
         return RedirectResponse("/admin/login", status_code=303)
     tid = int(payload["id"])
     if not _admin_allowed_by_tg(tid):

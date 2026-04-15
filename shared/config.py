@@ -444,11 +444,26 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_GITHUB_REDIRECT_URI",
         description="Полный callback URL GitHub OAuth (например https://admin.example.com/admin/login/github/callback)",
     )
+    web_admin_telegram_client_id: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_TELEGRAM_CLIENT_ID",
+        description="Telegram OAuth/OpenID Client ID для входа в web-admin (из BotFather Web Login).",
+    )
+    web_admin_telegram_client_secret: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_TELEGRAM_CLIENT_SECRET",
+        description="Telegram OAuth/OpenID Client Secret для входа в web-admin.",
+    )
+    web_admin_telegram_redirect_uri: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_TELEGRAM_REDIRECT_URI",
+        description="Callback URL Telegram OAuth/OpenID (например https://admin.example.com/admin/login/telegram/widget).",
+    )
     public_site_url: str | None = Field(
         default=None,
         validation_alias="PUBLIC_SITE_URL",
         description=(
-            "Публичный HTTPS-origin сайта (например https://admin.example.com) для Telegram Login Widget "
+            "Публичный HTTPS-origin сайта (например https://admin.example.com) для Telegram Login/OAuth "
             "и абсолютных ссылок; без слэша на конце"
         ),
     )

@@ -46,7 +46,25 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "BOT_USERNAME",
                 "Username бота",
                 lambda s: s.bot_username or "",
-                "Без @. Для виджета входа в web-admin и реферальных ссылок.",
+                "Без @. Для ссылок бота и fallback-режима входа.",
+            ),
+            (
+                "WEB_ADMIN_TELEGRAM_CLIENT_ID",
+                "Telegram OAuth Client ID",
+                lambda s: s.web_admin_telegram_client_id or "",
+                "Client ID из BotFather -> Web Login (новая OAuth/OpenID авторизация).",
+            ),
+            (
+                "WEB_ADMIN_TELEGRAM_CLIENT_SECRET",
+                "Telegram OAuth Client Secret",
+                lambda s: s.web_admin_telegram_client_secret or "",
+                "Client Secret из BotFather -> Web Login.",
+            ),
+            (
+                "WEB_ADMIN_TELEGRAM_REDIRECT_URI",
+                "Telegram OAuth Redirect URI",
+                lambda s: s.web_admin_telegram_redirect_uri or "",
+                "Полный callback URL Telegram OAuth, обычно https://<домен>/admin/login/telegram/widget",
             ),
             (
                 "SUPPORT_USERNAME",
