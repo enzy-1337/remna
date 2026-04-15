@@ -26,6 +26,8 @@ class User(Base):
     github_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True, nullable=True)
     github_username: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
     github_profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    web_admin_totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    web_admin_totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

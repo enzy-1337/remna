@@ -20,8 +20,10 @@ from urllib.parse import quote as url_quote
 from urllib.parse import quote_plus
 
 import httpx
+import pyotp
 import re
 import redis.asyncio as redis_async
+import segno
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
@@ -1143,6 +1145,67 @@ def _set_wauth_github(
     request.session["wauth"] = payload
 
 
+def _clear_pending_2fa(request: Request) -> None:
+    request.session.pop("wauth_pending", None)
+    request.session.pop("wauth_pending_user_id", None)
+    request.session.pop("wauth_pending_ts", None)
+
+
+def _totp_normalize_code(raw: str) -> str:
+    return "".join(ch for ch in (raw or "") if ch.isdigit())
+
+
+def _totp_qr_data_uri(*, secret: str, account_name: str) -> str:
+    uri = pyotp.TOTP(secret).provisioning_uri(name=account_name, issuer_name="Remna Web Admin")
+    return segno.make(uri).png_data_uri(scale=5)
+
+
+async def _resolve_2fa_user_from_auth(session: AsyncSession, auth: dict) -> User | None:
+    raw_tid = auth.get("telegram_id")
+    if raw_tid is None:
+        raw_tid = auth.get("id")
+    try:
+        tid = int(raw_tid) if raw_tid is not None else 0
+    except (TypeError, ValueError):
+        tid = 0
+    if tid:
+        return (
+            await session.execute(select(User).where(User.telegram_id == tid).limit(1))
+        ).scalar_one_or_none()
+    gh_login = str(auth.get("login") or auth.get("username") or "").strip()
+    if gh_login:
+        return (
+            await session.execute(
+                select(User).where(func.lower(User.github_username) == gh_login.lower()).limit(1)
+            )
+        ).scalar_one_or_none()
+    return None
+
+
+async def _finalize_login_with_2fa(
+    request: Request,
+    *,
+    success_redirect: str = "/admin/dashboard",
+) -> RedirectResponse:
+    auth = _auth_data(request)
+    if not auth:
+        return RedirectResponse("/admin/login", status_code=303)
+    async with await _session() as session:
+        user = await _resolve_2fa_user_from_auth(session, auth)
+    if (
+        user is not None
+        and bool(user.web_admin_totp_enabled)
+        and bool((user.web_admin_totp_secret or "").strip())
+    ):
+        request.session["wauth_pending"] = auth
+        request.session["wauth_pending_user_id"] = int(user.id)
+        request.session["wauth_pending_ts"] = int(time.time())
+        request.session.pop("wauth", None)
+        return RedirectResponse("/admin/login/2fa", status_code=303)
+    _clear_pending_2fa(request)
+    return RedirectResponse(success_redirect, status_code=303)
+
+
 def _promo_reward_caption(promo: PromoCode) -> str:
     v = promo.value
     if promo.type in ("balance_rub", "bonus_rub"):
@@ -1384,6 +1447,71 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     return _layout("Вход", body, request=request, show_nav=False)
 
 
+@router.get("/login/2fa")
+async def admin_login_2fa_page(request: Request, err: str = "") -> HTMLResponse:
+    pending = request.session.get("wauth_pending")
+    if not isinstance(pending, dict):
+        return RedirectResponse("/admin/login", status_code=303)
+    notice = ""
+    if (err or "").strip():
+        notice = "<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>"
+    body = f"""
+    <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
+      <div class="card-body items-center gap-4 text-center">
+        <h2 class="card-title justify-center text-2xl font-bold">
+          <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
+          <span>Подтвердите вход</span>
+        </h2>
+        <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
+        {notice}
+        <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
+          <input
+            type="text"
+            name="code"
+            inputmode="numeric"
+            pattern="[0-9 ]{{6,8}}"
+            maxlength="8"
+            autocomplete="one-time-code"
+            required
+            class="input input-bordered text-center text-lg tracking-[0.35em]"
+            placeholder="123456"
+          />
+          <button type="submit" class="btn btn-primary gap-2">
+            <i class="fa-solid fa-check" aria-hidden="true"></i>Подтвердить
+          </button>
+        </form>
+      </div>
+    </div>
+    """
+    return _layout("2FA", body, request=request, show_nav=False)
+
+
+@router.post("/login/2fa")
+async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> RedirectResponse:
+    pending = request.session.get("wauth_pending")
+    pending_uid = request.session.get("wauth_pending_user_id")
+    if not isinstance(pending, dict) or pending_uid is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    try:
+        uid = int(pending_uid)
+    except (TypeError, ValueError):
+        _clear_pending_2fa(request)
+        return RedirectResponse("/admin/login", status_code=303)
+    otp = _totp_normalize_code(code)
+    async with await _session() as session:
+        user = await session.get(User, uid)
+        secret = (user.web_admin_totp_secret or "").strip() if user is not None else ""
+        enabled = bool(user is not None and user.web_admin_totp_enabled)
+    if not secret or not enabled:
+        _clear_pending_2fa(request)
+        return RedirectResponse("/admin/login", status_code=303)
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        return RedirectResponse("/admin/login/2fa?err=1", status_code=303)
+    request.session["wauth"] = pending
+    _clear_pending_2fa(request)
+    return RedirectResponse("/admin/dashboard", status_code=303)
+
+
 @router.get("/login/telegram/widget")
 async def admin_login_telegram_widget(
     request: Request,
@@ -1475,7 +1603,7 @@ async def admin_login_telegram_widget(
         avatar_url=payload["photo_url"],
         username=payload["username"],
     )
-    return RedirectResponse("/admin/dashboard", status_code=303)
+    return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
 
 
 @router.get("/login/github/start")
@@ -1612,7 +1740,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
             github_login=login,
             github_avatar_url=gh_avatar,
         )
-        return RedirectResponse("/admin/dashboard", status_code=303)
+        return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
     _set_wauth_github(
         request,
         login=login,
@@ -1621,7 +1749,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
         telegram_id=int(linked_user.telegram_id) if linked_user is not None else None,
     )
     request.session["wauth"]["github_id"] = gh_id
-    return RedirectResponse("/admin/dashboard", status_code=303)
+    return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
 
 
 @router.post("/logout")
@@ -4135,6 +4263,12 @@ async def admin_profile(request: Request) -> HTMLResponse:
         profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub успешно привязан к вашему Telegram-профилю.</span></div>"
     elif ncode == "linked_tg":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram успешно привязан. Теперь профиль работает с приоритетом Telegram ID.</span></div>"
+    elif ncode == "2fa_setup":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Секрет 2FA создан. Отсканируйте QR и подтвердите код.</span></div>"
+    elif ncode == "2fa_on":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA включена для входа в web-admin.</span></div>"
+    elif ncode == "2fa_off":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA отключена.</span></div>"
     elif err:
         profile_notice = (
             "<div class='alert alert-error shadow-sm'><span>"
@@ -4153,6 +4287,13 @@ async def admin_profile(request: Request) -> HTMLResponse:
 
     vpn_block = ""
     profile_balance_block = ""
+    profile_2fa_block = ""
+    setup_secret = str(request.session.get("admin_2fa_setup_secret") or "").strip()
+    setup_uid_raw = request.session.get("admin_2fa_setup_user_id")
+    try:
+        setup_uid = int(setup_uid_raw) if setup_uid_raw is not None else 0
+    except (TypeError, ValueError):
+        setup_uid = 0
     if linked is not None:
         link_badges = ""
         if linked.github_username:
@@ -4187,6 +4328,61 @@ async def admin_profile(request: Request) -> HTMLResponse:
       <div class="card-body gap-2">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-warning mr-2" aria-hidden="true"></i>Баланс в боте</h3>
         <p class="text-sm opacity-80">Не найден связанный пользователь бота. Нажмите <b>/start</b> в боте и обновите страницу.</p>
+      </div>
+    </div>"""
+    if linked is not None:
+        enabled = bool(linked.web_admin_totp_enabled and (linked.web_admin_totp_secret or "").strip())
+        if setup_secret and setup_uid == linked.id and not enabled:
+            account = str(linked.username or linked.first_name or f"tg{linked.telegram_id}")
+            qr_data = _totp_qr_data_uri(secret=setup_secret, account_name=account)
+            profile_2fa_block = f"""
+    <div class="card bg-base-100 border border-info/30 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-info mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">1) Отсканируйте QR в Google Authenticator.<br/>2) Введите 6-значный код для подтверждения.</p>
+        <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/50 p-4">
+          <img src="{_esc(qr_data)}" alt="QR 2FA" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
+          <code class="text-xs opacity-70">{_esc(setup_secret)}</code>
+        </div>
+        <form method="post" action="/admin/profile/2fa/enable" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Код подтверждения</span>
+            <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{{6,8}}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
+          </label>
+          <button type="submit" class="btn btn-info btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-check" aria-hidden="true"></i>Включить 2FA
+          </button>
+        </form>
+      </div>
+    </div>"""
+        elif enabled:
+            profile_2fa_block = """
+    <div class="card bg-base-100 border border-success/30 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-success mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">2FA включена. При входе в web-admin нужно подтверждение кодом из Google Authenticator.</p>
+        <form method="post" action="/admin/profile/2fa/disable" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Код для отключения</span>
+            <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{6,8}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
+          </label>
+          <button type="submit" class="btn btn-error btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-power-off" aria-hidden="true"></i>Отключить 2FA
+          </button>
+        </form>
+      </div>
+    </div>"""
+        else:
+            profile_2fa_block = """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-primary mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">Добавьте второй фактор через Google Authenticator для защиты входа в web-admin.</p>
+        <form method="post" action="/admin/profile/2fa/setup">
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-qrcode" aria-hidden="true"></i>Настроить 2FA
+          </button>
+        </form>
       </div>
     </div>"""
     if sub_url_p:
@@ -4270,6 +4466,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
     </div>
+    {profile_2fa_block}
     {profile_balance_block}
     {vpn_block}
     </div>
@@ -4323,6 +4520,100 @@ async def admin_profile_add_balance(request: Request, amount: str = Form(...)) -
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse("/admin/profile?n=bal_ok", status_code=303)
+
+
+@router.post("/profile/2fa/setup")
+async def admin_profile_2fa_setup(request: Request) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
+            status_code=303,
+        )
+    request.session["admin_2fa_setup_secret"] = pyotp.random_base32()
+    request.session["admin_2fa_setup_user_id"] = int(linked.id)
+    return RedirectResponse("/admin/profile?n=2fa_setup", status_code=303)
+
+
+@router.post("/profile/2fa/enable")
+async def admin_profile_2fa_enable(request: Request, code: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
+            status_code=303,
+        )
+    secret = str(request.session.get("admin_2fa_setup_secret") or "").strip()
+    setup_uid = request.session.get("admin_2fa_setup_user_id")
+    try:
+        setup_uid_i = int(setup_uid) if setup_uid is not None else 0
+    except (TypeError, ValueError):
+        setup_uid_i = 0
+    if not secret or setup_uid_i != linked.id:
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Сначала создайте QR для настройки 2FA."),
+            status_code=303,
+        )
+    otp = _totp_normalize_code(code)
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Неверный код подтверждения 2FA."),
+            status_code=303,
+        )
+    async with await _session() as session:
+        user = await session.get(User, linked.id)
+        if user is None:
+            return RedirectResponse(
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
+                status_code=303,
+            )
+        user.web_admin_totp_secret = secret
+        user.web_admin_totp_enabled = True
+        await session.commit()
+    request.session.pop("admin_2fa_setup_secret", None)
+    request.session.pop("admin_2fa_setup_user_id", None)
+    return RedirectResponse("/admin/profile?n=2fa_on", status_code=303)
+
+
+@router.post("/profile/2fa/disable")
+async def admin_profile_2fa_disable(request: Request, code: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
+            status_code=303,
+        )
+    secret = (linked.web_admin_totp_secret or "").strip()
+    if not linked.web_admin_totp_enabled or not secret:
+        return RedirectResponse("/admin/profile?n=2fa_off", status_code=303)
+    otp = _totp_normalize_code(code)
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        return RedirectResponse(
+            "/admin/profile?err=" + quote_plus("Неверный код для отключения 2FA."),
+            status_code=303,
+        )
+    async with await _session() as session:
+        user = await session.get(User, linked.id)
+        if user is None:
+            return RedirectResponse(
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
+                status_code=303,
+            )
+        user.web_admin_totp_enabled = False
+        user.web_admin_totp_secret = None
+        await session.commit()
+    request.session.pop("admin_2fa_setup_secret", None)
+    request.session.pop("admin_2fa_setup_user_id", None)
+    return RedirectResponse("/admin/profile?n=2fa_off", status_code=303)
 
 
 @router.get("/settings")
