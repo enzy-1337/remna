@@ -13,10 +13,12 @@ def profile_caption(db_user: User, tg_user: TgUser) -> str:
     display_name = tg_user.first_name or db_user.first_name or "—"
 
     # Блок с данными пользователя делаем цитатой (MarkdownV2): строки начинаются с `>`.
+    github_label = db_user.github_username or "не привязан"
     profile_quote = "\n".join(
         [
             "> " + (plain("📝 Имя: ") + bold(display_name)),
             "> " + (plain("🆔 ID: ") + code(str(tg_user.id))),
+            "> " + (plain("🐙 GitHub: ") + bold(github_label)),
             "> "
             + (
                 plain("💳 Баланс: ")

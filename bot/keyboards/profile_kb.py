@@ -29,6 +29,7 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"),
         InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:info"),
     )
+    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
     if is_admin:
         b.row(InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"))
     return b.as_markup()

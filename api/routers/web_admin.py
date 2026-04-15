@@ -695,8 +695,8 @@ def _layout(
     <div id="remna-hwid-json-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-json-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col p-6 relative">
         <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10" data-remna-close="hwidjson" aria-label="Закрыть">✕</button>
-        <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">Данные устройства (JSON)</h3>
-        <pre id="remna-hwid-json-pre" class="flex-1 overflow-auto rounded-lg border border-base-content/10 bg-base-300 p-3 text-[11px] leading-relaxed whitespace-pre-wrap font-mono"></pre>
+        <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">Карточка устройства</h3>
+        <div id="remna-hwid-json-card" class="flex-1 overflow-auto rounded-lg border border-base-content/10 bg-base-200 p-4"></div>
       </div>
     </div>"""
     elif not show_nav:
@@ -823,8 +823,67 @@ def _layout(
     function remnaCloseHwidJson(){
       var o=document.getElementById('remna-hwid-json-overlay');
       if(o){o.classList.add('hidden');o.classList.remove('flex');}
-      var p=document.getElementById('remna-hwid-json-pre');
-      if(p)p.textContent='';
+      var p=document.getElementById('remna-hwid-json-card');
+      if(p)p.innerHTML='';
+    }
+    function remnaEsc(v){
+      return String(v==null?'':v)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+    }
+    function remnaFmtIso(iso){
+      if(!iso)return '—';
+      try{
+        var dt=new Date(String(iso));
+        if(isNaN(dt.getTime()))return remnaEsc(iso);
+        return dt.toLocaleString('ru-RU',{
+          year:'numeric',month:'2-digit',day:'2-digit',
+          hour:'2-digit',minute:'2-digit',second:'2-digit',
+          timeZoneName:'short'
+        });
+      }catch(_e){
+        return remnaEsc(iso);
+      }
+    }
+    function remnaDeviceCardFromJson(txt){
+      var d=null;
+      try{ d=JSON.parse(txt||'{}'); }catch(_e){ d=null; }
+      if(!d||typeof d!=='object'){
+        return ''
+          + '<div class="alert alert-warning mb-3"><span>Не удалось разобрать данные устройства</span></div>'
+          + '<pre class="rounded-lg border border-base-content/10 bg-base-300 p-3 text-[11px] leading-relaxed whitespace-pre-wrap font-mono">'
+          + remnaEsc(txt||'')
+          + '</pre>';
+      }
+      var title=(d.deviceModel||d.platform||'Устройство');
+      var subtitle=((d.platform||'—') + ' · версия ОС: ' + (d.osVersion||'—'));
+      var rows=[
+        ['HWID', d.hwid || '—'],
+        ['UUID пользователя', d.userUuid || '—'],
+        ['Платформа', d.platform || '—'],
+        ['Версия ОС', d.osVersion || '—'],
+        ['Модель', d.deviceModel || '—'],
+        ['User-Agent', d.userAgent || '—'],
+        ['Создано', remnaFmtIso(d.createdAt)],
+        ['Обновлено', remnaFmtIso(d.updatedAt)]
+      ];
+      var grid=rows.map(function(it){
+        return ''
+          + '<div class="rounded-lg border border-base-content/10 bg-base-100 p-3">'
+          + '<div class="text-xs uppercase tracking-wide opacity-60">'+remnaEsc(it[0])+'</div>'
+          + '<div class="mt-1 break-all font-medium">'+remnaEsc(it[1])+'</div>'
+          + '</div>';
+      }).join('');
+      return ''
+        + '<div class="flex items-start justify-between gap-3 mb-4">'
+        + '<div><div class="text-lg font-semibold">'+remnaEsc(title)+'</div>'
+        + '<div class="text-sm opacity-70">'+remnaEsc(subtitle)+'</div></div>'
+        + '<span class="badge badge-outline badge-sm">'+remnaEsc(d.platform||'—')+'</span>'
+        + '</div>'
+        + '<div class="grid gap-3 sm:grid-cols-2">'+grid+'</div>';
     }
     window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();remnaCloseHwidJson();};
     document.addEventListener('click',function(e){
@@ -893,8 +952,8 @@ def _layout(
             txt=new TextDecoder('utf-8').decode(bytes);
           }
         }catch(x){txt='(ошибка декодирования)';}
-        var pre=document.getElementById('remna-hwid-json-pre');
-        if(pre)pre.textContent=txt;
+        var pre=document.getElementById('remna-hwid-json-card');
+        if(pre)pre.innerHTML=remnaDeviceCardFromJson(txt);
         var ovj=document.getElementById('remna-hwid-json-overlay');
         if(ovj){ovj.classList.remove('hidden');ovj.classList.add('flex');}
       }
@@ -1026,19 +1085,62 @@ async def _session() -> AsyncSession:
 
 
 async def _linked_bot_user_for_admin(request: Request) -> User | None:
-    """Пользователь бота по Telegram ID из сессии web-admin (если вход через Telegram)."""
+    """Пользователь бота по Telegram ID из сессии web-admin (приоритет Telegram)."""
     if not _is_logged(request):
         return None
     auth = _auth_data(request)
-    if str(auth.get("kind")) != "telegram":
-        return None
     try:
-        tid = int(auth.get("id"))
+        raw_tid = auth.get("telegram_id")
+        if raw_tid is None:
+            raw_tid = auth.get("id")
+        tid = int(raw_tid)
     except (TypeError, ValueError):
         return None
     async with await _session() as session:
         r = await session.execute(select(User).where(User.telegram_id == tid))
         return r.scalar_one_or_none()
+
+
+def _set_wauth_telegram(
+    request: Request,
+    *,
+    tid: int,
+    label: str,
+    avatar_url: str,
+    username: str = "",
+    github_login: str = "",
+    github_avatar_url: str = "",
+) -> None:
+    request.session["wauth"] = {
+        "kind": "telegram",
+        "id": tid,
+        "telegram_id": tid,
+        "label": label,
+        "avatar_url": avatar_url,
+        "username": username,
+        "github_login": github_login,
+        "github_avatar_url": github_avatar_url,
+    }
+
+
+def _set_wauth_github(
+    request: Request,
+    *,
+    login: str,
+    label: str,
+    avatar_url: str,
+    telegram_id: int | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "kind": "github",
+        "login": login,
+        "label": label,
+        "avatar_url": avatar_url,
+        "username": login,
+    }
+    if telegram_id is not None:
+        payload["telegram_id"] = telegram_id
+    request.session["wauth"] = payload
 
 
 def _promo_reward_caption(promo: PromoCode) -> str:
@@ -1244,8 +1346,9 @@ def _verify_telegram_login(payload: dict[str, str], bot_token: str) -> bool:
 
 
 @router.get("/login")
-async def admin_login_page(request: Request) -> HTMLResponse:
-    if _is_logged(request):
+async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
+    link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
+    if _is_logged(request) and not link_mode:
         return RedirectResponse("/admin/dashboard", status_code=303)
     bot_username = (get_settings().bot_username or "").strip()
     telegram_block = "<p class='text-sm opacity-60'>Для входа через Telegram задайте BOT_USERNAME в .env.</p>"
@@ -1257,18 +1360,22 @@ async def admin_login_page(request: Request) -> HTMLResponse:
         telegram_block = f"""
       <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{_esc(bot_username)}" data-size="large" data-radius="8" data-auth-url="{_esc(auth_url)}" data-request-access="write"></script>
 """
+    github_href = "/admin/login/github/start"
+    if link_mode:
+        github_href += "?mode=link"
     body = f"""
     <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
       <div class="card-body items-center gap-6 text-center">
         <h2 class="card-title justify-center text-2xl font-bold">
           <i class="fa-solid fa-right-to-bracket text-primary" aria-hidden="true"></i>
-          <span>Вход</span>
+          <span>{'Привязка аккаунта' if link_mode else 'Вход'}</span>
         </h2>
         <div class="flex w-full flex-col items-center gap-4">
+          {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
-          <a class="btn btn-primary gap-2" href="/admin/login/github/start">
+          <a class="btn btn-primary gap-2" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
-            Войти через GitHub
+            {"Привязать GitHub" if link_mode else "Войти через GitHub"}
           </a>
         </div>
       </div>
@@ -1305,23 +1412,80 @@ async def admin_login_telegram_widget(
     if not _admin_allowed_by_tg(tid):
         return RedirectResponse("/admin/login", status_code=303)
     label = payload["first_name"] or payload["username"] or f"tg:{tid}"
-    request.session["wauth"] = {
-        "kind": "telegram",
-        "id": tid,
-        "label": label,
-        "avatar_url": payload["photo_url"],
-        "username": payload["username"],
-    }
+    current = _auth_data(request)
+    if str(current.get("kind") or "") == "github":
+        gh_login = str(current.get("login") or current.get("username") or "").strip()
+        gh_avatar = str(current.get("avatar_url") or "").strip()
+        gh_id_raw = current.get("github_id")
+        try:
+            gh_id = int(gh_id_raw) if gh_id_raw is not None else None
+        except (TypeError, ValueError):
+            gh_id = None
+        linked_ok = False
+        if gh_login:
+            async with await _session() as session:
+                tg_user = (
+                    await session.execute(select(User).where(User.telegram_id == tid).limit(1))
+                ).scalar_one_or_none()
+                if tg_user is not None:
+                    conflict = (
+                        await session.execute(
+                            select(User.id)
+                            .where(
+                                User.id != tg_user.id,
+                                func.lower(User.github_username) == gh_login.lower(),
+                            )
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if conflict is not None:
+                        return RedirectResponse(
+                            "/admin/profile?err="
+                            + quote_plus("Этот GitHub уже привязан к другому Telegram-профилю."),
+                            status_code=303,
+                        )
+                    tg_user.github_id = gh_id
+                    tg_user.github_username = gh_login
+                    tg_user.github_profile_url = f"https://github.com/{gh_login}"
+                    await session.commit()
+                    linked_ok = True
+                else:
+                    return RedirectResponse(
+                        "/admin/profile?err="
+                        + quote_plus("Пользователь бота не найден. Сначала выполните /start в Telegram-боте."),
+                        status_code=303,
+                    )
+        _set_wauth_telegram(
+            request,
+            tid=tid,
+            label=label,
+            avatar_url=payload["photo_url"],
+            username=payload["username"],
+            github_login=gh_login,
+            github_avatar_url=gh_avatar,
+        )
+        return RedirectResponse(
+            "/admin/profile?n=linked_tg" if linked_ok else "/admin/profile",
+            status_code=303,
+        )
+    _set_wauth_telegram(
+        request,
+        tid=tid,
+        label=label,
+        avatar_url=payload["photo_url"],
+        username=payload["username"],
+    )
     return RedirectResponse("/admin/dashboard", status_code=303)
 
 
 @router.get("/login/github/start")
-async def admin_login_github_start(request: Request):
+async def admin_login_github_start(request: Request, mode: str = ""):
     settings = get_settings()
     if not settings.web_admin_github_client_id or not settings.web_admin_github_redirect_uri:
         return RedirectResponse("/admin/login", status_code=303)
     state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
     request.session["gh_oauth_state"] = state
+    request.session["gh_oauth_mode"] = "link" if (mode or "").strip().lower() == "link" else "login"
     url = (
         "https://github.com/login/oauth/authorize"
         f"?client_id={quote_plus(settings.web_admin_github_client_id)}"
@@ -1363,15 +1527,100 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
     except httpx.HTTPError:
         return RedirectResponse("/admin/login", status_code=303)
     login = str(me.get("login") or "").strip()
-    if not login or not _admin_allowed_by_gh(login):
+    if not login:
         return RedirectResponse("/admin/login", status_code=303)
-    request.session["wauth"] = {
-        "kind": "github",
-        "login": login,
-        "label": str(me.get("name") or login),
-        "avatar_url": str(me.get("avatar_url") or f"https://github.com/{login}.png"),
-        "username": login,
-    }
+    gh_avatar = str(me.get("avatar_url") or f"https://github.com/{login}.png")
+    gh_label = str(me.get("name") or login)
+    gh_id_raw = me.get("id")
+    try:
+        gh_id = int(gh_id_raw) if gh_id_raw is not None else None
+    except (TypeError, ValueError):
+        gh_id = None
+    oauth_mode = str(request.session.get("gh_oauth_mode") or "login")
+    request.session.pop("gh_oauth_mode", None)
+    request.session.pop("gh_oauth_state", None)
+
+    async with await _session() as session:
+        linked_user = (
+            await session.execute(
+                select(User)
+                .where(func.lower(User.github_username) == login.lower())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        linked_tg_allowed = bool(linked_user is not None and _admin_allowed_by_tg(int(linked_user.telegram_id)))
+
+        if oauth_mode == "link":
+            current = _auth_data(request)
+            try:
+                tg_id = int(current.get("telegram_id") or current.get("id"))
+            except (TypeError, ValueError):
+                tg_id = 0
+            if not tg_id or str(current.get("kind") or "") != "telegram":
+                return RedirectResponse(
+                    "/admin/profile?err="
+                    + quote_plus("Для привязки GitHub сначала войдите через Telegram."),
+                    status_code=303,
+                )
+            tg_user = (
+                await session.execute(select(User).where(User.telegram_id == tg_id).limit(1))
+            ).scalar_one_or_none()
+            if tg_user is None:
+                return RedirectResponse(
+                    "/admin/profile?err="
+                    + quote_plus("Пользователь бота не найден. Сначала выполните /start в Telegram-боте."),
+                    status_code=303,
+                )
+            conflict = (
+                await session.execute(
+                    select(User.id)
+                    .where(User.id != tg_user.id, func.lower(User.github_username) == login.lower())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if conflict is not None:
+                return RedirectResponse(
+                    "/admin/profile?err="
+                    + quote_plus("Этот GitHub уже привязан к другому Telegram-профилю."),
+                    status_code=303,
+                )
+            tg_user.github_id = gh_id
+            tg_user.github_username = login
+            tg_user.github_profile_url = f"https://github.com/{login}"
+            await session.commit()
+            _set_wauth_telegram(
+                request,
+                tid=tg_id,
+                label=str(current.get("label") or f"tg:{tg_id}"),
+                avatar_url=str(current.get("avatar_url") or ""),
+                username=str(current.get("username") or ""),
+                github_login=login,
+                github_avatar_url=gh_avatar,
+            )
+            return RedirectResponse("/admin/profile?n=linked_gh", status_code=303)
+
+    if not _admin_allowed_by_gh(login) and not linked_tg_allowed:
+        return RedirectResponse("/admin/login", status_code=303)
+    if linked_user is not None and _admin_allowed_by_tg(int(linked_user.telegram_id)):
+        tg_label = str(linked_user.first_name or linked_user.username or f"tg:{linked_user.telegram_id}")
+        _set_wauth_telegram(
+            request,
+            tid=int(linked_user.telegram_id),
+            label=tg_label,
+            avatar_url=gh_avatar,
+            username=str(linked_user.username or ""),
+            github_login=login,
+            github_avatar_url=gh_avatar,
+        )
+        return RedirectResponse("/admin/dashboard", status_code=303)
+    _set_wauth_github(
+        request,
+        login=login,
+        label=gh_label,
+        avatar_url=gh_avatar,
+        telegram_id=int(linked_user.telegram_id) if linked_user is not None else None,
+    )
+    request.session["wauth"]["github_id"] = gh_id
     return RedirectResponse("/admin/dashboard", status_code=303)
 
 
@@ -2716,6 +2965,7 @@ async def admin_users(
                     User.username.ilike(f"%{needle}%"),
                     User.first_name.ilike(f"%{needle}%"),
                     User.last_name.ilike(f"%{needle}%"),
+                    User.github_username.ilike(f"%{needle}%"),
                 )
                 query = query.where(search_filter)
                 count_query = count_query.where(search_filter)
@@ -2761,6 +3011,7 @@ async def admin_users(
         sub_lbl, sub_badge = _subscription_list_badge(now_utc, subs_by_user.get(u.id, []))
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
+        github_username = f"@{u.github_username}" if u.github_username else "-"
         av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
         risk_badge = "<span class='badge badge-ghost badge-xs'>—</span>"
         if u.risk_notified_1h_at is not None:
@@ -2771,7 +3022,7 @@ async def admin_users(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
-            f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
+            f"<td>{_esc(username)}</td><td>{_esc(github_username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td>"
             f"<td>{risk_badge}</td></tr>"
         )
@@ -2818,7 +3069,7 @@ async def admin_users(
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, username, имя'/>"
+        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram/GitHub username, имя'/>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
         f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
@@ -2827,8 +3078,8 @@ async def admin_users(
         f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Username</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>GitHub</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
         "<script>(function(){"
         "var form=document.getElementById('us-form'); if(!form)return;"
@@ -3090,6 +3341,8 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             first_name=user.first_name,
             last_name=user.last_name,
             username=user.username,
+            github_username=user.github_username,
+            github_profile_url=user.github_profile_url,
             telegram_id=user.telegram_id,
             balance=user.balance,
             referral_code=user.referral_code,
@@ -3443,9 +3696,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="grid gap-2 text-sm sm:grid-cols-2">
             <p>Имя: <b>{_esc((ud.first_name or '') + ' ' + (ud.last_name or ''))}</b></p>
             <p>Username: <b>{_esc(ud.username or '-')}</b></p>
+            <p>GitHub: <b>{_esc(ud.github_username or '-')}</b></p>
           </div>
           {_copy_line(label="ID в боте", value=str(ud.id))}
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
+          {_copy_line(label="GitHub URL", value=str(ud.github_profile_url) if ud.github_profile_url else "—")}
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <div class="flex flex-wrap items-end gap-2">
@@ -3844,6 +4099,13 @@ async def admin_profile(request: Request) -> HTMLResponse:
     elif kind == "github":
         login = str(auth.get("login") or auth.get("username") or "").strip()
         parts.append("<p class='text-base'>Вход через <b>GitHub</b>.</p>")
+        tg_from_session = auth.get("telegram_id")
+        if tg_from_session is not None:
+            parts.append(
+                "<p>Связанный Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>"
+                + _esc(str(tg_from_session))
+                + "</code> (приоритетный аккаунт)</p>"
+            )
         if login:
             allowed_gh = {x.casefold() for x in settings.web_admin_github_logins}
             in_list = "да" if login.casefold() in allowed_gh else "нет"
@@ -3869,6 +4131,10 @@ async def admin_profile(request: Request) -> HTMLResponse:
     err = (request.query_params.get("err") or "").strip()
     if ncode == "bal_ok":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>Баланс успешно пополнен.</span></div>"
+    elif ncode == "linked_gh":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub успешно привязан к вашему Telegram-профилю.</span></div>"
+    elif ncode == "linked_tg":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram успешно привязан. Теперь профиль работает с приоритетом Telegram ID.</span></div>"
     elif err:
         profile_notice = (
             "<div class='alert alert-error shadow-sm'><span>"
@@ -3888,10 +4154,20 @@ async def admin_profile(request: Request) -> HTMLResponse:
     vpn_block = ""
     profile_balance_block = ""
     if linked is not None:
+        link_badges = ""
+        if linked.github_username:
+            gh = _esc(linked.github_username)
+            link_badges = (
+                "<div class='flex flex-wrap items-center gap-2 text-xs'>"
+                "<span class='badge badge-success badge-sm'>Telegram связан</span>"
+                f"<span class='badge badge-outline badge-sm'>GitHub: @{gh}</span>"
+                "</div>"
+            )
         profile_balance_block = f"""
     <div class="card bg-base-100 border border-primary/25 shadow-lg">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-primary mr-2" aria-hidden="true"></i>Баланс в боте</h3>
+        {link_badges}
         <p class="text-sm opacity-75">Привязанный профиль: <b>#{linked.id}</b> · Telegram ID: <code class="bg-base-300 px-1 rounded text-xs">{linked.telegram_id}</code></p>
         <p class="text-base">Текущий баланс: <b class="text-primary text-xl">{_esc(linked.balance)} ₽</b></p>
         <form method="post" action="/admin/profile/add-balance" class="flex flex-wrap items-end gap-2">
@@ -3980,6 +4256,17 @@ async def admin_profile(request: Request) -> HTMLResponse:
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
+        <div class="flex flex-wrap gap-2 pt-1">
+          <a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">
+            <i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub
+          </a>
+          <a class="btn btn-ghost btn-sm h-9 min-h-9 gap-1.5" href="/admin/login/github/start?mode=link">
+            <i class="fa-brands fa-github" aria-hidden="true"></i>Привязать GitHub к Telegram
+          </a>
+          <a class="btn btn-ghost btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">
+            <i class="fa-brands fa-telegram" aria-hidden="true"></i>Привязать Telegram к GitHub
+          </a>
+        </div>
         <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
     </div>
