@@ -1808,9 +1808,9 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     if link_mode:
         tg_href += "?link=1"
     telegram_block = (
-        f'<a class="btn btn-info gap-2 login-auth-btn" href="{_esc(tg_href)}">'
+        f'<a class="btn gap-2 login-auth-btn login-auth-btn-telegram" href="{_esc(tg_href)}">'
         '<i class="fa-brands fa-telegram text-lg" aria-hidden="true"></i>'
-        + ("Привязать Telegram" if link_mode else "Войти через Telegram")
+        + ("Telegram" if link_mode else "Telegram")
         + "</a>"
     )
     login_notice = ""
@@ -1863,12 +1863,31 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         z-index: 1;
       }}
       .login-auth-btn {{
-        width: 13.5rem;
-        min-height: 3rem;
+        width: 11.75rem;
+        min-height: 2.65rem;
+        height: 2.65rem;
+        padding: 0 .95rem;
         justify-content: center;
         border-width: 0;
         box-shadow: var(--remna-anim-shadow);
         animation: remna-login-float 4.4s ease-in-out infinite;
+        font-size: .95rem;
+      }}
+      .login-auth-btn-telegram {{
+        background: #229ED9;
+        color: #fff;
+      }}
+      .login-auth-btn-telegram:hover {{
+        background: #1d8fc5;
+        color: #fff;
+      }}
+      .login-auth-btn-github {{
+        background: #181717;
+        color: #fff;
+      }}
+      .login-auth-btn-github:hover {{
+        background: #24292f;
+        color: #fff;
       }}
       .login-auth-btn:nth-of-type(2) {{
         animation-delay: .35s;
@@ -1907,9 +1926,9 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
           {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           {login_notice}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
-          <a class="btn btn-primary gap-2 login-auth-btn" href="{_esc(github_href)}">
+          <a class="btn gap-2 login-auth-btn login-auth-btn-github" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
-            {"Привязать GitHub" if link_mode else "Войти через GitHub"}
+            {"GitHub" if link_mode else "GitHub"}
           </a>
         </div>
       </div>
@@ -2525,7 +2544,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           }});
           b.addEventListener('contextmenu', function(e){{
             e.preventDefault();
-            var a=load(); a[n-1]=ta.value||''; save(a); alert('Шаблон '+n+' сохранён');
+            var a=load(); a[n-1]=ta.value||''; save(a); if(window.remnaToast)window.remnaToast('success','Шаблон '+n+' сохранён');
           }});
         }})(i);
       }}
@@ -3543,11 +3562,12 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             var vsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video';
             mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
           }}
+          var textHtml=(m.text&&String(m.text).trim())?('<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'):'';
           return ''
             +'<div class="flex w-full '+row+'">'
             +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+' tk-msg-enter">'
             +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
-            +'<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'
+            +textHtml
             +mediaHtml
             +'</div></div>';
         }}).join('');
@@ -3633,6 +3653,9 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         if(!r.ok) throw new Error('HTTP '+r.status);
         return await r.json();
       }}
+      function failToast(message){{
+        if(window.remnaToast) window.remnaToast('error', message||'Ошибка');
+      }}
       async function sendMedia(isInternal) {{
         var f=fileInput&&fileInput.files&&fileInput.files[0];
         if(!f) return;
@@ -3651,19 +3674,19 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       }}
       document.getElementById('tk-send-reply').addEventListener('click', async function(){{
         var v=(txt.value||'').trim(); if(!v) return;
-        try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{alert('Ошибка отправки ответа');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('Ошибка отправки ответа');}}
       }});
       document.getElementById('tk-send-note').addEventListener('click', async function(){{
         var v=(txt.value||'').trim(); if(!v) return;
-        try{{await sendJson('/api/tickets/'+ticketId+'/note','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{alert('Ошибка добавления заметки');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/note','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('Ошибка добавления заметки');}}
       }});
-      document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
-      document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{alert('Не удалось сменить статус');}}}});
-      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm("Закрыть тикет?"))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{alert("Не удалось закрыть тикет");}}}});
+      document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
+      document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
+      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm("Закрыть тикет?"))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{failToast("Не удалось закрыть тикет");}}}});
       document.getElementById('tk-assign-save').addEventListener('click', async function(){{
         var tg=assign.value||'';
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
-        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{alert('Не удалось сохранить назначение');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{failToast('Не удалось сохранить назначение');}}
       }});
       if(txt){{
         txt.addEventListener('input', autosizeText);
@@ -3681,7 +3704,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         attachBtn.addEventListener('click', function(){{ fileInput.click(); }});
         fileInput.addEventListener('change', async function(){{
           if(!fileInput.files||!fileInput.files.length) return;
-          try{{await sendMedia(false); await load();}}catch(e){{alert('Ошибка отправки файла');}}
+          try{{await sendMedia(false); await load();}}catch(e){{failToast('Ошибка отправки файла');}}
         }});
       }}
       var liveTimer=null;

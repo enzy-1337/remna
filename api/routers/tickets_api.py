@@ -540,7 +540,7 @@ async def api_ticket_reply_media(
             ).first()
             admin_uid = int(u[0]) if u else None
         now = datetime.now(timezone.utc)
-        media_text = txt or ("📷 [Фото]" if is_photo else "🎬 [Видео]")
+        media_text = txt
         label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
         photo_fid: str | None = None
         video_fid: str | None = None
@@ -563,7 +563,9 @@ async def api_ticket_reply_media(
                 video_fid = sent_user.video.file_id if sent_user.video else None
             topic_id = int(t["topic_id"] or 0)
             if topic_id:
-                topic_caption = f"<b>💬 Ответ администратора</b> — {label}\n\n<blockquote>{html.escape(media_text)}</blockquote>"
+                topic_caption = f"<b>💬 Ответ администратора</b> — {label}"
+                if media_text:
+                    topic_caption += f"\n\n<blockquote>{html.escape(media_text)}</blockquote>"
                 if photo_fid:
                     await bot.send_photo(
                         chat_id=tickets_config.support_group_id,

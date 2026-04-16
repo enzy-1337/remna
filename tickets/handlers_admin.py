@@ -247,13 +247,8 @@ async def msg_admin_reply(
     if (photo_fid or video_fid) and not _within_media_limit(media_size):
         await message.answer(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
-    if not txt:
-        if message.photo:
-            txt = "📷 [Фото]"
-        elif message.video:
-            txt = "🎬 [Видео]"
-        else:
-            return
+    if not txt and not (message.photo or message.video):
+        return
     t = await get_ticket_brief(session, ticket_id=ticket_id)
     if not t:
         await state.clear()
@@ -292,11 +287,10 @@ async def msg_admin_reply(
     except Exception:
         user_tg_id = 0
     if user_tg_id:
-        body = (
-            f"📨 Ответ от администратора | Тикет #{ticket_id}\n\n"
-            f"{html.escape(txt)}\n\n"
-            "С уважением, Flux Network"
-        )
+        body = f"📨 Ответ от администратора | Тикет #{ticket_id}"
+        if txt:
+            body += f"\n\n{html.escape(txt)}"
+        body += "\n\nС уважением, Flux Network"
         if photo_fid:
             await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)
         elif video_fid:
@@ -311,7 +305,9 @@ async def msg_admin_reply(
         topic_id = 0
     if topic_id:
         admin_name = (message.from_user.full_name or "Администратор").strip()
-        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}\n\n<blockquote>{html.escape(txt)}</blockquote>"
+        cap = f"<b>💬 Ответ администратора</b> — {html.escape(admin_name)}"
+        if txt:
+            cap += f"\n\n<blockquote>{html.escape(txt)}</blockquote>"
         if photo_fid:
             await message.bot.send_photo(
                 chat_id=config.support_group_id,
@@ -368,13 +364,8 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     if (photo_fid or video_fid) and not _within_media_limit(media_size):
         await message.reply(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
-    if not txt:
-        if photo_fid:
-            txt = "📷 [Фото]"
-        elif video_fid:
-            txt = "🎬 [Видео]"
-        else:
-            return
+    if not txt and not (photo_fid or video_fid):
+        return
     db_admin = await ensure_db_user(session, message.from_user)
     await assign_ticket_admin(
         session,
@@ -399,11 +390,10 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     except Exception:
         user_tg_id = 0
     if user_tg_id:
-        body = (
-            f"📨 Ответ от администратора | Тикет #{int(t['id'])}\n\n"
-            f"{html.escape(txt)}\n\n"
-            "С уважением, Flux Network"
-        )
+        body = f"📨 Ответ от администратора | Тикет #{int(t['id'])}"
+        if txt:
+            body += f"\n\n{html.escape(txt)}"
+        body += "\n\nС уважением, Flux Network"
         try:
             if photo_fid:
                 await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)

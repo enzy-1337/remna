@@ -418,19 +418,9 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     if message.from_user is None:
         return
     txt = (message.text or message.caption or "").strip()
-    if not txt:
-        if message.photo:
-            txt = "📷 [Фото без подписи]"
-        elif message.video:
-            txt = "🎬 [Видео без подписи]"
-        elif message.document:
-            txt = "📎 [Файл без подписи]"
-        elif message.voice:
-            txt = "🎤 [Голосовое сообщение]"
-        elif message.sticker:
-            txt = "🧩 [Стикер]"
-        else:
-            return
+    has_supported_media = bool(message.photo or message.video)
+    if not txt and not has_supported_media:
+        return
     if txt.startswith("/"):
         # Команды обрабатываются отдельными роутами.
         return
@@ -468,17 +458,12 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
 
     disp = (message.from_user.full_name or "Пользователь").strip()
     user_line = f"<a href=\"tg://user?id={int(message.from_user.id)}\">{disp}</a>"
-    settings = get_settings()
-    billing_html = await format_hybrid_billing_today_for_support_topic(
-        session, user=db_user, settings=settings
-    )
     topic_text = (
         f"<b>✉️ Новое сообщение в тикете #{active_id}</b>\n"
-        f"От: {user_line}\n\n"
-        f"<blockquote>{html.escape(txt)}</blockquote>"
+        f"От: {user_line}"
     )
-    if billing_html:
-        topic_text += "\n\n" + billing_html
+    if txt:
+        topic_text += f"\n\n<blockquote>{html.escape(txt)}</blockquote>"
 
     # В топик тикета.
     try:
@@ -522,14 +507,16 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
         deep = f"https://t.me/{un}?start=reply_{active_id}" if un else ""
         dm = (
             f"✉️ Пользователь написал в тикет #{active_id}\n"
-            f"От: {disp}\n\n"
-            f"{txt}"
-            + (f"\n\n<a href=\"{deep}\">Ответить</a>" if deep else "")
+            f"От: {disp}"
         )
+        if txt:
+            dm += f"\n\n{txt}"
+        if deep:
+            dm += f"\n\n<a href=\"{deep}\">Ответить</a>"
         if message.photo:
-            await message.bot.send_photo(chat_id=admin_tg, photo=message.photo[-1].file_id, caption=dm)
+            await message.bot.send_photo(chat_id=admin_tg, photo=message.photo[-1].file_id, caption=dm or None)
         elif message.video:
-            await message.bot.send_video(chat_id=admin_tg, video=message.video.file_id, caption=dm)
+            await message.bot.send_video(chat_id=admin_tg, video=message.video.file_id, caption=dm or None)
         else:
             await message.bot.send_message(chat_id=admin_tg, text=dm, disable_web_page_preview=True)
 
