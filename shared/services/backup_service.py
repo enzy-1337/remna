@@ -46,20 +46,36 @@ def _parse_pg_url(database_url: str) -> dict[str, str | int | None]:
     }
 
 
-async def run_daily_backup(settings: Settings) -> None:
+async def _pg_dump_version(pg_dump_exe: str) -> str:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            pg_dump_exe,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+        txt = (out_b or b"").decode("utf-8", errors="replace").strip()
+        return txt or "unknown"
+    except Exception:
+        return "unknown"
+
+
+async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[bool, str]:
     if not settings.backup_enabled:
-        return
+        return False, "Бэкап отключён (BACKUP_ENABLED=false)."
     try:
         params = _parse_pg_url(settings.database_url)
     except ValueError as e:
         logger.warning("backup: %s", e)
-        await notify_admin_plain(
-            settings,
-            text=f"💾 Бэкап: пропуск — {e}",
-            topic=AdminLogTopic.BACKUPS,
-            event_type="backup_skip",
-        )
-        return
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 Бэкап: пропуск — {e}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_skip",
+            )
+        return False, str(e)
 
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     fd, sql_path = tempfile.mkstemp(prefix=f"remna_pg_{ts}_", suffix=".sql")
@@ -98,28 +114,32 @@ async def run_daily_backup(settings: Settings) -> None:
         )
         _, err_b = await asyncio.wait_for(proc.communicate(), timeout=3600.0)
     except FileNotFoundError:
-        await notify_admin_plain(
-            settings,
-            text=(
-                "💾 Бэкап: не найден pg_dump "
-                f"({pg_dump_exe!r}; задайте BACKUP_PG_DUMP_BIN или установите клиент в PATH)."
-            ),
-            topic=AdminLogTopic.BACKUPS,
-            event_type="backup_error",
+        msg = (
+            "Не найден pg_dump "
+            f"({pg_dump_exe!r}; задайте BACKUP_PG_DUMP_BIN или установите клиент в PATH)."
         )
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 Бэкап: {msg}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_error",
+            )
         if sql_p.exists():
             sql_p.unlink(missing_ok=True)
-        return
+        return False, msg
     except asyncio.TimeoutError:
-        await notify_admin_plain(
-            settings,
-            text="💾 Бэкап: pg_dump превысил таймаут (1 ч).",
-            topic=AdminLogTopic.BACKUPS,
-            event_type="backup_error",
-        )
+        msg = "pg_dump превысил таймаут (1 ч)."
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 Бэкап: {msg}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_error",
+            )
         if sql_p.exists():
             sql_p.unlink(missing_ok=True)
-        return
+        return False, msg
     except Exception:
         logger.exception("backup: pg_dump failed")
         if sql_p.exists():
@@ -128,14 +148,24 @@ async def run_daily_backup(settings: Settings) -> None:
 
     if proc.returncode != 0:
         err = (err_b or b"").decode("utf-8", errors="replace")[:3500]
-        await notify_admin_plain(
-            settings,
-            text=f"💾 Бэкап: pg_dump завершился с кодом {proc.returncode}\n{err}",
-            topic=AdminLogTopic.BACKUPS,
-            event_type="backup_error",
-        )
+        extra = ""
+        if "server version mismatch" in err.lower():
+            cur = await _pg_dump_version(pg_dump_exe)
+            extra = (
+                "\n\nПодсказка: версии PostgreSQL сервера и pg_dump должны совпадать по major.\n"
+                f"Текущий pg_dump: {cur}\n"
+                "Укажите BACKUP_PG_DUMP_BIN на бинарник версии 16.x (для сервера 16.x)."
+            )
+        full = f"pg_dump завершился с кодом {proc.returncode}\n{err}{extra}"
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 Бэкап: {full}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_error",
+            )
         sql_p.unlink(missing_ok=True)
-        return
+        return False, full
 
     try:
         with sql_p.open("rb") as f_in:
@@ -151,17 +181,19 @@ async def run_daily_backup(settings: Settings) -> None:
 
     if size > max_bytes:
         gz_path.unlink(missing_ok=True)
-        await notify_admin_plain(
-            settings,
-            text=(
-                f"💾 Бэкап PostgreSQL создан, но файл слишком большой для Telegram "
-                f"({mb:.1f} МБ > {settings.backup_max_telegram_mb:.0f} МБ). "
-                "Настройте внешнее хранилище или cron с pg_dump на сервере."
-            ),
-            topic=AdminLogTopic.BACKUPS,
-            event_type="backup_too_large",
+        msg = (
+            f"Бэкап PostgreSQL создан, но файл слишком большой для Telegram "
+            f"({mb:.1f} МБ > {settings.backup_max_telegram_mb:.0f} МБ). "
+            "Настройте внешнее хранилище или cron с pg_dump на сервере."
         )
-        return
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 {msg}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_too_large",
+            )
+        return False, msg
 
     ok = await notify_admin_document(
         settings,
@@ -173,3 +205,9 @@ async def run_daily_backup(settings: Settings) -> None:
     gz_path.unlink(missing_ok=True)
     if not ok:
         logger.warning("backup: отправка файла в Telegram не удалась")
+        return False, "Файл бэкапа создан, но отправка в Telegram не удалась."
+    return True, f"Бэкап отправлен: {fname} ({mb:.2f} МБ)."
+
+
+async def run_daily_backup(settings: Settings) -> None:
+    await run_backup_once(settings, notify=True)

@@ -60,6 +60,7 @@ from shared.services.billing_calculator import (
 )
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
+from shared.services.backup_service import run_backup_once
 from shared.services.referral_service import count_invited_users, list_invited_users
 from shared.services.billing_v2.billing_calendar import (
     billing_local_day_end_utc_exclusive,
@@ -324,7 +325,26 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     }};
   </script>
   <style>
-    body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+    body {{
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background-image:
+        linear-gradient(145deg, rgba(18, 16, 36, .72), rgba(52, 28, 94, .62)),
+        url('/admin/login/background');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+    }}
+    html[data-theme='light'] body {{
+      background-image:
+        linear-gradient(145deg, rgba(240, 240, 248, .78), rgba(214, 206, 236, .58)),
+        url('/admin/login/background');
+    }}
+    html[data-theme='night'] body {{
+      background-image:
+        linear-gradient(145deg, rgba(15, 12, 32, .78), rgba(41, 20, 78, .68)),
+        url('/admin/login/background');
+    }}
     :root {{
       --remna-anim-fast: 180ms;
       --remna-anim-ease: cubic-bezier(.22, .61, .36, 1);
@@ -493,6 +513,7 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     .remna-page .card {{
       animation: remna-fade-in 0.42s ease-out both;
       transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+      backdrop-filter: blur(1.5px);
     }}
     .remna-page .card:hover {{
       box-shadow: 0 18px 40px -18px color-mix(in oklab, var(--bc) 25%, transparent);
@@ -1296,7 +1317,7 @@ async def _finalize_login_with_2fa(
         request.session["wauth_pending_user_id"] = int(user.id)
         request.session["wauth_pending_ts"] = int(time.time())
         request.session.pop("wauth", None)
-        return RedirectResponse("/admin/login/2fa", status_code=303)
+        return RedirectResponse("/admin/login?totp=1", status_code=303)
     _clear_pending_2fa(request)
     return RedirectResponse(success_redirect, status_code=303)
 
@@ -1519,6 +1540,9 @@ def _jwt_payload_unverified(token: str) -> dict:
 
 @router.get("/login")
 async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
+    pending_2fa = isinstance(request.session.get("wauth_pending"), dict)
+    show_2fa = pending_2fa or (request.query_params.get("totp") == "1")
+    totp_err = request.query_params.get("err") == "totp"
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if _is_logged(request) and not link_mode:
         return RedirectResponse("/admin/dashboard", status_code=303)
@@ -1580,6 +1604,29 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         justify-content: center;
         border-width: 0;
         box-shadow: var(--remna-anim-shadow);
+        animation: remna-login-float 4.4s ease-in-out infinite;
+      }}
+      .login-auth-btn:nth-of-type(2) {{
+        animation-delay: .35s;
+      }}
+      .login-auth-btn:hover {{
+        transform: translateY(-2px) scale(1.01);
+        box-shadow:
+          0 16px 30px -16px color-mix(in oklab, var(--bc) 45%, transparent),
+          0 0 16px color-mix(in oklab, var(--p) 40%, transparent);
+        filter: saturate(1.08);
+      }}
+      .login-auth-btn i {{
+        transition: transform .2s ease, filter .2s ease;
+      }}
+      .login-auth-btn:hover i {{
+        transform: translateY(-.5px) scale(1.08);
+        filter: drop-shadow(0 0 7px color-mix(in oklab, var(--p) 65%, transparent));
+      }}
+      @keyframes remna-login-float {{
+        0% {{ transform: translateY(0); }}
+        50% {{ transform: translateY(-1px); }}
+        100% {{ transform: translateY(0); }}
       }}
     </style>
     <div class="remna-login-stage" aria-hidden="true">
@@ -1600,6 +1647,34 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
             {"Привязать GitHub" if link_mode else "Войти через GitHub"}
           </a>
+        </div>
+      </div>
+    </div>
+    <div id="remna-login-2fa-overlay" class="fixed inset-0 z-[110] {'flex' if show_2fa else 'hidden'} items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-login-2fa-title">
+      <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
+        <div class="card-body items-center gap-4 text-center">
+          <h2 id="remna-login-2fa-title" class="card-title justify-center text-2xl font-bold">
+            <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
+            <span>Подтвердите вход</span>
+          </h2>
+          <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
+          {"<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>" if totp_err else ""}
+          <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
+            <input
+              type="text"
+              name="code"
+              inputmode="numeric"
+              pattern="[0-9 ]{{6,8}}"
+              maxlength="8"
+              autocomplete="one-time-code"
+              required
+              class="input input-bordered text-center text-lg tracking-[0.35em]"
+              placeholder="123456"
+            />
+            <button type="submit" class="btn btn-primary gap-2">
+              <i class="fa-solid fa-check" aria-hidden="true"></i>Подтвердить
+            </button>
+          </form>
         </div>
       </div>
     </div>
@@ -1702,41 +1777,11 @@ async def admin_login_telegram_start(request: Request, link: str = "") -> Redire
 
 @router.get("/login/2fa")
 async def admin_login_2fa_page(request: Request, err: str = "") -> HTMLResponse:
-    pending = request.session.get("wauth_pending")
-    if not isinstance(pending, dict):
+    if not isinstance(request.session.get("wauth_pending"), dict):
         return RedirectResponse("/admin/login", status_code=303)
-    notice = ""
     if (err or "").strip():
-        notice = "<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>"
-    body = f"""
-    <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
-      <div class="card-body items-center gap-4 text-center">
-        <h2 class="card-title justify-center text-2xl font-bold">
-          <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
-          <span>Подтвердите вход</span>
-        </h2>
-        <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
-        {notice}
-        <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
-          <input
-            type="text"
-            name="code"
-            inputmode="numeric"
-            pattern="[0-9 ]{{6,8}}"
-            maxlength="8"
-            autocomplete="one-time-code"
-            required
-            class="input input-bordered text-center text-lg tracking-[0.35em]"
-            placeholder="123456"
-          />
-          <button type="submit" class="btn btn-primary gap-2">
-            <i class="fa-solid fa-check" aria-hidden="true"></i>Подтвердить
-          </button>
-        </form>
-      </div>
-    </div>
-    """
-    return _layout("2FA", body, request=request, show_nav=False)
+        return RedirectResponse("/admin/login?totp=1&err=totp", status_code=303)
+    return RedirectResponse("/admin/login?totp=1", status_code=303)
 
 
 @router.post("/login/2fa")
@@ -1759,7 +1804,7 @@ async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> Redi
         _clear_pending_2fa(request)
         return RedirectResponse("/admin/login", status_code=303)
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
-        return RedirectResponse("/admin/login/2fa?err=1", status_code=303)
+        return RedirectResponse("/admin/login?totp=1&err=totp", status_code=303)
     request.session["wauth"] = pending
     _clear_pending_2fa(request)
     return RedirectResponse("/admin/dashboard", status_code=303)
@@ -5045,6 +5090,16 @@ async def admin_settings(request: Request) -> HTMLResponse:
             "<div class='alert alert-success shadow-sm'><span>Значения записаны в файл <code class=\"bg-base-300 px-1 rounded\">.env</code>. "
             "Часть параметров подхватится без перезапуска; для секретов и подключений перезапустите контейнеры API и бота.</span></div>"
         )
+    backup_note = ""
+    if request.query_params.get("backup_run") == "1":
+        backup_note = "<div class='alert alert-success shadow-sm'><span>Пробный бэкап запущен. Результат отправлен в тему BACKUPS.</span></div>"
+    backup_err = (request.query_params.get("backup_err") or "").strip()
+    if backup_err:
+        backup_note = (
+            "<div class='alert alert-error shadow-sm'><span>"
+            + _esc(backup_err)
+            + "</span></div>"
+        )
     env_tabs_script = """
     <script>
     (function(){
@@ -5075,6 +5130,13 @@ async def admin_settings(request: Request) -> HTMLResponse:
         </ul>
         <p class="text-sm opacity-70">После сохранения часть значений подхватится без перезапуска; для секретов и строк подключения перезапустите контейнеры API и бота.</p>
         {saved_note}
+        {backup_note}
+        <form method="post" action="/admin/settings/backup/run" onsubmit="return confirm('Запустить пробный бэкап PostgreSQL сейчас?');" class="flex flex-wrap items-end gap-2 rounded-xl border border-base-content/10 bg-base-200/45 p-3">
+          <button class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5" type="submit">
+            <i class="fa-solid fa-database" aria-hidden="true"></i>Пробный бэкап сейчас
+          </button>
+          <p class="text-xs opacity-70">Запускает pg_dump немедленно и отправляет результат в тему BACKUPS.</p>
+        </form>
         <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
           {''.join(tab_buttons)}
         </div>
@@ -5149,6 +5211,18 @@ async def admin_settings_env_post(request: Request):
             request=request,
         )
     return RedirectResponse("/admin/settings?env_saved=1", status_code=303)
+
+
+@router.post("/settings/backup/run")
+async def admin_settings_backup_run(request: Request) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    ok, msg = await run_backup_once(settings, notify=True)
+    if ok:
+        return RedirectResponse("/admin/settings?backup_run=1", status_code=303)
+    return RedirectResponse("/admin/settings?backup_err=" + quote_plus(msg[:400]), status_code=303)
 
 
 @router.post("/settings/factory-reset")
