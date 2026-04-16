@@ -154,7 +154,7 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
             extra = (
                 "\n\nПодсказка: версии PostgreSQL сервера и pg_dump должны совпадать по major.\n"
                 f"Текущий pg_dump: {cur}\n"
-                "Укажите BACKUP_PG_DUMP_BIN на бинарник версии 16.x (для сервера 16.x)."
+                "Нужно установить pg_dump 16.x и указать полный путь в BACKUP_PG_DUMP_BIN."
             )
         full = f"pg_dump завершился с кодом {proc.returncode}\n{err}{extra}"
         if notify:

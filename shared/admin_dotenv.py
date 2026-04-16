@@ -37,6 +37,24 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Подпись на странице «Мой профиль» (если пусто — имя из Telegram/GitHub при входе).",
             ),
             (
+                "ADMIN_BACKGROUND_SOURCE",
+                "Источник фона админки",
+                lambda s: s.admin_background_source or "default",
+                "default — фиолетовый градиент; url — по ссылке; asset — файл из папки /assets.",
+            ),
+            (
+                "ADMIN_BACKGROUND_URL",
+                "URL фона админки",
+                lambda s: s.admin_background_url or "",
+                "Полный http(s)-адрес изображения, используется если ADMIN_BACKGROUND_SOURCE=url.",
+            ),
+            (
+                "ADMIN_BACKGROUND_ASSET",
+                "Файл фона из /assets",
+                lambda s: s.admin_background_asset or "",
+                "Имя файла (например bg.jpg), используется если ADMIN_BACKGROUND_SOURCE=asset.",
+            ),
+            (
                 "PUBLIC_SITE_URL",
                 "Публичный URL",
                 lambda s: s.public_site_url or "",

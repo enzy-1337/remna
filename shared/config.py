@@ -482,6 +482,21 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_PROFILE_DISPLAY_NAME",
         description="Подпись на карточке «Мой профиль» в web-admin (если пусто — имя из Telegram/GitHub)",
     )
+    admin_background_source: str = Field(
+        default="default",
+        validation_alias="ADMIN_BACKGROUND_SOURCE",
+        description="Источник фона админки: default | url | asset",
+    )
+    admin_background_url: str | None = Field(
+        default=None,
+        validation_alias="ADMIN_BACKGROUND_URL",
+        description="URL фонового изображения для админки (если ADMIN_BACKGROUND_SOURCE=url)",
+    )
+    admin_background_asset: str | None = Field(
+        default=None,
+        validation_alias="ADMIN_BACKGROUND_ASSET",
+        description="Имя файла из /assets для фона админки (если ADMIN_BACKGROUND_SOURCE=asset)",
+    )
 
     backup_enabled: bool = Field(
         default=False,

@@ -293,7 +293,7 @@ def _auth_data(request: Request) -> dict:
 
 def _auth_label(request: Request) -> str | None:
     auth = _auth_data(request)
-    return str(auth.get("label") or "") or None
+    return str(auth.get("label") or auth.get("username") or "") or None
 
 
 def _auth_avatar(request: Request) -> str:
@@ -301,14 +301,94 @@ def _auth_avatar(request: Request) -> str:
     avatar_url = str(auth.get("avatar_url") or "").strip()
     if avatar_url:
         return avatar_url
-    return "https://ui-avatars.com/api/?background=2563eb&color=f0f9ff&bold=true&name=Admin"
+    return "/assets/icon.png"
 
 
-def _head_common(title: str, *, favicon_url: str | None = None) -> str:
+def _admin_assets_dir() -> Path:
+    return Path("assets").resolve()
+
+
+def _is_image_asset(name: str) -> bool:
+    return name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+
+
+def _resolve_admin_asset_url(name: str | None) -> str | None:
+    raw = (name or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).name
+    if not _is_image_asset(candidate):
+        return None
+    p = _admin_assets_dir() / candidate
+    if not p.exists() or not p.is_file():
+        return None
+    return f"/assets/{url_quote(candidate)}"
+
+
+def _admin_background_image_url(settings: Settings) -> str | None:
+    src = (settings.admin_background_source or "default").strip().lower()
+    if src == "url":
+        u = (settings.admin_background_url or "").strip()
+        if u.startswith(("http://", "https://")):
+            return u
+        return None
+    if src == "asset":
+        return _resolve_admin_asset_url(settings.admin_background_asset)
+    return None
+
+
+def _list_admin_image_assets() -> list[str]:
+    d = _admin_assets_dir()
+    if not d.exists() or not d.is_dir():
+        return []
+    out: list[str] = []
+    for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
+        if p.is_file() and _is_image_asset(p.name):
+            out.append(p.name)
+    return out
+
+
+def _head_common(title: str, *, favicon_url: str | None = None, background_url: str | None = None) -> str:
     fav = ""
     u = (favicon_url or "").strip()
     if u.startswith(("http://", "https://")):
         fav = f'  <link rel="icon" href="{_esc(u)}" />\n'
+    bg_url = (background_url or "").strip()
+    bg_with_img = (
+        f"""
+    body {{
+      background-image:
+        linear-gradient(145deg, rgba(18, 16, 36, .72), rgba(52, 28, 94, .62)),
+        url('{_esc(bg_url)}');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+    }}
+    html[data-theme='light'] body {{
+      background-image:
+        linear-gradient(145deg, rgba(240, 240, 248, .78), rgba(214, 206, 236, .58)),
+        url('{_esc(bg_url)}');
+    }}
+    html[data-theme='night'] body {{
+      background-image:
+        linear-gradient(145deg, rgba(15, 12, 32, .78), rgba(41, 20, 78, .68)),
+        url('{_esc(bg_url)}');
+    }}
+"""
+        if bg_url
+        else """
+    body {
+      background:
+        linear-gradient(145deg, rgba(24, 18, 46, .96), rgba(58, 30, 102, .92));
+      background-attachment: fixed;
+    }
+    html[data-theme='light'] body {
+      background:
+        linear-gradient(145deg, rgba(233, 227, 247, .94), rgba(210, 198, 236, .92));
+    }
+"""
+    )
     return f"""  <meta charset="utf-8" />
   <script>try{{var t=localStorage.getItem('remna-admin-theme');if(t==='light'||t==='night')document.documentElement.setAttribute('data-theme',t);}}catch(e){{}}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -327,24 +407,8 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
   <style>
     body {{
       font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-      background-image:
-        linear-gradient(145deg, rgba(18, 16, 36, .72), rgba(52, 28, 94, .62)),
-        url('/admin/login/background');
-      background-size: cover;
-      background-position: center;
-      background-repeat: no-repeat;
-      background-attachment: fixed;
     }}
-    html[data-theme='light'] body {{
-      background-image:
-        linear-gradient(145deg, rgba(240, 240, 248, .78), rgba(214, 206, 236, .58)),
-        url('/admin/login/background');
-    }}
-    html[data-theme='night'] body {{
-      background-image:
-        linear-gradient(145deg, rgba(15, 12, 32, .78), rgba(41, 20, 78, .68)),
-        url('/admin/login/background');
-    }}
+{bg_with_img}
     :root {{
       --remna-anim-fast: 180ms;
       --remna-anim-ease: cubic-bezier(.22, .61, .36, 1);
@@ -421,6 +485,20 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
     .remna-page .remna-interactive:hover {{
       transform: translateY(-1px);
       box-shadow: var(--remna-anim-shadow);
+    }}
+    .remna-page {{
+      position: relative;
+    }}
+    .remna-page::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 20% 18%, rgba(168,85,247,.11), transparent 28%),
+        radial-gradient(circle at 82% 24%, rgba(59,130,246,.08), transparent 24%),
+        radial-gradient(circle at 50% 82%, rgba(236,72,153,.08), transparent 24%);
+      z-index: 0;
     }}
     .remna-loading-overlay {{
       position: fixed;
@@ -622,9 +700,8 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
-        "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-center gap-0 rounded-xl px-0 "
-        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 remna-interactive "
-        "group-hover/sidebar:justify-start group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
+        "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 "
+        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 remna-interactive"
     )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -641,8 +718,8 @@ def _nav_link_class(href: str, cur: str) -> str:
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
-      <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
+    <a href="{href}" class="{cls} w-10 max-w-10 min-w-10 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
+      <span class="flex h-9 w-10 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
       <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
 
@@ -673,6 +750,8 @@ def _layout(
     request: Request | None = None,
     show_nav: bool = True,
     back_href: str | None = None,
+    sidebar_avatar_url: str | None = None,
+    sidebar_user_label: str | None = None,
 ) -> HTMLResponse:
     cur = ""
     if request is not None:
@@ -686,21 +765,21 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.5rem+4.25rem+0.75rem)] md:pr-6 lg:pr-8"
+    main_cls = "min-h-screen px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.5rem+3.75rem+0.75rem)] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
-        user_label = _auth_label(request) or "admin"
-        avatar = _esc(_auth_avatar(request))
+        user_label = (sidebar_user_label or "").strip() or _auth_label(request) or "admin"
+        avatar = _esc((sidebar_avatar_url or "").strip() or _auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-2 top-3 bottom-3 z-[60] hidden w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-2 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
-      <div class="flex w-full shrink-0 items-center justify-start gap-2 py-3">
-        <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
+    <aside class="group/sidebar fixed left-2 top-3 bottom-3 z-[60] hidden w-[3.75rem] min-w-[3.75rem] max-w-[3.75rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
+      <div class="flex w-full shrink-0 items-center justify-start gap-2 px-[10px] pt-[10px] pb-[5px]">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
         </span>
         <span class="nav-label pointer-events-none max-h-0 min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-0 py-2 group-hover/sidebar:items-stretch">
+      <nav class="flex min-h-0 flex-1 flex-col items-center gap-[5px] overflow-y-auto overflow-x-hidden px-[10px] pt-[5px] pb-[10px] group-hover/sidebar:items-stretch">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
@@ -712,7 +791,7 @@ def _layout(
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
       <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-3 group-hover/sidebar:items-stretch">
-        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden group-hover/sidebar:justify-between">
+        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden px-[10px] group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
@@ -818,7 +897,7 @@ def _layout(
       </div>
     </div>"""
     elif not show_nav:
-        main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200 to-secondary/10 flex items-center justify-center p-4 w-full"
+        main_cls = "min-h-screen flex items-center justify-center p-4 w-full"
 
     back_fixed = ""
     if back_href and show_nav and request is not None:
@@ -1174,7 +1253,7 @@ def _layout(
     page = f"""<!DOCTYPE html>
 <html lang="ru" data-theme="night">
 <head>
-{_head_common(title, favicon_url=favicon_for_head)}
+{_head_common(title, favicon_url=favicon_for_head, background_url=_admin_background_image_url(settings))}
 </head>
 <body class="text-base-content antialiased">
   {nav_blocks}{back_fixed}{remna_chrome}
@@ -1564,6 +1643,14 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             "</div>"
         )
     github_href = "/admin/login/github/start"
+    login_bg_url = _admin_background_image_url(get_settings())
+    login_bg_css = (
+        "background-image:\n"
+        f"          linear-gradient(140deg, rgba(16,14,36,0.75), rgba(55,25,110,0.7)),\n"
+        f"          url('{_esc(login_bg_url)}');"
+        if login_bg_url
+        else ""
+    )
     if link_mode:
         github_href += "?mode=link"
     body = f"""
@@ -1580,9 +1667,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         background: linear-gradient(140deg, rgba(20,18,42,0.88), rgba(68,34,120,0.8));
       }}
       .remna-login-bg.has-image {{
-        background-image:
-          linear-gradient(140deg, rgba(16,14,36,0.75), rgba(55,25,110,0.7)),
-          url('/admin/login/background');
+        {login_bg_css}
         background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
@@ -1682,9 +1767,11 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     (function(){{
       var bg=document.getElementById('remna-login-bg');
       if(bg){{
+        var src={json.dumps(login_bg_url or "")};
+        if(!src)return;
         var probe=new Image();
         probe.onload=function(){{bg.classList.add('has-image');}};
-        probe.src='/admin/login/background';
+        probe.src=src;
       }}
       var c=document.getElementById('remna-login-particles');
       if(!c||!c.getContext)return;
@@ -4602,9 +4689,14 @@ async def admin_profile(request: Request) -> HTMLResponse:
         return denied
     settings = get_settings()
     auth = _auth_data(request)
-    display = (settings.web_admin_profile_display_name or "").strip() or str(auth.get("label") or "Администратор")
+    linked = await _linked_bot_user_for_admin(request)
+    display = (settings.web_admin_profile_display_name or "").strip() or str(
+        (linked.first_name if linked is not None and linked.first_name else "")
+        or auth.get("label")
+        or "Администратор"
+    )
     kind = str(auth.get("kind") or "")
-    avatar = _esc(_auth_avatar(request))
+    avatar = _esc(_user_avatar_photo_src(linked) if linked is not None else _auth_avatar(request))
     admin_ids = set(settings.admin_telegram_ids)
     parts: list[str] = []
     if kind == "telegram":
@@ -4616,11 +4708,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
         un = str(auth.get("username") or "").strip()
         parts.append("<p class='text-base'>Вход через <b>Telegram</b>.</p>")
         if tid_int is not None:
-            in_list = "да" if tid_int in admin_ids else "нет"
-            parts.append(
-                f"<p>Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{tid_int}</code>"
-                f" · в <code class='text-xs'>ADMIN_TELEGRAM_IDS</code>: <b>{in_list}</b></p>"
-            )
+            parts.append(f"<p>Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{tid_int}</code></p>")
         if un:
             tg_url = f"https://t.me/{url_quote(un)}"
             parts.append(
@@ -4637,11 +4725,8 @@ async def admin_profile(request: Request) -> HTMLResponse:
                 + "</code> (приоритетный аккаунт)</p>"
             )
         if login:
-            allowed_gh = {x.casefold() for x in settings.web_admin_github_logins}
-            in_list = "да" if login.casefold() in allowed_gh else "нет"
             parts.append(
-                f"<p>Аккаунт: <a class='link link-primary font-medium' href=\"https://github.com/{_esc(login)}\" target=\"_blank\" rel=\"noopener\">{_esc(login)}</a>"
-                f" · в <code class='text-xs'>WEB_ADMIN_GITHUB_LOGINS</code>: <b>{in_list}</b></p>"
+                f"<p>Аккаунт: <a class='link link-primary font-medium' href=\"https://github.com/{_esc(login)}\" target=\"_blank\" rel=\"noopener\">{_esc(login)}</a></p>"
             )
     else:
         parts.append("<p class='opacity-70'>Способ входа не определён.</p>")
@@ -4649,11 +4734,9 @@ async def admin_profile(request: Request) -> HTMLResponse:
     panel_raw = (settings.remnawave_public_url or settings.remnawave_api_url or "").strip().rstrip("/")
     if panel_raw:
         parts.append(
-            f"<p><a class='link link-secondary font-medium' href=\"{_esc(panel_raw)}\" target=\"_blank\" rel=\"noopener\">"
-            "Открыть панель Remnawave</a></p>"
+            f"<p><a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case' href=\"{_esc(panel_raw)}\" target=\"_blank\" rel=\"noopener\">"
+            "<i class='fa-solid fa-arrow-up-right-from-square' aria-hidden='true'></i>Панель Remnawave</a></p>"
         )
-
-    linked = await _linked_bot_user_for_admin(request)
     ties = "\n".join(parts)
     account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
@@ -4870,9 +4953,11 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
         <div class="flex flex-wrap gap-2 pt-1">
+          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/">
+            <i class="fa-solid fa-user" aria-hidden="true"></i>Мой профиль в боте
+          </a>
           {account_link_button}
         </div>
-        <p class="text-xs opacity-60 pt-2">Права в админке задаются в .env (<code class='bg-base-300 px-1 rounded text-[10px]'>ADMIN_TELEGRAM_IDS</code>, <code class='bg-base-300 px-1 rounded text-[10px]'>WEB_ADMIN_GITHUB_LOGINS</code>).</p>
       </div>
     </div>
     {profile_2fa_block}
@@ -4880,7 +4965,14 @@ async def admin_profile(request: Request) -> HTMLResponse:
     {vpn_block}
     </div>
     """
-    return _layout("Мой профиль", body, request=request, back_href="/admin/dashboard")
+    return _layout(
+        "Мой профиль",
+        body,
+        request=request,
+        back_href="/admin/dashboard",
+        sidebar_avatar_url=_user_avatar_photo_src(linked) if linked is not None else None,
+        sidebar_user_label=linked.first_name if linked is not None and linked.first_name else None,
+    )
 
 
 @router.post("/profile/add-balance")
@@ -5061,6 +5153,20 @@ async def admin_settings(request: Request) -> HTMLResponse:
     if denied is not None:
         return denied
     vals = read_whitelist_values()
+    bg_assets = _list_admin_image_assets()
+    bg_source = vals.get("ADMIN_BACKGROUND_SOURCE", "default") or "default"
+    bg_url = vals.get("ADMIN_BACKGROUND_URL", "") or ""
+    bg_asset = vals.get("ADMIN_BACKGROUND_ASSET", "") or ""
+    bg_asset_cards = "".join(
+        (
+            f"<label class='cursor-pointer rounded-xl border border-base-content/10 bg-base-200/40 p-2 hover:border-primary/35'>"
+            f"<input type='radio' class='radio radio-sm mr-2' name='ADMIN_BACKGROUND_ASSET_PICK' value='{_esc(name)}' {'checked' if name == bg_asset else ''} />"
+            f"<span class='text-xs font-medium'>{_esc(name)}</span>"
+            f"<img src='/assets/{url_quote(name)}' alt='' class='mt-2 h-20 w-full rounded-lg object-cover border border-base-content/10' loading='lazy' />"
+            f"</label>"
+        )
+        for name in bg_assets
+    ) or "<p class='text-sm opacity-60'>В папке /assets пока нет подходящих изображений.</p>"
     tab_buttons: list[str] = []
     tab_panels: list[str] = []
     for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
@@ -5122,25 +5228,44 @@ async def admin_settings(request: Request) -> HTMLResponse:
     <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
-        <p class="text-sm opacity-80 max-w-4xl">Здесь — <strong>безопасный поднабор</strong> переменных: их можно менять из браузера, они записываются в файл <code class="bg-base-300 px-1 rounded text-xs">.env</code> на сервере. Пояснения к каждому ключу совпадают по смыслу с комментариями в <code class="bg-base-300 px-1 rounded text-xs">.env.example</code> в репозитории — там полный список переменных.</p>
-        <ul class="text-sm opacity-70 list-disc pl-5 max-w-4xl space-y-1">
-          <li>Вкладка <strong>«Биллинг v2 и PAYG»</strong> — цены шага ГБ, сутки за устройство, пол баланса, опрос трафика, хранение детализации.</li>
-          <li>В <strong>«Подписки и устройства»</strong> — триал, автопродление, напоминания и переключатель <strong>бонусных ГБ при первом пополнении</strong> (как отдельный флаг у триала).</li>
-          <li><strong>Не</strong> доступно из этой формы: <code class="bg-base-300 px-0.5 rounded text-xs">BOT_TOKEN</code>, <code class="bg-base-300 px-0.5 rounded text-xs">DATABASE_URL</code>, секреты платёжных провайдеров, GitHub OAuth — их правят только на сервере.</li>
-        </ul>
-        <p class="text-sm opacity-70">После сохранения часть значений подхватится без перезапуска; для секретов и строк подключения перезапустите контейнеры API и бота.</p>
         {saved_note}
         {backup_note}
-        <form method="post" action="/admin/settings/backup/run" onsubmit="return confirm('Запустить пробный бэкап PostgreSQL сейчас?');" class="flex flex-wrap items-end gap-2 rounded-xl border border-base-content/10 bg-base-200/45 p-3">
-          <button class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5" type="submit">
-            <i class="fa-solid fa-database" aria-hidden="true"></i>Пробный бэкап сейчас
-          </button>
-          <p class="text-xs opacity-70">Запускает pg_dump немедленно и отправляет результат в тему BACKUPS.</p>
-        </form>
         <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
           {''.join(tab_buttons)}
         </div>
         <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
+          <div class="rounded-2xl border border-base-content/10 bg-base-200/35 p-4">
+            <div class="flex flex-col gap-4">
+              <div class="flex items-center gap-2">
+                <i class="fa-solid fa-image text-primary" aria-hidden="true"></i>
+                <h3 class="text-lg font-semibold">Фон админки</h3>
+              </div>
+              <div class="grid gap-3 md:grid-cols-3">
+                <label class="form-control">
+                  <span class="label-text text-xs opacity-70">Режим</span>
+                  <select id="bg-source" class="select select-bordered select-sm h-9 min-h-9" name="ADMIN_BACKGROUND_SOURCE">
+                    <option value="default" {'selected' if bg_source == 'default' else ''}>Фиолетовый по умолчанию</option>
+                    <option value="url" {'selected' if bg_source == 'url' else ''}>Картинка по ссылке</option>
+                    <option value="asset" {'selected' if bg_source == 'asset' else ''}>Файл из /assets</option>
+                  </select>
+                </label>
+                <label class="form-control md:col-span-2">
+                  <span class="label-text text-xs opacity-70">Ссылка на изображение</span>
+                  <div class="flex gap-2">
+                    <input id="bg-url" class="input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs" name="ADMIN_BACKGROUND_URL" value="{_esc(bg_url)}" autocomplete="off" placeholder="https://..." />
+                    <button id="bg-preview-btn" type="button" class="btn btn-ghost btn-sm h-9 min-h-9">Показать</button>
+                  </div>
+                </label>
+              </div>
+              <input type="hidden" id="bg-asset-hidden" name="ADMIN_BACKGROUND_ASSET" value="{_esc(bg_asset)}" />
+              <div id="bg-asset-picker" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{bg_asset_cards}</div>
+              <div id="bg-preview-wrap" class="rounded-xl border border-base-content/10 bg-base-100/50 p-3">
+                <div class="text-xs opacity-70 mb-2">Предпросмотр</div>
+                <img id="bg-preview-img" src="{_esc(_admin_background_image_url(settings) or '')}" alt="" class="{'h-40 w-full rounded-lg object-cover border border-base-content/10' if _admin_background_image_url(settings) else 'hidden'}" />
+                <div id="bg-preview-empty" class="{'hidden' if _admin_background_image_url(settings) else 'text-sm opacity-60'}">Сейчас используется фиолетовый фон по умолчанию.</div>
+              </div>
+            </div>
+          </div>
           {''.join(tab_panels)}
           <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
         </form>
@@ -5177,6 +5302,19 @@ async def admin_settings(request: Request) -> HTMLResponse:
     </details>
     <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <summary class="card-body cursor-pointer select-none">
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Бэкап PostgreSQL</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
+      </summary>
+      <div class="card-body gap-4 pt-0">
+        <form method="post" action="/admin/settings/backup/run" onsubmit="return confirm('Запустить пробный бэкап PostgreSQL сейчас?');" class="flex flex-wrap items-end gap-2">
+          <button class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5" type="submit">
+            <i class="fa-solid fa-database" aria-hidden="true"></i>Пробный бэкап сейчас
+          </button>
+        </form>
+      </div>
+    </details>
+    <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
+      <summary class="card-body cursor-pointer select-none">
         <h2 class="card-title text-2xl"><i class="fa-solid fa-triangle-exclamation text-error mr-2" aria-hidden="true"></i>Опасная зона</h2>
         <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
@@ -5190,6 +5328,45 @@ async def admin_settings(request: Request) -> HTMLResponse:
       </div>
     </details>
     {env_tabs_script}
+    <script>
+    (function(){
+      var src=document.getElementById('bg-source');
+      var url=document.getElementById('bg-url');
+      var pick=document.getElementById('bg-asset-picker');
+      var hidden=document.getElementById('bg-asset-hidden');
+      var img=document.getElementById('bg-preview-img');
+      var empty=document.getElementById('bg-preview-empty');
+      var btn=document.getElementById('bg-preview-btn');
+      function showPreview(v){
+        v=(v||'').trim();
+        if(v){
+          img.src=v; img.classList.remove('hidden'); empty.classList.add('hidden');
+        }else{
+          img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='Сейчас используется фиолетовый фон по умолчанию.';
+        }
+      }
+      function syncMode(){
+        var m=(src&&src.value)||'default';
+        if(pick)pick.classList.toggle('hidden', m!=='asset');
+        if(url)url.closest('label').classList.toggle('opacity-60', m!=='url');
+      }
+      if(btn)btn.addEventListener('click', function(){ if(src&&src.value==='url')showPreview(url&&url.value||''); });
+      document.querySelectorAll('input[name="ADMIN_BACKGROUND_ASSET_PICK"]').forEach(function(r){
+        r.addEventListener('change', function(){
+          if(hidden)hidden.value=r.value||'';
+          if(src)src.value='asset';
+          syncMode();
+          showPreview('/assets/'+encodeURIComponent(r.value||''));
+        });
+      });
+      if(src)src.addEventListener('change', function(){
+        syncMode();
+        if(src.value==='default')showPreview('');
+        if(src.value==='asset' && hidden && hidden.value)showPreview('/assets/'+encodeURIComponent(hidden.value));
+      });
+      syncMode();
+    })();
+    </script>
     """
     return _layout("Web-admin Settings", body, request=request)
 
