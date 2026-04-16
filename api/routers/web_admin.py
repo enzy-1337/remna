@@ -701,7 +701,7 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
         "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 "
-        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 remna-interactive"
+        "text-sm font-medium no-underline ring-1 ring-inset ring-transparent transition-colors duration-200 remna-interactive"
     )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -718,8 +718,8 @@ def _nav_link_class(href: str, cur: str) -> str:
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} w-10 max-w-10 min-w-10 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
-      <span class="flex h-9 w-10 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
+    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
       <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
 
@@ -790,8 +790,9 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-3 group-hover/sidebar:items-stretch">
-        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden px-[10px] group-hover/sidebar:justify-between">
+      <div class="mt-auto flex w-full flex-col items-center pt-2 pb-2 group-hover/sidebar:items-stretch">
+        <div class="mx-[3px] mb-2 h-[3px] rounded-full bg-base-content/10"></div>
+        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden px-[8px] group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
