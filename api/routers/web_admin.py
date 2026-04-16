@@ -515,8 +515,9 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
-        "box-border flex h-9 min-h-9 min-w-0 w-full shrink-0 items-center justify-start gap-2 rounded-xl px-0 "
-        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200"
+        "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-center gap-0 rounded-xl px-0 "
+        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 "
+        "group-hover/sidebar:justify-start group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
     )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -533,7 +534,7 @@ def _nav_link_class(href: str, cur: str) -> str:
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} overflow-hidden">
+    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
       <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
       <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
@@ -592,7 +593,7 @@ def _layout(
         </span>
         <span class="nav-label pointer-events-none max-h-0 min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex min-h-0 flex-1 flex-col items-start gap-1 overflow-y-auto overflow-x-hidden px-0 py-1">
+      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-0 py-2 group-hover/sidebar:items-stretch">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
@@ -603,8 +604,8 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto flex w-full flex-col items-start border-t border-base-content/10 py-3">
-        <div class="flex w-full min-w-0 items-center justify-start gap-1 overflow-hidden">
+      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-3 group-hover/sidebar:items-stretch">
+        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
@@ -3298,7 +3299,6 @@ async def admin_users(
         sub_lbl, sub_badge = _subscription_list_badge(now_utc, subs_by_user.get(u.id, []))
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
-        github_username = f"@{u.github_username}" if u.github_username else "-"
         av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
         risk_badge = "<span class='badge badge-ghost badge-xs'>—</span>"
         if u.risk_notified_1h_at is not None:
@@ -3309,7 +3309,7 @@ async def admin_users(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
-            f"<td>{_esc(username)}</td><td>{_esc(github_username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
+            f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td>"
             f"<td>{risk_badge}</td></tr>"
         )
@@ -3356,7 +3356,7 @@ async def admin_users(
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram/GitHub username, имя'/>"
+        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, имя'/>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
         f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
@@ -3365,8 +3365,8 @@ async def admin_users(
         f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>GitHub</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
         "<script>(function(){"
         "var form=document.getElementById('us-form'); if(!form)return;"

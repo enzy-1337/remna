@@ -91,7 +91,7 @@ async def cmd_start(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
     )
-    profile_block = profile_caption(user, tg)
+    profile_block = profile_caption(user, tg, is_admin=is_bot_admin)
     no_sub_hint = ""
     if not has_act:
         no_sub_hint = join_lines(
@@ -183,7 +183,7 @@ async def cb_channel_check(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
     )
-    cap = profile_caption(db_user, tg_user)
+    cap = profile_caption(db_user, tg_user, is_admin=is_bot_admin)
     no_sub_hint = ""
     if not has_act:
         no_sub_hint = join_lines(

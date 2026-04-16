@@ -150,14 +150,9 @@ async def build_subscription_detail_caption(
 
     opt_route_lines: list = []
     if settings.billing_v2_enabled and user.billing_mode == "hybrid":
-        ex = settings.billing_optimized_route_gb_extra_rub
         if user.optimized_route_enabled:
             opt_route_lines.append(
-                plain("🛰 Маршрут: ")
-                + bold("оптимизированный")
-                + plain(" (+")
-                + bold(str(ex))
-                + plain(" ₽ к шагу ГБ вне пакета)")
+                plain("🛰 Маршрут: ") + bold("оптимизированный")
             )
         else:
             opt_route_lines.append(plain("🛰 Маршрут: ") + bold("обычный"))
@@ -214,15 +209,9 @@ async def build_subscription_detail_caption(
                 [
                     plain("⏱️ ")
                     + bold("Баланс")
-                    + plain(": при текущем темпе ~")
+                    + plain(": ~")
                     + bold(str(runway.estimated_days_int))
-                    + plain(" дн. до нижнего порога (~")
-                    + bold(str(runway.avg_daily_rub))
-                    + plain(" ₽/сут. по окну ")
-                    + bold(str(runway.span_calendar_days))
-                    + plain(" дн., дней со списаниями: ")
-                    + bold(str(runway.days_with_charges))
-                    + plain(")."),
+                    + plain(" дн. до нижнего порога."),
                     plain("📅 Ориентир: до ")
                     + bold(runway.until_day.strftime("%d.%m.%Y"))
                     + plain(" (")
