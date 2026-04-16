@@ -16,7 +16,7 @@ from shared.md2 import bold, code, join_lines, plain
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin
+from shared.services.admin_notify import admin_user_ref, notify_admin
 from shared.services.referral_parse import parse_referral_code_from_start_args
 from shared.services.referral_service import replace_referrer_bonus_telegram_message
 
@@ -126,14 +126,14 @@ async def register_user(
                 title="🎁 " + bold("Реферальные бонусы за регистрацию"),
                 lines=[
                     plain("Новый пользователь: ")
-                    + bold(f"#{user.id}")
+                    + admin_user_ref(settings, user)
                     + plain(" tg ")
                     + code(str(user.telegram_id))
                     + plain(": +")
                     + bold(str(bonus))
                     + plain(" ₽"),
                     plain("Пригласивший: ")
-                    + bold(f"#{referrer.id}")
+                    + admin_user_ref(settings, referrer)
                     + plain(": +")
                     + bold(str(bonus))
                     + plain(" ₽"),

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.database import get_session_factory
-from shared.md2 import bold, code, esc, join_lines
+from shared.md2 import bold, code, esc, join_lines, link
 from shared.models.notification_log import NotificationLog
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
@@ -17,11 +17,26 @@ from shared.services.telegram_notify import send_telegram_document, send_telegra
 logger = logging.getLogger(__name__)
 
 
-def format_user_line(user: User) -> str:
+def admin_user_profile_url(settings: Settings, user: User) -> str:
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/admin/users/{int(user.id)}"
+
+
+def admin_user_ref(settings: Settings, user: User) -> str:
+    url = admin_user_profile_url(settings, user)
+    label = f"#{user.id}"
+    if url:
+        return link(label, url)
+    return bold(label)
+
+
+def format_user_line(settings: Settings, user: User) -> str:
     un = esc(f"@{user.username}") if user.username else "—"
     return join_lines(
         "👤 "
-        + bold(f"#{user.id}")
+        + admin_user_ref(settings, user)
         + " · tg "
         + code(str(user.telegram_id))
         + " · "
@@ -78,7 +93,7 @@ async def notify_admin(
     uid = subject_user.id if subject_user is not None else subject_user_id
     chunks: list[str] = []
     if subject_user is not None:
-        chunks.append(format_user_line(subject_user))
+        chunks.append(format_user_line(settings, subject_user))
     chunks.append(title)
     chunks.extend(lines)
     body = "\n".join(chunks)

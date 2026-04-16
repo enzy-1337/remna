@@ -300,6 +300,13 @@ def _auth_label(request: Request) -> str | None:
 
 
 def _auth_avatar(request: Request) -> str:
+    uid_raw = request.session.get("wauth_user_id")
+    try:
+        uid = int(uid_raw) if uid_raw is not None else 0
+    except (TypeError, ValueError):
+        uid = 0
+    if uid > 0:
+        return f"/admin/users/{uid}/telegram-photo"
     auth = _auth_data(request)
     avatar_url = str(auth.get("avatar_url") or "").strip()
     if avatar_url:

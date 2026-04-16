@@ -33,6 +33,8 @@ from tickets.services import (
 )
 from tickets.config import config
 from shared.config import get_settings
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin_plain
 from shared.services.billing_v2.detail_service import format_hybrid_billing_today_for_support_topic
 
 router = Router(name="tickets_user")
@@ -232,6 +234,25 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
         disable_web_page_preview=True,
+    )
+    profile_url = ""
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if base:
+        profile_url = f"{base}/admin/users/{int(db_user.id)}"
+    who = (message.from_user.full_name or "Пользователь").strip()
+    username = f" @{message.from_user.username}" if message.from_user.username else ""
+    admin_text = (
+        f"🎫 Новый тикет #{ticket_id}\n"
+        f"Пользователь: {who}{username}\n"
+        f"Telegram ID: {int(message.from_user.id)}\n"
+        + (f"Профиль: {profile_url}\n" if profile_url else "")
+        + f"Тема форума: {int(topic.message_thread_id)}"
+    )
+    await notify_admin_plain(
+        settings,
+        text=admin_text,
+        topic=AdminLogTopic.SUPPORT,
+        event_type="support_ticket_created",
     )
 
     await state.clear()

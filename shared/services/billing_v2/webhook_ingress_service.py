@@ -15,6 +15,8 @@ from shared.database import get_session_factory
 from shared.models.device_history import DeviceHistory
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin_plain
 from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.billing_v2.billing_calendar import billing_today
@@ -159,6 +161,13 @@ def device_identity_meta_from_payload(payload: dict) -> dict[str, str]:
             if isinstance(n, dict):
                 _scan(n, out)
     return out
+
+
+def _web_admin_user_profile_url(settings: Settings, user: User) -> str:
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/admin/users/{int(user.id)}"
 
 
 def _parse_webhook_unix_ts(ts_header: str) -> int | None:
@@ -403,6 +412,29 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
 
                 await notify_device_attached_replace_message(
                     session, user, settings, first_ever=first_ever_device
+                )
+                model = (
+                    hist_meta.get("device_model")
+                    or hist_meta.get("device_name")
+                    or "—"
+                )
+                who = (user.first_name or user.username or f"user#{user.id}").strip()
+                username = f" @{user.username}" if user.username else ""
+                profile_url = _web_admin_user_profile_url(settings, user)
+                admin_text = (
+                    "📱 Новое устройство\n"
+                    f"Пользователь: {who}{username}\n"
+                    f"Telegram ID: {int(user.telegram_id)}\n"
+                    f"HWID: {hwid}\n"
+                    f"Модель: {model}\n"
+                    + (f"Профиль: {profile_url}\n" if profile_url else "")
+                    + f"Событие: {event_type}"
+                )
+                await notify_admin_plain(
+                    settings,
+                    text=admin_text,
+                    topic=AdminLogTopic.DEVICES,
+                    event_type="device_attached_admin_log",
                 )
             row.status = "processed"
     elif event_type == "subscription.status":
