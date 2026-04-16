@@ -9,6 +9,7 @@ import html
 import json
 import time
 from calendar import monthrange
+from pathlib import Path
 from hashlib import sha256
 from base64 import urlsafe_b64encode
 from collections import defaultdict
@@ -26,7 +27,7 @@ import re
 import redis.asyncio as redis_async
 import segno
 from fastapi import APIRouter, BackgroundTasks, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,6 +122,14 @@ _USERS_HTML_CACHE: dict[tuple[str, int, str, str, str], tuple[float, str]] = {}
 _USERS_HTML_TTL_SEC = 15.0
 _INT32_MAX = 2_147_483_647
 _INT64_MAX = 9_223_372_036_854_775_807
+_LOGIN_BG_CANDIDATES = (
+    Path("assets/login-bg.png"),
+    Path(
+        "C:/Users/admin/.cursor/projects/c-remna-remna/assets/"
+        "c__Users_admin_AppData_Roaming_Cursor_User_workspaceStorage_"
+        "60473e56cf1239dc65e9dcb102354c5b_images_image-4e2cf300-ba40-4fcb-9fe8-e034f29c8894.png"
+    ),
+)
 
 
 def _avatar_fetch_lock(user_id: int) -> asyncio.Lock:
@@ -316,6 +325,83 @@ def _head_common(title: str, *, favicon_url: str | None = None) -> str:
   </script>
   <style>
     body {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
+    :root {{
+      --remna-anim-fast: 180ms;
+      --remna-anim-ease: cubic-bezier(.22, .61, .36, 1);
+      --remna-anim-shadow: 0 12px 28px -16px color-mix(in oklab, var(--bc) 40%, transparent);
+    }}
+    .remna-page .btn,
+    .remna-page a.btn,
+    .remna-page button.btn {{
+      transition:
+        transform var(--remna-anim-fast) var(--remna-anim-ease),
+        box-shadow var(--remna-anim-fast) var(--remna-anim-ease),
+        filter var(--remna-anim-fast) var(--remna-anim-ease),
+        border-color var(--remna-anim-fast) var(--remna-anim-ease),
+        background-color var(--remna-anim-fast) var(--remna-anim-ease);
+      will-change: transform;
+    }}
+    .remna-page .btn:hover,
+    .remna-page a.btn:hover,
+    .remna-page button.btn:hover {{
+      transform: translateY(-1px);
+      box-shadow: var(--remna-anim-shadow);
+      filter: saturate(1.03);
+    }}
+    .remna-page .btn:active,
+    .remna-page a.btn:active,
+    .remna-page button.btn:active {{
+      transform: translateY(0) scale(.985);
+      box-shadow: none;
+    }}
+    .remna-page .btn:focus-visible,
+    .remna-page a.btn:focus-visible,
+    .remna-page button.btn:focus-visible {{
+      outline: 0;
+      box-shadow: 0 0 0 2px color-mix(in oklab, var(--p) 55%, transparent), var(--remna-anim-shadow);
+    }}
+    .remna-page .btn i {{
+      transition: transform var(--remna-anim-fast) var(--remna-anim-ease), filter var(--remna-anim-fast) var(--remna-anim-ease);
+    }}
+    .remna-page .btn:hover i {{
+      transform: translateY(-.5px) scale(1.04);
+      filter: drop-shadow(0 0 5px color-mix(in oklab, var(--p) 50%, transparent));
+    }}
+    .remna-page .btn.btn-ghost:hover,
+    .remna-page a.btn.btn-ghost:hover,
+    .remna-page button.btn.btn-ghost:hover {{
+      transform: translateY(-.5px);
+      box-shadow: 0 8px 20px -16px color-mix(in oklab, var(--bc) 30%, transparent);
+      filter: saturate(1.01);
+    }}
+    .remna-page .btn.btn-ghost:hover i {{
+      transform: translateY(-.25px) scale(1.02);
+      filter: drop-shadow(0 0 3px color-mix(in oklab, var(--bc) 30%, transparent));
+    }}
+    .remna-page .btn.btn-primary:hover,
+    .remna-page a.btn.btn-primary:hover,
+    .remna-page button.btn.btn-primary:hover {{
+      transform: translateY(-1.5px);
+      box-shadow:
+        0 16px 30px -16px color-mix(in oklab, var(--bc) 42%, transparent),
+        0 0 14px color-mix(in oklab, var(--p) 35%, transparent);
+      filter: saturate(1.06);
+    }}
+    .remna-page .btn.btn-primary:hover i {{
+      transform: translateY(-.5px) scale(1.06);
+      filter: drop-shadow(0 0 7px color-mix(in oklab, var(--p) 60%, transparent));
+    }}
+    .remna-page .remna-interactive {{
+      transition:
+        transform var(--remna-anim-fast) var(--remna-anim-ease),
+        box-shadow var(--remna-anim-fast) var(--remna-anim-ease),
+        color var(--remna-anim-fast) var(--remna-anim-ease),
+        background-color var(--remna-anim-fast) var(--remna-anim-ease);
+    }}
+    .remna-page .remna-interactive:hover {{
+      transform: translateY(-1px);
+      box-shadow: var(--remna-anim-shadow);
+    }}
     .remna-loading-overlay {{
       position: fixed;
       inset: 0;
@@ -516,7 +602,7 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
         "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-center gap-0 rounded-xl px-0 "
-        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 "
+        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 remna-interactive "
         "group-hover/sidebar:justify-start group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
     )
     h = href.rstrip("/")
@@ -1440,7 +1526,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     if link_mode:
         tg_href += "?link=1"
     telegram_block = (
-        f'<a class="btn btn-info gap-2" href="{_esc(tg_href)}">'
+        f'<a class="btn btn-info gap-2 login-auth-btn" href="{_esc(tg_href)}">'
         '<i class="fa-brands fa-telegram text-lg" aria-hidden="true"></i>'
         + ("Привязать Telegram" if link_mode else "Войти через Telegram")
         + "</a>"
@@ -1457,7 +1543,50 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     if link_mode:
         github_href += "?mode=link"
     body = f"""
-    <div class="card bg-base-100 w-full max-w-md border border-base-content/10 shadow-2xl">
+    <style>
+      .remna-login-stage {{
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        overflow: hidden;
+      }}
+      .remna-login-bg {{
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(140deg, rgba(20,18,42,0.88), rgba(68,34,120,0.8));
+      }}
+      .remna-login-bg.has-image {{
+        background-image:
+          linear-gradient(140deg, rgba(16,14,36,0.75), rgba(55,25,110,0.7)),
+          url('/admin/login/background');
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+      }}
+      .remna-login-particles {{
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }}
+      .remna-login-card {{
+        position: relative;
+        z-index: 1;
+      }}
+      .login-auth-btn {{
+        width: 13.5rem;
+        min-height: 3rem;
+        justify-content: center;
+        border-width: 0;
+        box-shadow: var(--remna-anim-shadow);
+      }}
+    </style>
+    <div class="remna-login-stage" aria-hidden="true">
+      <div id="remna-login-bg" class="remna-login-bg"></div>
+      <canvas id="remna-login-particles" class="remna-login-particles"></canvas>
+    </div>
+    <div class="remna-login-card card bg-base-100 w-full max-w-sm border border-base-content/10 shadow-2xl">
       <div class="card-body items-center gap-6 text-center">
         <h2 class="card-title justify-center text-2xl font-bold">
           <i class="fa-solid fa-right-to-bracket text-primary" aria-hidden="true"></i>
@@ -1467,15 +1596,84 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
           {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           {login_notice}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
-          <a class="btn btn-primary gap-2" href="{_esc(github_href)}">
+          <a class="btn btn-primary gap-2 login-auth-btn" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
             {"Привязать GitHub" if link_mode else "Войти через GitHub"}
           </a>
         </div>
       </div>
     </div>
+    <script>
+    (function(){{
+      var bg=document.getElementById('remna-login-bg');
+      if(bg){{
+        var probe=new Image();
+        probe.onload=function(){{bg.classList.add('has-image');}};
+        probe.src='/admin/login/background';
+      }}
+      var c=document.getElementById('remna-login-particles');
+      if(!c||!c.getContext)return;
+      var ctx=c.getContext('2d');
+      var parts=[];
+      var w=0,h=0,last=0;
+      function isDark(){{
+        var t=(document.documentElement.getAttribute('data-theme')||'').toLowerCase();
+        return t==='night'||t==='dark'||t==='black';
+      }}
+      function resize(){{
+        w=window.innerWidth||1;h=window.innerHeight||1;
+        c.width=Math.floor(w*window.devicePixelRatio);
+        c.height=Math.floor(h*window.devicePixelRatio);
+        c.style.width=w+'px';c.style.height=h+'px';
+        ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);
+      }}
+      function spawn(){{
+        parts=[];
+        var n=Math.max(24,Math.floor((w*h)/42000));
+        for(var i=0;i<n;i++){{
+          parts.push({{
+            x:Math.random()*w,
+            y:Math.random()*h,
+            r:Math.random()*2.4+0.8,
+            vx:(Math.random()-.5)*0.24,
+            vy:(Math.random()-.5)*0.24,
+            a:Math.random()*0.45+0.12
+          }});
+        }}
+      }}
+      function tick(ts){{
+        if(!last)last=ts;
+        var dt=Math.min(33,ts-last)/16.6;last=ts;
+        ctx.clearRect(0,0,w,h);
+        var dark=isDark();
+        ctx.fillStyle=dark?'rgba(255,255,255,.72)':'rgba(18,18,24,.34)';
+        for(var i=0;i<parts.length;i++){{
+          var p=parts[i];
+          p.x+=p.vx*dt;p.y+=p.vy*dt;
+          if(p.x<-6)p.x=w+6;if(p.x>w+6)p.x=-6;
+          if(p.y<-6)p.y=h+6;if(p.y>h+6)p.y=-6;
+          ctx.globalAlpha=p.a;
+          ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+        }}
+        ctx.globalAlpha=1;
+        requestAnimationFrame(tick);
+      }}
+      resize();spawn();requestAnimationFrame(tick);
+      window.addEventListener('resize',function(){{resize();spawn();}});
+    }})();
+    </script>
     """
     return _layout("Вход", body, request=request, show_nav=False)
+
+
+@router.get("/login/background")
+async def admin_login_background() -> Response:
+    for p in _LOGIN_BG_CANDIDATES:
+        if p.exists() and p.is_file():
+            suffix = p.suffix.lower()
+            media = "image/png" if suffix == ".png" else "image/jpeg"
+            return FileResponse(path=str(p), media_type=media)
+    return Response(status_code=404)
 
 
 @router.get("/login/telegram/start")

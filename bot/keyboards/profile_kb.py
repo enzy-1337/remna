@@ -30,6 +30,5 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:info"),
     )
     if is_admin:
-        b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
         b.row(InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:panel"))
     return b.as_markup()
