@@ -560,6 +560,28 @@ def _head_common(title: str, *, favicon_url: str | None = None, background_url: 
       transform: translateY(-1px);
       box-shadow: var(--remna-anim-shadow);
     }}
+    .remna-page .btn:not(.btn-square):not(.btn-circle) {{
+      position: relative;
+      isolation: isolate;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      text-rendering: geometricPrecision;
+      -webkit-font-smoothing: antialiased;
+      box-shadow: 0 10px 24px -20px color-mix(in oklab, var(--bc) 34%, transparent);
+      transition:
+        transform var(--remna-anim-fast) var(--remna-anim-ease),
+        box-shadow var(--remna-anim-fast) var(--remna-anim-ease),
+        border-color var(--remna-anim-fast) var(--remna-anim-ease),
+        background-color var(--remna-anim-fast) var(--remna-anim-ease),
+        color var(--remna-anim-fast) var(--remna-anim-ease);
+    }}
+    .remna-page .btn:not(.btn-square):not(.btn-circle):hover {{
+      transform: translateY(-1px);
+      box-shadow: 0 14px 30px -22px color-mix(in oklab, var(--bc) 42%, transparent);
+    }}
+    .remna-page .btn:not(.btn-square):not(.btn-circle):active {{
+      transform: translateY(0);
+    }}
     .remna-page {{
       position: relative;
     }}
@@ -798,6 +820,23 @@ def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     </a></div>"""
 
 
+def _sidebar_profile_item(href: str, label: str, avatar_markup: str, cur: str) -> str:
+    cls = _nav_link_class(href, cur)
+    return f"""<div class="flex w-full justify-start overflow-hidden">
+    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden" title="{_esc(label)}">
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full">{avatar_markup}</span>
+      <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
+    </a></div>"""
+
+
+def _sidebar_logout_item() -> str:
+    return """<form method="post" action="/admin/logout" class="flex w-full justify-start overflow-hidden">
+    <button type="submit" class="box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 text-sm font-medium no-underline ring-1 ring-inset ring-transparent text-error/85 transition-colors duration-200 remna-interactive w-9 max-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden hover:bg-error/10 hover:text-error" title="Выйти" aria-label="Выйти">
+      <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="fa-solid fa-right-from-bracket text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
+      <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">Выйти</span>
+    </button></form>"""
+
+
 def _mob_nav_cls(href: str, cur: str) -> str:
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -867,16 +906,9 @@ def _layout(
       </nav>
       <div class="mt-auto flex w-full flex-col items-center pt-2 pb-2 group-hover/sidebar:items-stretch">
         <div class="mx-[3px] mb-2 h-[3px] rounded-full bg-base-content/10"></div>
-        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden px-[8px] group-hover/sidebar:justify-between">
-          <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
-            {sidebar_avatar_inner}
-          </a>
-          <a href="/admin/profile" class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
-          <form method="post" action="/admin/logout" class="nav-label pointer-events-none flex max-w-0 shrink-0 grow-0 basis-0 justify-center overflow-hidden opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">
-            <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
-              <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
-            </button>
-          </form>
+        <div class="flex w-full flex-col gap-[5px] overflow-hidden px-[10px]">
+          {_sidebar_profile_item("/admin/profile", user_label, sidebar_avatar_inner, cur)}
+          {_sidebar_logout_item()}
         </div>
       </div>
     </aside>"""
