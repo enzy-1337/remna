@@ -820,21 +820,20 @@ def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     </a></div>"""
 
 
-def _sidebar_profile_item(href: str, label: str, avatar_markup: str, cur: str) -> str:
-    cls = _nav_link_class(href, cur)
+def _sidebar_footer_profile(href: str, label: str, avatar_markup: str, cur: str) -> str:
+    pcls = _nav_link_class(href, cur)
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden" title="{_esc(label)}">
-      <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full">{avatar_markup}</span>
-      <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
-    </a></div>"""
-
-
-def _sidebar_logout_item() -> str:
-    return """<form method="post" action="/admin/logout" class="flex w-full justify-start overflow-hidden">
-    <button type="submit" class="box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 text-sm font-medium no-underline ring-1 ring-inset ring-transparent text-error/85 transition-colors duration-200 remna-interactive w-9 max-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden hover:bg-error/10 hover:text-error" title="Выйти" aria-label="Выйти">
-      <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="fa-solid fa-right-from-bracket text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
-      <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">Выйти</span>
-    </button></form>"""
+    <div class="{pcls} relative w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
+      <a href="{href}" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full" title="{_esc(label)}">
+        {avatar_markup}
+      </a>
+      <a href="{href}" class="nav-label pointer-events-none absolute left-1/2 top-1/2 min-w-0 max-w-0 -translate-x-1/2 -translate-y-1/2 truncate text-sm font-semibold text-base-content no-underline opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100 hover:text-primary" title="{_esc(label)}">{_esc(label)}</a>
+      <form method="post" action="/admin/logout" class="nav-label pointer-events-none ml-auto flex max-w-0 shrink-0 overflow-hidden opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
+        <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
+          <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div></div>"""
 
 
 def _mob_nav_cls(href: str, cur: str) -> str:
@@ -905,10 +904,9 @@ def _layout(
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
       <div class="mt-auto flex w-full flex-col items-center pt-2 pb-2 group-hover/sidebar:items-stretch">
-        <div class="mx-[3px] mb-2 h-[3px] rounded-full bg-base-content/10"></div>
+        <div class="mx-[3px] mb-2 h-[1px] rounded-full bg-base-content/10"></div>
         <div class="flex w-full flex-col gap-[5px] overflow-hidden px-[10px]">
-          {_sidebar_profile_item("/admin/profile", user_label, sidebar_avatar_inner, cur)}
-          {_sidebar_logout_item()}
+          {_sidebar_footer_profile("/admin/profile", user_label, sidebar_avatar_inner, cur)}
         </div>
       </div>
     </aside>"""
@@ -5511,6 +5509,10 @@ async def admin_settings(request: Request) -> HTMLResponse:
         document.querySelectorAll('[data-env-panel]').forEach(function(p){
           p.classList.toggle('hidden', p.getAttribute('data-env-panel')!==id);
         });
+        var bgBlock=document.getElementById('env-admin-bg-block');
+        if(bgBlock){
+          bgBlock.classList.toggle('hidden', id!=='panel');
+        }
         document.querySelectorAll('[data-env-tab]').forEach(function(b){
           var on=b.getAttribute('data-env-tab')===id;
           b.classList.toggle('btn-primary',on);
@@ -5607,12 +5609,40 @@ async def admin_settings(request: Request) -> HTMLResponse:
         if(src.value==='asset' && hidden && hidden.value)showPreview('/assets/'+encodeURIComponent(hidden.value));
       });
       syncMode();
+      var first=document.querySelector('[data-env-tab].btn-primary')||document.querySelector('[data-env-tab]');
+      if(first){
+        show(first.getAttribute('data-env-tab'));
+      }
     })();
     </script>"""
     body = f"""
     <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <style>
+          .tabs-env {{
+            border-color: color-mix(in oklab, var(--bc) 8%, transparent);
+            background: color-mix(in oklab, var(--b1) 92%, #0b1229 8%);
+          }}
+          .tabs-env .card-body {{
+            gap: 1rem;
+          }}
+          .tabs-env [role="tablist"] {{
+            border-color: color-mix(in oklab, var(--bc) 8%, transparent);
+          }}
+          .tabs-env [data-env-tab].btn-ghost {{
+            color: color-mix(in oklab, var(--bc) 72%, transparent);
+            background: color-mix(in oklab, var(--b2) 65%, transparent);
+            border: 1px solid color-mix(in oklab, var(--bc) 9%, transparent);
+          }}
+          .tabs-env [data-env-tab].btn-primary {{
+            background: color-mix(in oklab, var(--p) 78%, var(--b1) 22%);
+            border-color: color-mix(in oklab, var(--p) 46%, transparent);
+            box-shadow: 0 8px 20px -18px color-mix(in oklab, var(--p) 40%, transparent);
+          }}
+          .tabs-env .env-soft-card {{
+            border-color: color-mix(in oklab, var(--bc) 8%, transparent);
+            background: color-mix(in oklab, var(--b2) 22%, transparent);
+          }}
           .remna-env-toggle {{
             position: relative;
             display: inline-flex;
@@ -5665,7 +5695,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
           {''.join(tab_buttons)}
         </div>
         <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
-          <div class="rounded-2xl border border-base-content/10 bg-base-200/35 p-4">
+          <div id="env-admin-bg-block" class="env-soft-card rounded-2xl border p-4">
             <div class="flex flex-col gap-4">
               <div class="flex items-center gap-2">
                 <i class="fa-solid fa-image text-primary" aria-hidden="true"></i>
