@@ -8,6 +8,7 @@ import hmac
 import html
 import json
 import time
+from calendar import monthrange
 from hashlib import sha256
 from base64 import urlsafe_b64encode
 from collections import defaultdict
@@ -93,6 +94,14 @@ _RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
 router = APIRouter(tags=["web-admin"])
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _add_calendar_months(dt: datetime, months: int) -> datetime:
+    shifted = (dt.year * 12 + (dt.month - 1)) + months
+    year = shifted // 12
+    month = shifted % 12 + 1
+    day = min(dt.day, monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
 
 
 def _fmt_dt_msk(dt: datetime | None) -> str:
@@ -506,9 +515,8 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
 
 def _nav_link_class(href: str, cur: str) -> str:
     base = (
-        "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 "
-        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200 "
-        "group-hover/sidebar:gap-2 group-hover/sidebar:px-2"
+        "box-border flex h-9 min-h-9 min-w-0 w-full shrink-0 items-center justify-start gap-2 rounded-xl px-0 "
+        "text-sm font-medium no-underline ring-2 ring-inset ring-transparent transition-colors duration-200"
     )
     h = href.rstrip("/")
     c = cur.rstrip("/") or "/"
@@ -525,7 +533,7 @@ def _nav_link_class(href: str, cur: str) -> str:
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
     cls = _nav_link_class(href, cur)
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 overflow-hidden group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0">
+    <a href="{href}" class="{cls} overflow-hidden">
       <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
       <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
@@ -577,14 +585,14 @@ def _layout(
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-3 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
-      <div class="flex w-full shrink-0 flex-col items-center gap-0 py-3 group-hover/sidebar:flex-row group-hover/sidebar:items-center group-hover/sidebar:gap-2">
+    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-2 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
+      <div class="flex w-full shrink-0 items-center justify-start gap-2 py-3">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}
         </span>
         <span class="nav-label pointer-events-none max-h-0 min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
-      <nav class="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-0 py-1 group-hover/sidebar:items-stretch">
+      <nav class="flex min-h-0 flex-1 flex-col items-start gap-1 overflow-y-auto overflow-x-hidden px-0 py-1">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
@@ -595,9 +603,9 @@ def _layout(
         {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
         {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
       </nav>
-      <div class="mt-auto flex w-full flex-col items-center border-t border-base-content/10 py-3 group-hover/sidebar:items-stretch">
-        <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden group-hover/sidebar:justify-between">
-          <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-2 ring-base-100 transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
+      <div class="mt-auto flex w-full flex-col items-start border-t border-base-content/10 py-3">
+        <div class="flex w-full min-w-0 items-center justify-start gap-1 overflow-hidden">
+          <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
             <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
           </a>
           <a href="/admin/profile" class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
@@ -1003,7 +1011,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',days_ok:'Дни к подписке добавлены.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -2070,15 +2078,15 @@ async def admin_ticket_user_add_balance(
     return RedirectResponse(f"/admin/tickets/{ticket_id}?n=bal_ok", status_code=303)
 
 
-@router.post("/tickets/{ticket_id}/user/add-days")
-async def admin_ticket_user_add_days(
-    request: Request, ticket_id: int, subscription_id: int = Form(...), days: int = Form(...)
+@router.post("/tickets/{ticket_id}/user/add-months")
+async def admin_ticket_user_add_months(
+    request: Request, ticket_id: int, subscription_id: int = Form(...), months: int = Form(...)
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    if days < 1 or days > 3650:
-        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Дней: от 1 до 3650')}", status_code=303)
+    if months < 1 or months > 120:
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Месяцев: от 1 до 120')}", status_code=303)
     settings = get_settings()
     async with await _session() as session:
         uid = await _ticket_owner_user_id(session, ticket_id)
@@ -2093,7 +2101,7 @@ async def admin_ticket_user_add_days(
         ).scalar_one_or_none()
         if sub is None:
             return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
-        sub.expires_at = sub.expires_at + timedelta(days=days)
+        sub.expires_at = _add_calendar_months(sub.expires_at, months)
         pl = sub.plan
         if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
             bp = await get_base_subscription_plan(session)
@@ -2113,7 +2121,7 @@ async def admin_ticket_user_add_days(
             except RemnaWaveError:
                 pass
         await session.commit()
-    return RedirectResponse(f"/admin/tickets/{ticket_id}?n=days_ok", status_code=303)
+    return RedirectResponse(f"/admin/tickets/{ticket_id}?n=months_ok", status_code=303)
 
 
 @router.post("/tickets/{ticket_id}/user/subscription/auto-renew")
@@ -2950,11 +2958,18 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           +'<button type="submit" class="btn btn-primary btn-sm">Пополнить</button>'
           +'</form>';
         if(s&&s.id){{
-          html+='<form method="post" action="'+base+'/add-days" class="flex flex-wrap gap-2 items-end mt-2">'
+          html+='<form method="post" action="'+base+'/add-months" class="flex flex-wrap gap-2 items-end mt-2">'
             +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
-            +'<label class="form-control"><span class="label-text text-xs">Подписка +дн.</span>'
-            +'<input type="number" name="days" min="1" max="3650" class="input input-bordered input-sm w-24" value="30" required/></label>'
-            +'<button type="submit" class="btn btn-outline btn-sm">Добавить дни</button>'
+            +'<label class="form-control"><span class="label-text text-xs">Продление (мес.)</span>'
+            +'<input type="number" name="months" min="1" max="120" class="input input-bordered input-sm w-24" value="1" required/></label>'
+            +'<button type="submit" class="btn btn-outline btn-sm">Продлить</button>'
+            +'<div class="w-full flex items-center gap-1 text-xs opacity-80">'
+            +'<span>Быстро:</span>'
+            +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=1">1</button>'
+            +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=3">3</button>'
+            +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=6">6</button>'
+            +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=12">12</button>'
+            +'</div>'
             +'</form>';
           var ar=!!s.auto_renew;
           var nxt=ar?'0':'1';
@@ -5280,7 +5295,7 @@ def _admin_tariff_transition_card(settings: Settings, tdays: str) -> str:
             fee = settings.billing_transition_fee_percent
             tip = f"""
             <div class="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm">
-              <p><b>Осталось дней:</b> {_esc(d)}</p>
+              <p><b>Остаток срока:</b> {_esc(d)}</p>
               <p>База месяца: <b>{_esc(base)} ₽</b> · комиссия: <b>{_esc(fee)}%</b></p>
               <p class="text-lg font-semibold mt-2">Рекомендуемый кредит на баланс: <span class="text-primary">{_esc(cred)} ₽</span></p>
               <p class="text-xs opacity-70 mt-1">Только для ориентира, автоначисления нет.</p>
@@ -5292,9 +5307,9 @@ def _admin_tariff_transition_card(settings: Settings, tdays: str) -> str:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-calculator text-primary mr-2" aria-hidden="true"></i>Калькулятор перехода с legacy</h3>
-        <p class="text-sm opacity-80">Остаток старой подписки в днях → сумма на баланс после вычета комиссии (переменные <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>, <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>).</p>
+        <p class="text-sm opacity-80">Остаток старой подписки по сроку → сумма на баланс после вычета комиссии (переменные <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>, <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>).</p>
         <form method="get" class="flex flex-wrap items-end gap-2">
-          <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Осталось дней</span>
+          <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Остаток срока</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="tdays" value="{_esc((tdays or '').strip())}" placeholder="30"/></label>
           <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Посчитать</button>
         </form>
@@ -5349,7 +5364,7 @@ def _admin_plan_form(
             <input type="text" name="name" id="f_name" value="{_esc(nm)}" {name_extra} /></label>
           <p class="text-xs opacity-70 -mt-2">Имена «{_esc(BASE_SUBSCRIPTION_PLAN_NAME)}» и «Триал» нельзя переименовать (системные).</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label class="form-control w-full"><span class="label-text font-medium">Срок, дней</span>
+            <label class="form-control w-full"><span class="label-text font-medium">Срок</span>
               <input class="input input-bordered input-sm h-9 min-h-9" name="duration_days" id="f_duration_days" type="number" min="1" value="{_esc(dd)}" /></label>
             <label class="form-control w-full"><span class="label-text font-medium">Цена, ₽</span>
               <input class="input input-bordered input-sm h-9 min-h-9" name="price_rub" id="f_price_rub" value="{_esc(pr)}" /></label>
@@ -5370,7 +5385,7 @@ def _admin_plan_form(
           <label class="form-control w-full"><span class="label-text font-medium">ГБ в пакете / месяц (для пакетного)</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="monthly_gb_limit" id="f_monthly_gb" value="{_esc(mgbl)}" placeholder="—" /></label>
           <div class="rounded-xl border border-base-content/10 bg-base-200/60 p-4 text-sm">
-            <p class="font-semibold mb-1">Сравнение с pay-per-use за 30 дней</p>
+            <p class="font-semibold mb-1">Сравнение с pay-per-use за период 30</p>
             <p class="text-xs opacity-70 mb-2">Оценка по полям выше: {daily} ₽/день за устройство, {gbstep} ₽ за шаг ГБ, +{mobx} ₽/ГБ «мобильный интернет» (оценка моб. трафика — вручную).</p>
             <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Моб. интернет, ГБ (оценка)</span>
               <input class="input input-bordered input-sm h-9 min-h-9" type="number" min="0" id="f_ppu_mobile_gb" value="0" /></label>
@@ -5458,8 +5473,8 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>Тарифы</h2>"
         "<a class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' href='/admin/tariffs/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Новый тариф</a></div>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'>"
-        "<thead><tr><th>Название</th><th>Дней</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
-        "<th title='Эквивалент pay-per-use, 30 дн.'>≈ PPU 30д</th><th>Сорт.</th></tr></thead>"
+        "<thead><tr><th>Название</th><th>Срок</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
+        "<th title='Эквивалент pay-per-use за период 30'>≈ PPU 30</th><th>Сорт.</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"10\" class=\"opacity-50\">Нет тарифов</td></tr>'}</tbody></table></div>"
         "<p class='text-xs opacity-60'>Строка ведёт в редактирование. «Базовый» и «Триал» нельзя удалить и переименовать. "
         "Кнопки тарифов в боте строятся из БД при каждом открытии списка; при снятии с продажи или удалении устаревшее сообщение "

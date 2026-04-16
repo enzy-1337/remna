@@ -1,9 +1,10 @@
-"""Админ-панель: пользователи, поиск, рефералы, подписка (вкл/выкл, +дни)."""
+"""Админ-панель: пользователи, поиск, рефералы, управление подпиской."""
 
 from __future__ import annotations
 
 import logging
 import math
+from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
@@ -62,6 +63,14 @@ router = Router(name="admin")
 PAGE_SIZE = 8
 _INT32_MAX = 2_147_483_647
 _INT64_MAX = 9_223_372_036_854_775_807
+
+
+def _add_calendar_months(dt: datetime, months: int) -> datetime:
+    shifted = (dt.year * 12 + (dt.month - 1)) + months
+    year = shifted // 12
+    month = shifted % 12 + 1
+    day = min(dt.day, monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
 
 
 def _is_admin(tg_id: int | None) -> bool:
@@ -595,7 +604,7 @@ async def _build_user_card(
             )
         b.row(
             InlineKeyboardButton(
-                text="➕ Добавить дни",
+                text="⏳ Продлить подписку",
                 callback_data=f"admin:ad:{u.id}:{sub.id}",
             )
         )
@@ -684,7 +693,7 @@ async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> N
     lines: list[str | object] = [
         "🧮 " + bold("Калькулятор перехода с legacy"),
         "",
-        plain("Сумма на баланс (ориентир): (остаток_дней / 30) × ")
+        plain("Сумма на баланс (ориентир): (остаток_срока / 30) × ")
         + bold(str(base))
         + plain(" ₽ × (1 − ")
         + bold(str(fee))
@@ -693,20 +702,20 @@ async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> N
     ]
     for d in sample_days:
         c = transition_credit_for_remaining_legacy_rub(s, remaining_days=d)
-        lines.append(plain(f"{d} дн. → ") + bold(str(c)) + plain(" ₽"))
+        lines.append(plain(f"{d} → ") + bold(str(c)) + plain(" ₽"))
     root = (s.public_site_url or "").strip().rstrip("/")
     if root:
         lines.extend(
             [
                 "",
-                plain("Любое число дней: раздел "),
+                plain("Любое значение: раздел "),
                 link("Тарифы", f"{root}/admin/tariffs"),
                 plain(" в web-admin."),
             ]
         )
     else:
         lines.append(
-            join_lines("", plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «осталось дней»."))
+            join_lines("", plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «остаток срока»."))
         )
     await cq.answer()
     kb = InlineKeyboardBuilder()
@@ -1106,6 +1115,20 @@ def _parse_user_sub(callback_data: str) -> tuple[int, int] | None:
         return None
 
 
+def _admin_months_quick_markup(user_id: int, sub_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="1 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:1"),
+        InlineKeyboardButton(text="3 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:3"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="6 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:6"),
+        InlineKeyboardButton(text="12 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:12"),
+    )
+    kb.row(InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data="admin:noop"))
+    return kb.as_markup()
+
+
 @router.callback_query(F.data.startswith("admin:sd:"))
 async def cb_admin_sub_disable(
     cq: CallbackQuery,
@@ -1196,7 +1219,7 @@ async def cb_admin_sub_enable(
 
 
 @router.callback_query(F.data.startswith("admin:ad:"))
-async def cb_admin_add_days_start(
+async def cb_admin_add_months_start(
     cq: CallbackQuery,
     session: AsyncSession,
     state: FSMContext,
@@ -1217,26 +1240,90 @@ async def cb_admin_add_days_start(
     if sub is None or sub.user_id != user_id:
         await cq.answer("Подписка не найдена", show_alert=True)
         return
-    await state.set_state(AdminSubscriptionStates.waiting_add_days)
+    await state.set_state(AdminSubscriptionStates.waiting_add_months)
     await cq.answer()
     if cq.message and cq.bot:
         chat_id = cq.message.chat.id
         await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
         sent = await cq.bot.send_message(
             chat_id,
-            esc("Введите целое число дней для продления подписки (1-3650)."),
+            esc("Введите целое число месяцев для продления подписки (1-120)."),
+            reply_markup=_admin_months_quick_markup(user_id, sub_id),
         )
         await state.update_data(
-            admin_add_days_sub_id=sub_id,
-            admin_add_days_user_id=user_id,
-            admin_add_days_prompt_mid=sent.message_id,
+            admin_add_months_sub_id=sub_id,
+            admin_add_months_user_id=user_id,
+            admin_add_months_prompt_mid=sent.message_id,
         )
     else:
-        await state.update_data(admin_add_days_sub_id=sub_id, admin_add_days_user_id=user_id)
+        await state.update_data(admin_add_months_sub_id=sub_id, admin_add_months_user_id=user_id)
 
 
-@router.message(StateFilter(AdminSubscriptionStates.waiting_add_days), F.text)
-async def msg_admin_add_days(
+@router.callback_query(F.data.startswith("admin:am:"))
+async def cb_admin_add_months_quick(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) < 5:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[2])
+        sub_id = int(parts[3])
+        months = int(parts[4])
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    if months < 1 or months > 120:
+        await cq.answer("Допустимо от 1 до 120.", show_alert=True)
+        return
+
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == sub_id, Subscription.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None:
+        await cq.answer("Подписка не найдена", show_alert=True)
+        return
+
+    sub.expires_at = _add_calendar_months(sub.expires_at, months)
+    pl = sub.plan
+    if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
+    u = await session.get(User, user_id)
+    settings = get_settings()
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
+        except RemnaWaveError as e:
+            logger.warning("admin quick add months RW failed: %s", e)
+    await session.commit()
+    await cq.answer(f"Продлено на {months} мес.")
+    await _render_user_card(cq, session, user_id=user_id)
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_add_months), F.text)
+async def msg_admin_add_months(
     message: Message,
     session: AsyncSession,
     state: FSMContext,
@@ -1249,9 +1336,9 @@ async def msg_admin_add_days(
         await state.clear()
         return
     data = await state.get_data()
-    sub_id = data.get("admin_add_days_sub_id")
-    user_id = data.get("admin_add_days_user_id")
-    prompt_mid = data.get("admin_add_days_prompt_mid")
+    sub_id = data.get("admin_add_months_sub_id")
+    user_id = data.get("admin_add_months_user_id")
+    prompt_mid = data.get("admin_add_months_prompt_mid")
 
     async def _del_admin_input() -> None:
         if message.bot:
@@ -1264,12 +1351,12 @@ async def msg_admin_add_days(
     raw = (message.text or "").strip()
     if not raw.isdigit():
         await _del_admin_input()
-        await message.answer("Нужно целое число дней.")
+        await message.answer("Нужно целое число.")
         return
-    days = int(raw)
-    if days < 1 or days > 3650:
+    months = int(raw)
+    if months < 1 or months > 120:
         await _del_admin_input()
-        await message.answer("Допустимо от 1 до 3650 дней.")
+        await message.answer("Допустимо от 1 до 120.")
         return
 
     sub = (
@@ -1292,7 +1379,7 @@ async def msg_admin_add_days(
         await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
     await state.clear()
 
-    sub.expires_at = sub.expires_at + timedelta(days=days)
+    sub.expires_at = _add_calendar_months(sub.expires_at, months)
     pl = sub.plan
     if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
         bp = await get_base_subscription_plan(session)
@@ -1313,19 +1400,19 @@ async def msg_admin_add_days(
                 status="ACTIVE",
             )
         except RemnaWaveError as e:
-            logger.warning("admin add days RW failed: %s", e)
+            logger.warning("admin add months RW failed: %s", e)
 
     await session.commit()
     viewer = message.from_user.id if message.from_user else None
     built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     if built is None or message.bot is None:
-        await message.answer(f"Добавлено дней: {days}")
+        await message.answer(f"Подписка продлена на: {months} мес.")
         return
     cap, kb = built
     await send_profile_screen(
         message.bot,
         chat_id=message.chat.id,
-        caption=join_lines(plain(f"✅ +{days} дн. к подписке"), "", cap),
+        caption=join_lines(plain(f"✅ Подписка продлена на {months} мес."), "", cap),
         reply_markup=kb,
         settings=settings,
         delete_message=None,

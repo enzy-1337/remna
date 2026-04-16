@@ -151,12 +151,6 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "false — скрыть «Активировать триал» для всех пользователей.",
             ),
             (
-                "TRIAL_DURATION_DAYS",
-                "Длительность триала (дней)",
-                lambda s: str(s.trial_duration_days),
-                "Сколько дней даётся пробный период.",
-            ),
-            (
                 "TRIAL_TRAFFIC_GB",
                 "Трафик триала (ГБ)",
                 lambda s: str(s.trial_traffic_gb),
@@ -200,9 +194,9 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
             ),
             (
                 "BILLING_PAYG_SUBSCRIPTION_DAYS",
-                "Срок PAYG-подписки (дней)",
+                "Срок PAYG-подписки",
                 lambda s: str(s.billing_payg_subscription_days),
-                "На сколько дней выдаётся/продлевается PAYG-подписка (по умолчанию 365).",
+                "На сколько выдаётся/продлевается PAYG-подписка (по умолчанию 365).",
             ),
             (
                 "BILLING_FIRST_TOPUP_WELCOME_ENABLED",
