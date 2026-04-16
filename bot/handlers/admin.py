@@ -85,7 +85,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:section:users"),
         InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"),
     )
-    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
+    b.row(InlineKeyboardButton(text="👨‍💼 Админ-профиль", callback_data="admin:section:profile"))
     b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
@@ -125,6 +125,14 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
     )
     if not (s.public_site_url or "").strip():
         b.row(InlineKeyboardButton(text="ℹ️ Web-Admin не настроен", callback_data="admin:noop"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
+    return b.as_markup()
+
+
+def _admin_profile_section_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
+    b.row(InlineKeyboardButton(text="🔐 Сбросить Google Auth", callback_data="admin:profile:totp_reset"))
     b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
     return b.as_markup()
 
@@ -352,6 +360,55 @@ async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None) -> Non
             plain("Выберите действие."),
         ),
         reply_markup=_admin_users_section_keyboard(),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "admin:section:profile")
+async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "👨‍💼 " + bold("Админ-профиль"),
+            "",
+            plain("Управление GitHub-входом и 2FA для web-admin."),
+        ),
+        reply_markup=_admin_profile_section_keyboard(),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "admin:profile:totp_reset")
+async def cb_admin_profile_totp_reset(
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    if not db_user.web_admin_totp_enabled and not (db_user.web_admin_totp_secret or "").strip():
+        await cq.answer("Google Auth уже отключен.", show_alert=True)
+        return
+    db_user.web_admin_totp_enabled = False
+    db_user.web_admin_totp_secret = None
+    await session.commit()
+    await cq.answer("Google Auth сброшен.")
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "👨‍💼 " + bold("Админ-профиль"),
+            "",
+            plain("Google Auth для web-admin отключен."),
+        ),
+        reply_markup=_admin_profile_section_keyboard(),
         settings=get_settings(),
     )
 

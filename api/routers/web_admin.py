@@ -5329,7 +5329,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     </details>
     {env_tabs_script}
     <script>
-    (function(){
+    (function(){{
       var src=document.getElementById('bg-source');
       var url=document.getElementById('bg-url');
       var pick=document.getElementById('bg-asset-picker');
@@ -5337,35 +5337,35 @@ async def admin_settings(request: Request) -> HTMLResponse:
       var img=document.getElementById('bg-preview-img');
       var empty=document.getElementById('bg-preview-empty');
       var btn=document.getElementById('bg-preview-btn');
-      function showPreview(v){
+      function showPreview(v){{
         v=(v||'').trim();
-        if(v){
+        if(v){{
           img.src=v; img.classList.remove('hidden'); empty.classList.add('hidden');
-        }else{
+        }}else{{
           img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='Сейчас используется фиолетовый фон по умолчанию.';
-        }
-      }
-      function syncMode(){
+        }}
+      }}
+      function syncMode(){{
         var m=(src&&src.value)||'default';
         if(pick)pick.classList.toggle('hidden', m!=='asset');
         if(url)url.closest('label').classList.toggle('opacity-60', m!=='url');
-      }
-      if(btn)btn.addEventListener('click', function(){ if(src&&src.value==='url')showPreview(url&&url.value||''); });
-      document.querySelectorAll('input[name="ADMIN_BACKGROUND_ASSET_PICK"]').forEach(function(r){
-        r.addEventListener('change', function(){
+      }}
+      if(btn)btn.addEventListener('click', function(){{ if(src&&src.value==='url')showPreview(url&&url.value||''); }});
+      document.querySelectorAll('input[name="ADMIN_BACKGROUND_ASSET_PICK"]').forEach(function(r){{
+        r.addEventListener('change', function(){{
           if(hidden)hidden.value=r.value||'';
           if(src)src.value='asset';
           syncMode();
           showPreview('/assets/'+encodeURIComponent(r.value||''));
-        });
-      });
-      if(src)src.addEventListener('change', function(){
+        }});
+      }});
+      if(src)src.addEventListener('change', function(){{
         syncMode();
         if(src.value==='default')showPreview('');
         if(src.value==='asset' && hidden && hidden.value)showPreview('/assets/'+encodeURIComponent(hidden.value));
-      });
+      }});
       syncMode();
-    })();
+    }})();
     </script>
     """
     return _layout("Web-admin Settings", body, request=request)
