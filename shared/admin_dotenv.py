@@ -427,6 +427,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "",
             ),
             (
+                "ADMIN_LOG_TOPIC_LOGIN",
+                "Тема: входы в web-admin",
+                lambda s: _env_opt_int(s.admin_log_topic_login),
+                "",
+            ),
+            (
                 "ADMIN_LOG_TOPIC_BACKUPS",
                 "Тема: бэкапы",
                 lambda s: _env_opt_int(s.admin_log_topic_backups),

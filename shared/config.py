@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     admin_log_topic_promo: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_PROMO")
     admin_log_topic_devices: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_DEVICES")
     admin_log_topic_support: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_SUPPORT")
+    admin_log_topic_login: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_LOGIN")
     admin_log_topic_backups: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_BACKUPS")
     admin_log_topic_reports: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_REPORTS")
     admin_log_topic_boot: int | None = Field(
@@ -587,6 +588,7 @@ class Settings(BaseSettings):
         "admin_log_topic_promo",
         "admin_log_topic_devices",
         "admin_log_topic_support",
+        "admin_log_topic_login",
         "admin_log_topic_backups",
         "admin_log_topic_reports",
         "admin_log_topic_boot",
@@ -651,6 +653,7 @@ class Settings(BaseSettings):
             AdminLogTopic.PROMO: self.admin_log_topic_promo,
             AdminLogTopic.DEVICES: self.admin_log_topic_devices,
             AdminLogTopic.SUPPORT: self.admin_log_topic_support,
+            AdminLogTopic.LOGIN: self.admin_log_topic_login,
             AdminLogTopic.BACKUPS: self.admin_log_topic_backups,
             AdminLogTopic.REPORTS: self.admin_log_topic_reports,
             AdminLogTopic.BOOT: self.admin_log_topic_boot,

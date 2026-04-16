@@ -17,6 +17,7 @@ class AdminLogTopic(str, Enum):
     PROMO = "promo"
     DEVICES = "devices"
     SUPPORT = "support"
+    LOGIN = "login"
     BACKUPS = "backups"
     REPORTS = "reports"
     BOOT = "boot"

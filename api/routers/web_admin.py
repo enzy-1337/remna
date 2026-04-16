@@ -1318,24 +1318,24 @@ async def _notify_admin_login(settings: Settings, *, user: User, method_kind: st
         return
     profile_href = _admin_profile_link_for_notify(settings, user)
     display = (user.first_name or user.username or f"tg:{user.telegram_id}").strip()
-    username = f"@{user.username}" if user.username else "без username"
-    profile_line = (
-        f'<a href="{html.escape(profile_href, quote=True)}">Профиль</a>'
+    username = f"@{user.username}" if user.username else "—"
+    profile_ref = (
+        f'<a href="{html.escape(profile_href, quote=True)}">#{int(user.id)}</a>'
         if profile_href
-        else "Профиль"
+        else f"#{int(user.id)}"
     )
+    when = datetime.now(UTC).astimezone(_MSK_TZ).strftime("%H:%M МСК %d.%m.%Y")
     text = (
         "🔐 <b>Вход в web-admin</b>\n"
-        f"Администратор: <b>{html.escape(display)}</b> ({html.escape(username)})\n"
+        f"Администратор: {profile_ref} · {html.escape(display)} · <code>{int(user.telegram_id)}</code> · {html.escape(username)}\n"
         f"Способ: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
-        f"{profile_line}\n"
-        f"Время: <b>{html.escape(_fmt_dt_msk(datetime.now(UTC)))}</b>"
+        f"Время: <b>{html.escape(when)}</b>"
     )
     await send_telegram_message(
         chat_id,
         text,
         parse_mode="HTML",
-        message_thread_id=settings.admin_log_thread_for(AdminLogTopic.GENERAL),
+        message_thread_id=settings.admin_log_thread_for(AdminLogTopic.LOGIN),
         settings=settings,
     )
 
