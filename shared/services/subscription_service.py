@@ -445,6 +445,8 @@ async def add_paid_device_slot(
     settings: Settings,
     idempotency_key: str | None = None,
 ) -> tuple[bool, str]:
+    if settings.billing_v2_enabled and user.billing_mode == "hybrid":
+        return False, plain("Для hybrid-пользователей покупка дополнительного устройства недоступна.")
     if idempotency_key:
         existing_txn = (
             await session.execute(

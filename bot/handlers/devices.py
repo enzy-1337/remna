@@ -74,6 +74,7 @@ def _devices_kb(
     *,
     slots: int,
     price_label: str,
+    can_buy_slot: bool,
     ctx: str,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
@@ -84,7 +85,7 @@ def _devices_kb(
                 callback_data=f"dev:rw:{i}:{ctx}",
             )
         )
-    if slots < MAX_DEVICES:
+    if can_buy_slot and slots < MAX_DEVICES:
         b.row(
             InlineKeyboardButton(
                 text=f"➕ Добавить слот ({price_label} ₽)",
@@ -141,6 +142,7 @@ async def _render_devices(
     denom_unlimited = is_bot_admin or (uinf is not None and is_rw_hwid_devices_unlimited(uinf))
     denom = bold("∞") if denom_unlimited else bold(str(sub.devices_count))
     slots_line = plain("📟 Слоты: ") + bold(str(used)) + plain(" / ") + denom
+    can_buy_slot = not (settings.billing_v2_enabled and user.billing_mode == "hybrid")
 
     lines = join_lines(
         "🖥 " + bold("Устройства"),
@@ -150,7 +152,13 @@ async def _render_devices(
         plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
     )
     price = str(settings.extra_device_price_rub)
-    return lines, _devices_kb(devices, slots=sub.devices_count, price_label=price, ctx=ctx)
+    return lines, _devices_kb(
+        devices,
+        slots=sub.devices_count,
+        price_label=price,
+        can_buy_slot=can_buy_slot,
+        ctx=ctx,
+    )
 
 
 async def _open_devices_screen(
@@ -224,9 +232,12 @@ async def cb_dev_add(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    settings = get_settings()
+    if settings.billing_v2_enabled and db_user.billing_mode == "hybrid":
+        await cq.answer("Для hybrid-пользователей покупка дополнительного слота отключена.", show_alert=True)
+        return
     parts = cq.data.split(":")
     ctx = parts[2] if len(parts) > 2 else CTX_MAIN
-    settings = get_settings()
     token = secrets.token_urlsafe(8)
     await state.update_data(
         dev_add_confirm_token=token,
@@ -262,6 +273,10 @@ async def cb_dev_add_confirm(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    settings = get_settings()
+    if settings.billing_v2_enabled and db_user.billing_mode == "hybrid":
+        await cq.answer("Для hybrid-пользователей покупка дополнительного слота отключена.", show_alert=True)
+        return
     parts = cq.data.split(":")
     if len(parts) < 4:
         await cq.answer("Ошибка подтверждения", show_alert=True)
@@ -287,7 +302,6 @@ async def cb_dev_add_confirm(
         dev_add_confirm_ctx=None,
         dev_add_confirm_expires_at=None,
     )
-    settings = get_settings()
     ok, msg = await add_paid_device_slot(
         session,
         user=db_user,
