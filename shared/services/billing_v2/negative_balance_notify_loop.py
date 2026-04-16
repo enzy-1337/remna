@@ -16,7 +16,6 @@ from shared.services.billing_v2.balance_floor_panel_service import reconcile_hyb
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
-_LOW_BALANCE_ZONE_USERS: set[int] = set()
 
 _WINDOW_24H = (timedelta(hours=22), timedelta(hours=26))
 _WINDOW_1H = (timedelta(minutes=40), timedelta(hours=1, minutes=20))
@@ -77,8 +76,8 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
     for user in users:
         floor = settings.billing_balance_floor_rub
         if user.balance <= Decimal("10") and user.balance > floor:
-            if user.id not in _LOW_BALANCE_ZONE_USERS:
-                await send_telegram_message(
+            if user.low_balance_notified_at is None:
+                sent = await send_telegram_message(
                     user.telegram_id,
                     (
                         "⚠️ Баланс на исходе: 10 ₽ или меньше.\n"
@@ -86,11 +85,15 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
                         "Пополните баланс, чтобы не уйти в отключение."
                     ),
                     parse_mode=None,
+                    reply_markup={
+                        "inline_keyboard": [[{"text": "💰 Баланс", "callback_data": "menu:balance"}]]
+                    },
                     settings=settings,
                 )
-                _LOW_BALANCE_ZONE_USERS.add(user.id)
+                if sent is not None:
+                    user.low_balance_notified_at = now
         else:
-            _LOW_BALANCE_ZONE_USERS.discard(user.id)
+            user.low_balance_notified_at = None
 
         avg_daily = await _avg_daily_spend_last_days(session, user_id=user.id, days=3)
         if avg_daily <= 0:

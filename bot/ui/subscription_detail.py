@@ -165,12 +165,6 @@ async def build_subscription_detail_caption(
             opt_route_lines.append(
                 italic("Переключение в боте: задайте оба UUID squad в .env панели.")
             )
-        opt_route_lines.append(
-            plain(
-                "📶 Трафик PAYG: списание по данным панели за каждый начатый гигабайт "
-                "(ceil расхода): 0.17 ГБ = 1 шаг, 1.01 ГБ = 2 шага и т.д."
-            )
-        )
         if not settings.billing_traffic_rw_meter_enabled:
             opt_route_lines.append(
                 plain("Режим опроса панели выключен — учёт по вебхуку ")

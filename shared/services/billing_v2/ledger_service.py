@@ -13,6 +13,17 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 
 
+def _usage_charge_description(source: str) -> str:
+    src = (source or "").strip().lower()
+    if src == "traffic":
+        return "Списание за трафик"
+    if src == "device_daily":
+        return "Списание за устройство"
+    if src == "mobile":
+        return "Списание за мобильный трафик"
+    return f"Списание {source}"
+
+
 @dataclass(slots=True)
 class LedgerResult:
     applied: bool
@@ -84,7 +95,7 @@ async def apply_debit(
             payment_provider="billing_v2",
             payment_id=idempotency_key,
             status="completed",
-            description=f"Списание {source}",
+            description=_usage_charge_description(source),
             meta={"source": source, "source_ref": source_ref, **(meta or {})},
             created_at=datetime.now(timezone.utc),
         )

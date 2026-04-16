@@ -81,8 +81,11 @@ def _is_admin(tg_id: int | None) -> bool:
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:section:users"))
-    b.row(InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"))
+    b.row(
+        InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:section:users"),
+        InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"),
+    )
+    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
     b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()

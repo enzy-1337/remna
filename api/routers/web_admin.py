@@ -578,14 +578,14 @@ def _layout(
     nav_blocks = ""
     theme_toggle = ""
     remna_chrome = ""
-    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.75rem+4.25rem+0.75rem)] md:pr-6 lg:pr-8"
+    main_cls = "min-h-screen bg-base-200 bg-gradient-to-br from-base-200 via-base-200/80 to-secondary/5 px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.5rem+4.25rem+0.75rem)] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
         user_label = _auth_label(request) or "admin"
         avatar = _esc(_auth_avatar(request))
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
-    <aside class="group/sidebar fixed left-3 top-3 bottom-3 z-[60] hidden w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-2 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
+    <aside class="group/sidebar fixed left-2 top-3 bottom-3 z-[60] hidden w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 px-2 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
       <div class="flex w-full shrink-0 items-center justify-start gap-2 py-3">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/20 text-primary">
           {logo_inner}

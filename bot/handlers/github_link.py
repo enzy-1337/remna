@@ -56,8 +56,13 @@ def _parse_github_username(raw: str) -> str | None:
 
 
 @router.callback_query(F.data == "menu:github")
-async def cb_github_open(cq: CallbackQuery, db_user: User | None, state: FSMContext) -> None:
+async def cb_github_open(
+    cq: CallbackQuery, db_user: User | None, state: FSMContext, is_bot_admin: bool = False
+) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    if not is_bot_admin:
+        await cq.answer("Раздел доступен только администраторам.", show_alert=True)
         return
     assert db_user is not None
     await state.set_state(GithubLinkStates.waiting_username)

@@ -82,9 +82,13 @@ def _sub_main_keyboard(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
-        b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
         if show_billing_detail:
-            b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
+            b.row(
+                InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
+                InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"),
+            )
+        else:
+            b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
         if show_optimized_toggle:
             label = "🛰 Оптим. маршрут: вкл" if optimized_on else "🛰 Оптим. маршрут: выкл"
             b.row(InlineKeyboardButton(text=label[:64], callback_data="sub:opt_route:toggle"))
@@ -163,13 +167,23 @@ def _txn_title_for_detail(txn: Transaction) -> str:
         "referral_signup": "Реферал: регистрация",
         "referral_signup_invited": "Реферал: приглашённый",
         "referral_payment_percent": "Реферал: процент с оплаты",
-        "usage_charge": "PAYG (трафик / устройства)",
+        "usage_charge": "PAYG",
         "subscription": "Тариф (покупка с баланса)",
         "subscription_autorenew": "Тариф (автопродление)",
         "manual_add": "Дополнительное устройство",
         "billing_transition": "Переход на гибридный биллинг",
     }
     base = labels.get(txn.type, txn.type)
+    if txn.type == "usage_charge":
+        source = str((txn.meta or {}).get("source") or "").strip().lower()
+        desc = (txn.description or "").strip().lower()
+        if source == "traffic" or "traffic" in desc:
+            return f"{base}: трафик"
+        if source == "device_daily" or "device_daily" in desc:
+            return f"{base}: устройство"
+        if source == "mobile":
+            return f"{base}: мобильный трафик"
+        return base
     if txn.description and txn.type in ("usage_charge", "subscription", "subscription_autorenew"):
         short = txn.description.strip()
         if len(short) > 48:
