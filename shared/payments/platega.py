@@ -54,7 +54,6 @@ class PlategaProvider(BasePaymentProvider):
         payload = f"txn:{internal_transaction_id}"
         body: dict[str, Any] = {
             "id": str(uuid.uuid4()),
-            "paymentMethod": self._s.platega_payment_method,
             "paymentDetails": {
                 "amount": float(amount_rub),
                 "currency": "RUB",
@@ -62,6 +61,11 @@ class PlategaProvider(BasePaymentProvider):
             "description": description[:512],
             "payload": payload,
         }
+        methods = self._s.platega_payment_methods
+        if len(methods) == 1:
+            body["paymentMethod"] = methods[0]
+        else:
+            body["paymentMethods"] = methods
         if self._s.platega_success_url:
             body["return"] = self._s.platega_success_url
         if self._s.platega_fail_url:

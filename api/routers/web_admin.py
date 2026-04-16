@@ -335,6 +335,55 @@ def _resolve_admin_asset_url(name: str | None) -> str | None:
     return f"/assets/{url_quote(candidate)}"
 
 
+_ENV_CHOICE_OPTIONS: dict[str, list[tuple[str, str]]] = {
+    "PLATEGA_API_BASE_URL": [
+        ("https://app.platega.io", "app.platega.io"),
+        ("https://api.platega.io", "api.platega.io"),
+    ],
+    "BILLING_CALENDAR_TIMEZONE": [
+        ("Europe/Moscow", "Europe/Moscow"),
+        ("UTC", "UTC"),
+    ],
+}
+
+_ENV_MULTI_CHOICE_OPTIONS: dict[str, list[tuple[str, str]]] = {
+    "PLATEGA_PAYMENT_METHODS": [
+        ("2", "СБП QR"),
+        ("10", "Карты RUB"),
+        ("11", "Эквайринг"),
+        ("12", "International"),
+        ("13", "Крипта"),
+    ],
+}
+
+_ENV_BOOL_KEYS = {
+    "REMNAWAVE_SYNC_ENABLED",
+    "REMNAWAVE_SYNC_PUSH_DESCRIPTION",
+    "REMNAWAVE_STUB",
+    "TRIAL_ENABLED",
+    "SUBSCRIPTION_AUTORENEW_ENABLED",
+    "SUBSCRIPTION_EXPIRY_NOTIFY_ENABLED",
+    "BILLING_FIRST_TOPUP_WELCOME_ENABLED",
+    "BILLING_V2_ENABLED",
+    "BILLING_TRAFFIC_RW_METER_ENABLED",
+    "BILLING_NEGATIVE_NOTIFY_ENABLED",
+    "ADMIN_REPORT_ENABLED",
+    "TELEGRAM_WEBHOOK_ENABLED",
+    "CRYPTOBOT_STUB",
+    "PLATEGA_STUB",
+    "PLATEGA_SKIP_WEBHOOK_AUTH",
+}
+
+
+def _env_bool_state(raw: str) -> bool | None:
+    val = (raw or "").strip().lower()
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _admin_background_image_url(settings: Settings) -> str | None:
     src = (settings.admin_background_source or "default").strip().lower()
     if src == "url":
@@ -5288,22 +5337,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    settings = get_settings()
     vals = read_whitelist_values()
-    bg_assets = _list_admin_image_assets()
-    bg_source = vals.get("ADMIN_BACKGROUND_SOURCE", "default") or "default"
-    bg_url = vals.get("ADMIN_BACKGROUND_URL", "") or ""
-    bg_asset = vals.get("ADMIN_BACKGROUND_ASSET", "") or ""
-    bg_asset_cards = "".join(
-        (
-            f"<label class='cursor-pointer rounded-xl border border-base-content/10 bg-base-200/40 p-2 hover:border-primary/35'>"
-            f"<input type='radio' class='radio radio-sm mr-2' name='ADMIN_BACKGROUND_ASSET_PICK' value='{_esc(name)}' {'checked' if name == bg_asset else ''} />"
-            f"<span class='text-xs font-medium'>{_esc(name)}</span>"
-            f"<img src='/assets/{url_quote(name)}' alt='' class='mt-2 h-20 w-full rounded-lg object-cover border border-base-content/10' loading='lazy' />"
-            f"</label>"
-        )
-        for name in bg_assets
-    ) or "<p class='text-sm opacity-60'>В папке /assets пока нет подходящих изображений.</p>"
     tab_buttons: list[str] = []
     tab_panels: list[str] = []
     for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
@@ -5316,13 +5350,54 @@ async def admin_settings(request: Request) -> HTMLResponse:
         flds: list[str] = []
         for key, label, _getter, help_text in fields:
             v = vals.get(key, "")
+            if key in _ENV_BOOL_KEYS:
+                bool_state = _env_bool_state(v)
+                bool_state = bool_state if bool_state is not None else False
+                ctrl = (
+                    f"<label class='remna-env-toggle'>"
+                    f"<input type='hidden' name='{_esc(key)}' value='{'true' if bool_state else 'false'}' data-env-bool-hidden />"
+                    f"<input type='checkbox' {'checked' if bool_state else ''} data-env-bool-toggle />"
+                    f"<span class='remna-env-toggle-track'></span>"
+                    f"</label>"
+                )
+            elif key in _ENV_MULTI_CHOICE_OPTIONS:
+                chosen = {part.strip() for part in v.split(",") if part.strip()}
+                buttons = "".join(
+                    f"<button type='button' class='btn btn-sm h-9 min-h-9 {'btn-primary' if opt_value in chosen else 'btn-ghost'}' "
+                    f"data-env-multi-option='{_esc(opt_value)}'>{_esc(opt_label)}</button>"
+                    for opt_value, opt_label in _ENV_MULTI_CHOICE_OPTIONS[key]
+                )
+                ctrl = (
+                    f"<div class='flex flex-col gap-2'>"
+                    f"<input type='hidden' name='{_esc(key)}' value='{_esc(v)}' data-env-multi-hidden />"
+                    f"<div class='flex flex-wrap gap-2' data-env-multi-group>{buttons}</div>"
+                    f"</div>"
+                )
+            elif key in _ENV_CHOICE_OPTIONS:
+                buttons = "".join(
+                    f"<button type='button' class='btn btn-sm h-9 min-h-9 {'btn-primary' if opt_value == v else 'btn-ghost'}' "
+                    f"data-env-choice-value='{_esc(opt_value)}'>{_esc(opt_label)}</button>"
+                    for opt_value, opt_label in _ENV_CHOICE_OPTIONS[key]
+                )
+                ctrl = (
+                    f"<div class='flex flex-col gap-2'>"
+                    f"<input type='hidden' name='{_esc(key)}' value='{_esc(v)}' data-env-choice-hidden />"
+                    f"<div class='flex flex-wrap gap-2' data-env-choice-group>{buttons}</div>"
+                    f"<input class='input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs' value='{_esc(v)}' "
+                    f"data-env-choice-custom autocomplete='off' />"
+                    f"</div>"
+                )
+            else:
+                ctrl = (
+                    f"<input class='input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs' name='{_esc(key)}' "
+                    f'value="{_esc(v)}" autocomplete="off" />'
+                )
             flds.append(
                 f"<label class=\"form-control w-full border-b border-base-content/5 pb-4 last:border-0 last:pb-0\">"
                 f"<div class=\"label\"><span class=\"label-text font-medium\">{_esc(label)}</span>"
                 f"<code class=\"label-text-alt text-[10px] opacity-50\">{_esc(key)}</code></div>"
                 f"<p class=\"text-xs leading-snug text-base-content/70 mb-2 max-w-3xl\">{_esc(help_text)}</p>"
-                f"<input class=\"input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs\" name=\"{key}\" "
-                f'value="{_esc(v)}" autocomplete="off" /></label>'
+                f"{ctrl}</label>"
             )
         tab_panels.append(
             f"<div data-env-panel=\"{_esc(sec_id)}\" class=\"env-tab-panel flex flex-col gap-4{hidden}\">{''.join(flds)}</div>"
@@ -5359,11 +5434,109 @@ async def admin_settings(request: Request) -> HTMLResponse:
       document.querySelectorAll('[data-env-tab]').forEach(function(b){
         b.addEventListener('click',function(){show(b.getAttribute('data-env-tab'));});
       });
+      document.querySelectorAll('[data-env-bool-toggle]').forEach(function(toggle){
+        toggle.addEventListener('change', function(){
+          var hidden=toggle.parentElement&&toggle.parentElement.querySelector('[data-env-bool-hidden]');
+          if(hidden) hidden.value=toggle.checked ? 'true' : 'false';
+        });
+      });
+      document.querySelectorAll('[data-env-choice-group]').forEach(function(group){
+        var wrap=group.parentElement;
+        var hidden=wrap&&wrap.querySelector('[data-env-choice-hidden]');
+        var custom=wrap&&wrap.querySelector('[data-env-choice-custom]');
+        function syncButtons(val){
+          group.querySelectorAll('[data-env-choice-value]').forEach(function(btn){
+            var on=btn.getAttribute('data-env-choice-value')===val;
+            btn.classList.toggle('btn-primary', on);
+            btn.classList.toggle('btn-ghost', !on);
+          });
+        }
+        group.querySelectorAll('[data-env-choice-value]').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var val=btn.getAttribute('data-env-choice-value')||'';
+            if(hidden) hidden.value=val;
+            if(custom) custom.value=val;
+            syncButtons(val);
+          });
+        });
+        if(custom){
+          custom.addEventListener('input', function(){
+            if(hidden) hidden.value=custom.value;
+            syncButtons(custom.value);
+          });
+        }
+      });
+      document.querySelectorAll('[data-env-multi-group]').forEach(function(group){
+        var wrap=group.parentElement;
+        var hidden=wrap&&wrap.querySelector('[data-env-multi-hidden]');
+        function syncHidden(){
+          if(!hidden) return;
+          var vals=[];
+          group.querySelectorAll('[data-env-multi-option]').forEach(function(btn){
+            if(btn.classList.contains('btn-primary')) vals.push(btn.getAttribute('data-env-multi-option')||'');
+          });
+          hidden.value=vals.filter(Boolean).join(',');
+        }
+        group.querySelectorAll('[data-env-multi-option]').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var on=btn.classList.contains('btn-primary');
+            btn.classList.toggle('btn-primary', !on);
+            btn.classList.toggle('btn-ghost', on);
+            syncHidden();
+          });
+        });
+      });
     })();
     </script>"""
     body = f"""
     <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
+        <style>
+          .remna-env-toggle {{
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            width: 68px;
+            height: 36px;
+            cursor: pointer;
+          }}
+          .remna-env-toggle input[type="checkbox"] {{
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            z-index: 2;
+          }}
+          .remna-env-toggle-track {{
+            position: relative;
+            display: block;
+            width: 68px;
+            height: 24px;
+            border-radius: 999px;
+            background: rgba(220, 38, 38, .82);
+            transition: background-color .22s ease;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+          }}
+          .remna-env-toggle-track::after {{
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: -2px;
+            width: 28px;
+            height: 28px;
+            border-radius: 999px;
+            background: #fff;
+            transform: translate(0, -50%);
+            transition: transform .22s ease;
+            box-shadow: 0 4px 14px rgba(0,0,0,.25);
+          }}
+          .remna-env-toggle input[type="checkbox"]:checked + .remna-env-toggle-track {{
+            background: rgba(22, 163, 74, .88);
+          }}
+          .remna-env-toggle input[type="checkbox"]:checked + .remna-env-toggle-track::after {{
+            transform: translate(42px, -50%);
+          }}
+        </style>
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
         {saved_note}
         {backup_note}
@@ -5371,38 +5544,6 @@ async def admin_settings(request: Request) -> HTMLResponse:
           {''.join(tab_buttons)}
         </div>
         <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
-          <div class="rounded-2xl border border-base-content/10 bg-base-200/35 p-4">
-            <div class="flex flex-col gap-4">
-              <div class="flex items-center gap-2">
-                <i class="fa-solid fa-image text-primary" aria-hidden="true"></i>
-                <h3 class="text-lg font-semibold">Фон админки</h3>
-              </div>
-              <div class="grid gap-3 md:grid-cols-3">
-                <label class="form-control">
-                  <span class="label-text text-xs opacity-70">Режим</span>
-                  <select id="bg-source" class="select select-bordered select-sm h-9 min-h-9" name="ADMIN_BACKGROUND_SOURCE">
-                    <option value="default" {'selected' if bg_source == 'default' else ''}>Фиолетовый по умолчанию</option>
-                    <option value="url" {'selected' if bg_source == 'url' else ''}>Картинка по ссылке</option>
-                    <option value="asset" {'selected' if bg_source == 'asset' else ''}>Файл из /assets</option>
-                  </select>
-                </label>
-                <label class="form-control md:col-span-2">
-                  <span class="label-text text-xs opacity-70">Ссылка на изображение</span>
-                  <div class="flex gap-2">
-                    <input id="bg-url" class="input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs" name="ADMIN_BACKGROUND_URL" value="{_esc(bg_url)}" autocomplete="off" placeholder="https://..." />
-                    <button id="bg-preview-btn" type="button" class="btn btn-ghost btn-sm h-9 min-h-9">Показать</button>
-                  </div>
-                </label>
-              </div>
-              <input type="hidden" id="bg-asset-hidden" name="ADMIN_BACKGROUND_ASSET" value="{_esc(bg_asset)}" />
-              <div id="bg-asset-picker" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{bg_asset_cards}</div>
-              <div id="bg-preview-wrap" class="rounded-xl border border-base-content/10 bg-base-100/50 p-3">
-                <div class="text-xs opacity-70 mb-2">Предпросмотр</div>
-                <img id="bg-preview-img" src="{_esc(_admin_background_image_url(settings) or '')}" alt="" class="{'h-40 w-full rounded-lg object-cover border border-base-content/10' if _admin_background_image_url(settings) else 'hidden'}" />
-                <div id="bg-preview-empty" class="{'hidden' if _admin_background_image_url(settings) else 'text-sm opacity-60'}">Сейчас используется фиолетовый фон по умолчанию.</div>
-              </div>
-            </div>
-          </div>
           {''.join(tab_panels)}
           <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
         </form>
@@ -5465,45 +5606,6 @@ async def admin_settings(request: Request) -> HTMLResponse:
       </div>
     </details>
     {env_tabs_script}
-    <script>
-    (function(){{
-      var src=document.getElementById('bg-source');
-      var url=document.getElementById('bg-url');
-      var pick=document.getElementById('bg-asset-picker');
-      var hidden=document.getElementById('bg-asset-hidden');
-      var img=document.getElementById('bg-preview-img');
-      var empty=document.getElementById('bg-preview-empty');
-      var btn=document.getElementById('bg-preview-btn');
-      function showPreview(v){{
-        v=(v||'').trim();
-        if(v){{
-          img.src=v; img.classList.remove('hidden'); empty.classList.add('hidden');
-        }}else{{
-          img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='Сейчас используется фиолетовый фон по умолчанию.';
-        }}
-      }}
-      function syncMode(){{
-        var m=(src&&src.value)||'default';
-        if(pick)pick.classList.toggle('hidden', m!=='asset');
-        if(url)url.closest('label').classList.toggle('opacity-60', m!=='url');
-      }}
-      if(btn)btn.addEventListener('click', function(){{ if(src&&src.value==='url')showPreview(url&&url.value||''); }});
-      document.querySelectorAll('input[name="ADMIN_BACKGROUND_ASSET_PICK"]').forEach(function(r){{
-        r.addEventListener('change', function(){{
-          if(hidden)hidden.value=r.value||'';
-          if(src)src.value='asset';
-          syncMode();
-          showPreview('/assets/'+encodeURIComponent(r.value||''));
-        }});
-      }});
-      if(src)src.addEventListener('change', function(){{
-        syncMode();
-        if(src.value==='default')showPreview('');
-        if(src.value==='asset' && hidden && hidden.value)showPreview('/assets/'+encodeURIComponent(hidden.value));
-      }});
-      syncMode();
-    }})();
-    </script>
     """
     return _layout("Web-admin Settings", body, request=request)
 

@@ -55,7 +55,7 @@ def _ru_payment_provider(name: str | None) -> str:
     key = name.strip().lower()
     mapping = {
         "cryptobot": plain("CryptoBot"),
-        "platega": plain("Platega (СБП)"),
+        "platega": plain("Platega"),
     }
     return mapping.get(key, esc(name))
 

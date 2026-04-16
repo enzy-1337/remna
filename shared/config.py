@@ -560,7 +560,10 @@ class Settings(BaseSettings):
         validation_alias="PLATEGA_API_BASE_URL",
         description="Базовый URL из docs.platega.io; при сбоях можно указать https://api.platega.io",
     )
-    platega_payment_method: int = Field(default=2, validation_alias="PLATEGA_PAYMENT_METHOD")
+    platega_payment_methods_csv: str = Field(
+        default="2",
+        validation_alias=AliasChoices("PLATEGA_PAYMENT_METHODS", "PLATEGA_PAYMENT_METHOD"),
+    )
     platega_success_url: str = Field(default="", validation_alias="PLATEGA_SUCCESS_URL")
     platega_fail_url: str = Field(default="", validation_alias="PLATEGA_FAIL_URL")
     platega_stub: bool = Field(default=False, validation_alias="PLATEGA_STUB")
@@ -569,6 +572,26 @@ class Settings(BaseSettings):
         validation_alias="PLATEGA_SKIP_WEBHOOK_AUTH",
         description="Только для отладки: не проверять X-MerchantId/X-Secret на вебхуке",
     )
+
+    @property
+    def platega_payment_methods(self) -> list[int]:
+        out: list[int] = []
+        raw = (self.platega_payment_methods_csv or "").strip()
+        for part in raw.split(","):
+            val = part.strip()
+            if not val:
+                continue
+            try:
+                method_id = int(val)
+            except ValueError:
+                continue
+            if method_id not in out:
+                out.append(method_id)
+        return out or [2]
+
+    @property
+    def platega_payment_method(self) -> int:
+        return self.platega_payment_methods[0]
 
     @field_validator("admin_log_chat_id", mode="before")
     @classmethod
