@@ -1351,7 +1351,7 @@ def _totp_normalize_code(raw: str) -> str:
 
 
 def _totp_qr_data_uri(*, secret: str, account_name: str) -> str:
-    uri = pyotp.TOTP(secret).provisioning_uri(name=account_name, issuer_name="Remna Web Admin")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=account_name, issuer_name="Flux Network")
     return segno.make(uri).png_data_uri(scale=5)
 
 
