@@ -314,6 +314,21 @@ def _auth_avatar(request: Request) -> str:
     return "/assets/icon.png"
 
 
+def _simple_avatar_markup(*, url: str, label: str, px: int = 36) -> str:
+    raw = (label or "?").strip()
+    ch = raw[0].upper() if raw else "?"
+    if not ch.isalnum():
+        ch = "?"
+    return (
+        f"<span class='relative flex h-[{px}px] w-[{px}px] items-center justify-center overflow-hidden rounded-full'>"
+        f"<img src=\"{_esc(url)}\" alt=\"\" width=\"{px}\" height=\"{px}\" class=\"h-full w-full rounded-full object-cover remna-avatar-img\" "
+        "loading=\"lazy\" decoding=\"async\" data-remna-avatar=\"1\" "
+        "onerror=\"this.classList.add('hidden');this.nextElementSibling.classList.remove('hidden')\" />"
+        f"<span class='hidden absolute inset-0 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary'>{_esc(ch)}</span>"
+        "</span>"
+    )
+
+
 def _admin_assets_dir() -> Path:
     return Path("assets").resolve()
 
@@ -828,7 +843,8 @@ def _layout(
 
     if show_nav and request is not None:
         user_label = (sidebar_user_label or "").strip() or _auth_label(request) or "admin"
-        avatar = _esc((sidebar_avatar_url or "").strip() or _auth_avatar(request))
+        avatar = (sidebar_avatar_url or "").strip() or _auth_avatar(request)
+        sidebar_avatar_inner = _simple_avatar_markup(url=avatar, label=user_label, px=36)
         logo_inner = _brand_logo_mark(settings)
         desktop_sidebar = f"""
     <aside class="group/sidebar fixed left-2 top-3 bottom-3 z-[60] hidden w-[3.75rem] min-w-[3.75rem] max-w-[3.75rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
@@ -853,7 +869,7 @@ def _layout(
         <div class="mx-[3px] mb-2 h-[3px] rounded-full bg-base-content/10"></div>
         <div class="flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden px-[8px] group-hover/sidebar:justify-between">
           <a href="/admin/profile" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary" title="Мой профиль">
-            <img src="{avatar}" alt="" class="h-9 w-9 rounded-full border-2 border-primary/40 object-cover remna-avatar-img" width="36" height="36" loading="lazy" decoding="async" data-remna-avatar="1" />
+            {sidebar_avatar_inner}
           </a>
           <a href="/admin/profile" class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 truncate text-center text-sm font-semibold text-base-content no-underline opacity-0 overflow-hidden group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100 hover:text-primary" title="Мой профиль">{_esc(user_label)}</a>
           <form method="post" action="/admin/logout" class="nav-label pointer-events-none flex max-w-0 shrink-0 grow-0 basis-0 justify-center overflow-hidden opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">
@@ -4923,6 +4939,10 @@ async def admin_profile(request: Request) -> HTMLResponse:
             "<i class='fa-solid fa-arrow-up-right-from-square' aria-hidden='true'></i>Панель Remnawave</a></p>"
         )
     ties = "\n".join(parts)
+    bot_profile_href = "/"
+    if linked is not None:
+        un = (linked.username or "").strip().lstrip("@")
+        bot_profile_href = f"https://t.me/{url_quote(un)}" if un else f"tg://user?id={int(linked.telegram_id)}"
     account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
         account_link_button = """
@@ -5138,7 +5158,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
         <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
         <div class="flex flex-wrap gap-2 pt-1">
-          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/">
+          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="{_esc(bot_profile_href)}">
             <i class="fa-solid fa-user" aria-hidden="true"></i>Мой профиль в боте
           </a>
           {account_link_button}
@@ -5338,6 +5358,20 @@ async def admin_settings(request: Request) -> HTMLResponse:
     if denied is not None:
         return denied
     vals = read_whitelist_values()
+    bg_assets = _list_admin_image_assets()
+    bg_source = vals.get("ADMIN_BACKGROUND_SOURCE", "default") or "default"
+    bg_url = vals.get("ADMIN_BACKGROUND_URL", "") or ""
+    bg_asset = vals.get("ADMIN_BACKGROUND_ASSET", "") or ""
+    bg_asset_cards = "".join(
+        (
+            f"<label class='cursor-pointer rounded-xl border border-base-content/10 bg-base-200/40 p-2 hover:border-primary/35'>"
+            f"<input type='radio' class='radio radio-sm mr-2' name='ADMIN_BACKGROUND_ASSET_PICK' value='{_esc(name)}' {'checked' if name == bg_asset else ''} />"
+            f"<span class='text-xs font-medium'>{_esc(name)}</span>"
+            f"<img src='/assets/{url_quote(name)}' alt='' class='mt-2 h-20 w-full rounded-lg object-cover border border-base-content/10' loading='lazy' />"
+            f"</label>"
+        )
+        for name in bg_assets
+    ) or "<p class='text-sm opacity-60'>В папке /assets пока нет подходящих изображений.</p>"
     tab_buttons: list[str] = []
     tab_panels: list[str] = []
     for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
@@ -5486,6 +5520,41 @@ async def admin_settings(request: Request) -> HTMLResponse:
           });
         });
       });
+      var src=document.getElementById('bg-source');
+      var url=document.getElementById('bg-url');
+      var pick=document.getElementById('bg-asset-picker');
+      var hidden=document.getElementById('bg-asset-hidden');
+      var img=document.getElementById('bg-preview-img');
+      var empty=document.getElementById('bg-preview-empty');
+      var btn=document.getElementById('bg-preview-btn');
+      function showPreview(v){
+        v=(v||'').trim();
+        if(v && img && empty){
+          img.src=v; img.classList.remove('hidden'); empty.classList.add('hidden');
+        }else if(img && empty){
+          img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='Сейчас используется фиолетовый фон по умолчанию.';
+        }
+      }
+      function syncMode(){
+        var m=(src&&src.value)||'default';
+        if(pick)pick.classList.toggle('hidden', m!=='asset');
+        if(url && url.closest('label')) url.closest('label').classList.toggle('opacity-60', m!=='url');
+      }
+      if(btn)btn.addEventListener('click', function(){ if(src&&src.value==='url')showPreview(url&&url.value||''); });
+      document.querySelectorAll('input[name="ADMIN_BACKGROUND_ASSET_PICK"]').forEach(function(r){
+        r.addEventListener('change', function(){
+          if(hidden)hidden.value=r.value||'';
+          if(src)src.value='asset';
+          syncMode();
+          showPreview('/assets/'+encodeURIComponent(r.value||''));
+        });
+      });
+      if(src)src.addEventListener('change', function(){
+        syncMode();
+        if(src.value==='default')showPreview('');
+        if(src.value==='asset' && hidden && hidden.value)showPreview('/assets/'+encodeURIComponent(hidden.value));
+      });
+      syncMode();
     })();
     </script>"""
     body = f"""
@@ -5544,6 +5613,38 @@ async def admin_settings(request: Request) -> HTMLResponse:
           {''.join(tab_buttons)}
         </div>
         <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
+          <div class="rounded-2xl border border-base-content/10 bg-base-200/35 p-4">
+            <div class="flex flex-col gap-4">
+              <div class="flex items-center gap-2">
+                <i class="fa-solid fa-image text-primary" aria-hidden="true"></i>
+                <h3 class="text-lg font-semibold">Фон админки</h3>
+              </div>
+              <div class="grid gap-3 md:grid-cols-3">
+                <label class="form-control">
+                  <span class="label-text text-xs opacity-70">Режим</span>
+                  <select id="bg-source" class="select select-bordered select-sm h-9 min-h-9" name="ADMIN_BACKGROUND_SOURCE">
+                    <option value="default" {'selected' if bg_source == 'default' else ''}>Фиолетовый по умолчанию</option>
+                    <option value="url" {'selected' if bg_source == 'url' else ''}>Картинка по ссылке</option>
+                    <option value="asset" {'selected' if bg_source == 'asset' else ''}>Файл из /assets</option>
+                  </select>
+                </label>
+                <label class="form-control md:col-span-2">
+                  <span class="label-text text-xs opacity-70">Ссылка на изображение</span>
+                  <div class="flex gap-2">
+                    <input id="bg-url" class="input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs" name="ADMIN_BACKGROUND_URL" value="{_esc(bg_url)}" autocomplete="off" placeholder="https://..." />
+                    <button id="bg-preview-btn" type="button" class="btn btn-ghost btn-sm h-9 min-h-9">Показать</button>
+                  </div>
+                </label>
+              </div>
+              <input type="hidden" id="bg-asset-hidden" name="ADMIN_BACKGROUND_ASSET" value="{_esc(bg_asset)}" />
+              <div id="bg-asset-picker" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{bg_asset_cards}</div>
+              <div id="bg-preview-wrap" class="rounded-xl border border-base-content/10 bg-base-100/50 p-3">
+                <div class="text-xs opacity-70 mb-2">Предпросмотр</div>
+                <img id="bg-preview-img" src="{_esc(_admin_background_image_url(get_settings()) or '')}" alt="" class="{'h-40 w-full rounded-lg object-cover border border-base-content/10' if _admin_background_image_url(get_settings()) else 'hidden'}" />
+                <div id="bg-preview-empty" class="{'hidden' if _admin_background_image_url(get_settings()) else 'text-sm opacity-60'}">Сейчас используется фиолетовый фон по умолчанию.</div>
+              </div>
+            </div>
+          </div>
           {''.join(tab_panels)}
           <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
         </form>
@@ -5686,15 +5787,22 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
             f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else '∞')}</td>"
             f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{tw}'>{status}</td></tr>"
         )
+    create_modal = _modal_shell(
+        modal_id="promo-create-modal",
+        title="Создание промокода",
+        inner=_promo_form(action="/admin/promos/new"),
+    )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Промокоды</h2>"
-        "<a class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' href='/admin/promos/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</a></div>"
+        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='promo-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</button></div>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
         f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md font-mono text-sm uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
         "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет промокодов</td></tr>'}</tbody></table></div></div></div>"
+        f"{create_modal}"
+        "<script>(function(){document.querySelectorAll('[data-remna-modal-open]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-open');var m=document.getElementById(id);if(m)m.classList.remove('hidden');if(m)m.classList.add('flex');});});document.querySelectorAll('[data-remna-modal-close]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-close');var m=document.getElementById(id);if(m)m.classList.add('hidden');if(m)m.classList.remove('flex');});});document.querySelectorAll('[role=\"dialog\"]').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){m.classList.add('hidden');m.classList.remove('flex');}});});})();</script>"
     )
     return _layout("Web-admin Promos", body, request=request)
 
@@ -5737,6 +5845,24 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
         </form>
       </div>
     </div>
+    </div>
+    """
+
+
+def _modal_shell(*, modal_id: str, title: str, inner: str) -> str:
+    return f"""
+    <div id="{_esc(modal_id)}" class="fixed inset-0 z-[140] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="{_esc(modal_id)}-title">
+      <div class="relative max-h-[90vh] w-full max-w-4xl overflow-auto rounded-2xl border border-base-content/10 bg-base-100 shadow-2xl">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3 z-10" data-remna-modal-close="{_esc(modal_id)}" aria-label="Закрыть">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+        <div class="px-5 pt-5">
+          <h3 id="{_esc(modal_id)}-title" class="text-xl font-semibold">{_esc(title)}</h3>
+        </div>
+        <div class="px-2 pb-2">
+          {inner}
+        </div>
+      </div>
     </div>
     """
 
@@ -6154,12 +6280,17 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
             f"<td>{pl.sort_order}</td></tr>"
         )
     trans = _admin_tariff_transition_card(settings, tdays)
+    create_modal = _modal_shell(
+        modal_id="tariff-create-modal",
+        title="Новый тариф",
+        inner=_admin_plan_form(action="/admin/tariffs/new", settings=settings),
+    )
     body = (
         "<div class='flex flex-col gap-4'>"
         f"{trans}"
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>Тарифы</h2>"
-        "<a class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' href='/admin/tariffs/new'><i class='fa-solid fa-plus' aria-hidden='true'></i>Новый тариф</a></div>"
+        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='tariff-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>Новый тариф</button></div>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'>"
         "<thead><tr><th>Название</th><th>Срок</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
         "<th title='Эквивалент pay-per-use за период 30'>≈ PPU 30</th><th>Сорт.</th></tr></thead>"
@@ -6168,6 +6299,8 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         "Кнопки тарифов в боте строятся из БД при каждом открытии списка; при снятии с продажи или удалении устаревшее сообщение "
         "можно закрыть и открыть «Тарифы» снова.</p>"
         "</div></div></div>"
+        f"{create_modal}"
+        "<script>(function(){document.querySelectorAll('[data-remna-modal-open]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-open');var m=document.getElementById(id);if(m)m.classList.remove('hidden');if(m)m.classList.add('flex');});});document.querySelectorAll('[data-remna-modal-close]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-close');var m=document.getElementById(id);if(m)m.classList.add('hidden');if(m)m.classList.remove('flex');});});document.querySelectorAll('[role=\"dialog\"]').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){m.classList.add('hidden');m.classList.remove('flex');}});});})();</script>"
     )
     return _layout("Тарифы", body, request=request)
 

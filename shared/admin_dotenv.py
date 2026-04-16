@@ -487,6 +487,18 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Та же major-версия, что у сервера PostgreSQL; иначе ошибка несовпадения версий.",
             ),
             (
+                "BACKUP_PROJECT_DIR",
+                "Папка проекта для архива",
+                lambda s: s.backup_project_dir,
+                "Какую папку с файлами проекта добавить в общий backup-архив.",
+            ),
+            (
+                "BACKUP_PROJECT_NAME",
+                "Имя проекта в backup",
+                lambda s: s.backup_project_name or "",
+                "Имя для итоговых архивов. Если пусто — берётся имя папки BACKUP_PROJECT_DIR.",
+            ),
+            (
                 "CHANNEL_SUB_CACHE_TTL",
                 "TTL кэша подписки на канал (сек)",
                 lambda s: str(s.channel_sub_cache_ttl),

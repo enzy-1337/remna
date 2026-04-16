@@ -538,6 +538,16 @@ class Settings(BaseSettings):
             "(иначе pg_dump откажется при несовпадении версий)"
         ),
     )
+    backup_project_dir: str = Field(
+        default="/app",
+        validation_alias="BACKUP_PROJECT_DIR",
+        description="Папка проекта, которую нужно упаковать вместе с бэкапом БД",
+    )
+    backup_project_name: str | None = Field(
+        default=None,
+        validation_alias="BACKUP_PROJECT_NAME",
+        description="Имя проекта для названий архивов (если пусто — берётся имя папки BACKUP_PROJECT_DIR)",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")

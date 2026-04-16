@@ -6,10 +6,13 @@ import asyncio
 import gzip
 import logging
 import os
+import shutil
+import tarfile
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+from zoneinfo import ZoneInfo
 
 from shared.config import Settings
 from shared.services.admin_log_topics import AdminLogTopic
@@ -61,6 +64,24 @@ async def _pg_dump_version(pg_dump_exe: str) -> str:
         return "unknown"
 
 
+def _backup_zone(settings: Settings) -> ZoneInfo:
+    try:
+        return ZoneInfo((settings.backup_timezone or "Europe/Moscow").strip() or "Europe/Moscow")
+    except Exception:
+        return ZoneInfo("Europe/Moscow")
+
+
+def _backup_zone_label(settings: Settings) -> str:
+    tz = (settings.backup_timezone or "Europe/Moscow").strip() or "Europe/Moscow"
+    return "МСК" if tz == "Europe/Moscow" else tz
+
+
+def _project_dir_and_name(settings: Settings) -> tuple[Path, str]:
+    project_dir = Path((settings.backup_project_dir or "/app").strip() or "/app").resolve()
+    project_name = (settings.backup_project_name or "").strip() or project_dir.name or "project"
+    return project_dir, project_name
+
+
 async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[bool, str]:
     if not settings.backup_enabled:
         return False, "Бэкап отключён (BACKUP_ENABLED=false)."
@@ -77,11 +98,20 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
             )
         return False, str(e)
 
-    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    fd, sql_path = tempfile.mkstemp(prefix=f"remna_pg_{ts}_", suffix=".sql")
-    os.close(fd)
-    sql_p = Path(sql_path)
-    gz_path = Path(sql_path + ".gz")
+    zone = _backup_zone(settings)
+    zone_label = _backup_zone_label(settings)
+    now_local = datetime.now(UTC).astimezone(zone)
+    stamp_hms = now_local.strftime("%H_%M_%S")
+    stamp_dmy = now_local.strftime("%d-%m-%Y")
+    stamp_display = now_local.strftime(f"%H:%M:%S %d.%m.%Y {zone_label}")
+    dbname = str(params["dbname"])
+    project_dir, project_name = _project_dir_and_name(settings)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="remna_backup_"))
+    sql_p = tmp_dir / f"dump_{dbname}_{stamp_hms}_{stamp_dmy}.sql"
+    gz_path = tmp_dir / f"{sql_p.name}.gz"
+    dir_archive = tmp_dir / f"{project_name}_dir_{stamp_hms}_{stamp_dmy}.tar.gz"
+    final_archive = tmp_dir / f"{project_name}_backup_{stamp_hms}_{stamp_dmy}.tar.gz"
 
     env = os.environ.copy()
     env["PGPASSWORD"] = str(params["password"])
@@ -125,8 +155,7 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
                 topic=AdminLogTopic.BACKUPS,
                 event_type="backup_error",
             )
-        if sql_p.exists():
-            sql_p.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return False, msg
     except asyncio.TimeoutError:
         msg = "pg_dump превысил таймаут (1 ч)."
@@ -137,13 +166,11 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
                 topic=AdminLogTopic.BACKUPS,
                 event_type="backup_error",
             )
-        if sql_p.exists():
-            sql_p.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return False, msg
     except Exception:
         logger.exception("backup: pg_dump failed")
-        if sql_p.exists():
-            sql_p.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
     if proc.returncode != 0:
@@ -164,7 +191,7 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
                 topic=AdminLogTopic.BACKUPS,
                 event_type="backup_error",
             )
-        sql_p.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return False, full
 
     try:
@@ -174,15 +201,37 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
     finally:
         sql_p.unlink(missing_ok=True)
 
-    size = gz_path.stat().st_size
+    try:
+        with tarfile.open(dir_archive, "w:gz") as tar:
+            tar.add(project_dir, arcname=project_name)
+    except Exception as exc:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        msg = f"Не удалось упаковать папку проекта {project_dir}: {exc}"
+        if notify:
+            await notify_admin_plain(
+                settings,
+                text=f"💾 Бэкап: {msg}",
+                topic=AdminLogTopic.BACKUPS,
+                event_type="backup_error",
+            )
+        return False, msg
+
+    with tarfile.open(final_archive, "w:gz") as tar:
+        tar.add(gz_path, arcname=gz_path.name)
+        tar.add(dir_archive, arcname=dir_archive.name)
+
+    gz_path.unlink(missing_ok=True)
+    dir_archive.unlink(missing_ok=True)
+
+    size = final_archive.stat().st_size
     max_bytes = int(settings.backup_max_telegram_mb * 1024 * 1024)
     mb = size / (1024 * 1024)
-    fname = f"remna_pg_{ts}.sql.gz"
+    fname = final_archive.name
 
     if size > max_bytes:
-        gz_path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         msg = (
-            f"Бэкап PostgreSQL создан, но файл слишком большой для Telegram "
+            f"Backup создан, но файл слишком большой для Telegram "
             f"({mb:.1f} МБ > {settings.backup_max_telegram_mb:.0f} МБ). "
             "Настройте внешнее хранилище или cron с pg_dump на сервере."
         )
@@ -197,12 +246,12 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
 
     ok = await notify_admin_document(
         settings,
-        document_path=str(gz_path),
-        caption=f"💾 PostgreSQL {params['dbname']} · {mb:.2f} МБ · {ts} UTC",
+        document_path=str(final_archive),
+        caption=f"💾 Backup  | dir:{project_name} | sql:{dbname} · {mb:.2f} МБ · {stamp_display}",
         topic=AdminLogTopic.BACKUPS,
         event_type="backup",
     )
-    gz_path.unlink(missing_ok=True)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
     if not ok:
         logger.warning("backup: отправка файла в Telegram не удалась")
         return False, "Файл бэкапа создан, но отправка в Telegram не удалась."
