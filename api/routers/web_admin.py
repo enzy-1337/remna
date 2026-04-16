@@ -61,6 +61,7 @@ from shared.services.billing_calculator import (
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.backup_service import run_backup_once
+from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.referral_service import count_invited_users, list_invited_users
 from shared.services.billing_v2.billing_calendar import (
     billing_local_day_end_utc_exclusive,
@@ -74,6 +75,7 @@ from shared.services.billing_v2.detail_service import (
     summarize_month_total,
     usage_package_breakdown,
 )
+from shared.services.telegram_notify import send_telegram_message
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
@@ -96,6 +98,7 @@ _RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
 router = APIRouter(tags=["web-admin"])
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
+_WEB_ADMIN_SESSION_TTL = timedelta(hours=24)
 
 
 def _add_calendar_months(dt: datetime, months: int) -> datetime:
@@ -1282,6 +1285,79 @@ async def _session() -> AsyncSession:
     return factory()
 
 
+def _clear_web_admin_session(request: Request) -> None:
+    request.session.pop("wauth", None)
+    request.session.pop("wauth_user_id", None)
+    request.session.pop("wauth_session_token", None)
+    request.session.pop("wauth_session_exp", None)
+    request.session.pop("wauth_login_kind", None)
+
+
+def _login_method_label(kind: str, *, used_totp: bool) -> str:
+    base = "Telegram" if kind == "telegram" else "GitHub" if kind == "github" else "Web"
+    return f"{base} + Google Auth" if used_totp else base
+
+
+def _admin_profile_link_for_notify(settings: Settings, user: User) -> str:
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/admin/users/{int(user.id)}"
+
+
+async def _notify_admin_login(settings: Settings, *, user: User, method_kind: str, used_totp: bool) -> None:
+    chat_id = settings.admin_log_chat_id
+    if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
+        return
+    profile_href = _admin_profile_link_for_notify(settings, user)
+    display = (user.first_name or user.username or f"tg:{user.telegram_id}").strip()
+    username = f"@{user.username}" if user.username else "без username"
+    profile_line = (
+        f'<a href="{html.escape(profile_href, quote=True)}">Профиль</a>'
+        if profile_href
+        else "Профиль"
+    )
+    text = (
+        "🔐 <b>Вход в web-admin</b>\n"
+        f"Администратор: <b>{html.escape(display)}</b> ({html.escape(username)})\n"
+        f"Способ: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
+        f"{profile_line}\n"
+        f"Время: <b>{html.escape(_fmt_dt_msk(datetime.now(UTC)))}</b>"
+    )
+    await send_telegram_message(
+        chat_id,
+        text,
+        parse_mode="HTML",
+        message_thread_id=settings.admin_log_thread_for(AdminLogTopic.GENERAL),
+        settings=settings,
+    )
+
+
+async def _bind_web_admin_session(
+    request: Request,
+    *,
+    user: User,
+    method_kind: str,
+    used_totp: bool,
+) -> None:
+    settings = get_settings()
+    token = token_urlsafe(24)
+    expires_at = datetime.now(UTC) + _WEB_ADMIN_SESSION_TTL
+    async with await _session() as session:
+        db_user = await session.get(User, user.id)
+        if db_user is None:
+            _clear_web_admin_session(request)
+            return
+        db_user.web_admin_session_token = token
+        db_user.web_admin_session_expires_at = expires_at
+        await session.commit()
+    request.session["wauth_user_id"] = int(user.id)
+    request.session["wauth_session_token"] = token
+    request.session["wauth_session_exp"] = int(expires_at.timestamp())
+    request.session["wauth_login_kind"] = method_kind
+    await _notify_admin_login(settings, user=user, method_kind=method_kind, used_totp=used_totp)
+
+
 async def _linked_bot_user_for_admin(request: Request) -> User | None:
     """Пользователь бота по Telegram ID из сессии web-admin (приоритет Telegram)."""
     if not _is_logged(request):
@@ -1399,6 +1475,13 @@ async def _finalize_login_with_2fa(
         request.session.pop("wauth", None)
         return RedirectResponse("/admin/login?totp=1", status_code=303)
     _clear_pending_2fa(request)
+    if user is not None:
+        await _bind_web_admin_session(
+            request,
+            user=user,
+            method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
+            used_totp=False,
+        )
     return RedirectResponse(success_redirect, status_code=303)
 
 
@@ -1625,7 +1708,30 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     totp_err = request.query_params.get("err") == "totp"
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if _is_logged(request) and not link_mode:
-        return RedirectResponse("/admin/dashboard", status_code=303)
+        uid_raw = request.session.get("wauth_user_id")
+        token = str(request.session.get("wauth_session_token") or "").strip()
+        exp_raw = request.session.get("wauth_session_exp")
+        valid = False
+        try:
+            uid = int(uid_raw)
+            exp = int(exp_raw)
+        except (TypeError, ValueError):
+            valid = False
+        else:
+            now = datetime.now(UTC)
+            if token and exp > int(now.timestamp()):
+                async with await _session() as session:
+                    user = await session.get(User, uid)
+                if user is not None and (user.web_admin_session_token or "") == token:
+                    db_exp = user.web_admin_session_expires_at
+                    if db_exp is not None:
+                        if db_exp.tzinfo is None:
+                            db_exp = db_exp.replace(tzinfo=UTC)
+                        valid = db_exp > now
+        if not valid:
+            _clear_web_admin_session(request)
+        else:
+            return RedirectResponse("/admin/dashboard", status_code=303)
     tg_href = "/admin/login/telegram/start"
     if link_mode:
         tg_href += "?link=1"
@@ -1894,6 +2000,12 @@ async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> Redi
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
         return RedirectResponse("/admin/login?totp=1&err=totp", status_code=303)
     request.session["wauth"] = pending
+    await _bind_web_admin_session(
+        request,
+        user=user,
+        method_kind=str(request.session.get("wauth_login_kind") or pending.get("kind") or "web"),
+        used_totp=True,
+    )
     _clear_pending_2fa(request)
     return RedirectResponse("/admin/dashboard", status_code=303)
 
@@ -1998,6 +2110,7 @@ async def admin_login_telegram_widget(
             photo_url = tg_photo
         else:
             request.session.pop("tg_oauth_mode", None)
+            request.session["wauth_login_kind"] = "telegram"
             _set_wauth_telegram(
                 request,
                 tid=tid,
@@ -2087,6 +2200,7 @@ async def admin_login_telegram_widget(
         avatar_url=payload["photo_url"],
         username=payload["username"],
     )
+    request.session["wauth_login_kind"] = "telegram"
     return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
 
 
@@ -2214,6 +2328,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
     if not _admin_allowed_by_gh(login) and not linked_tg_allowed:
         return RedirectResponse("/admin/login", status_code=303)
     if linked_user is not None and _admin_allowed_by_tg(int(linked_user.telegram_id)):
+        request.session["wauth_login_kind"] = "github"
         tg_label = str(linked_user.first_name or linked_user.username or f"tg:{linked_user.telegram_id}")
         _set_wauth_telegram(
             request,
@@ -2232,12 +2347,25 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
         avatar_url=gh_avatar,
         telegram_id=int(linked_user.telegram_id) if linked_user is not None else None,
     )
+    request.session["wauth_login_kind"] = "github"
     request.session["wauth"]["github_id"] = gh_id
     return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
 
 
 @router.post("/logout")
 async def admin_logout(request: Request):
+    uid_raw = request.session.get("wauth_user_id")
+    try:
+        uid = int(uid_raw)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid:
+        async with await _session() as session:
+            user = await session.get(User, uid)
+            if user is not None:
+                user.web_admin_session_token = None
+                user.web_admin_session_expires_at = None
+                await session.commit()
     request.session.clear()
     return RedirectResponse("/admin/login", status_code=303)
 
@@ -5153,6 +5281,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    settings = get_settings()
     vals = read_whitelist_values()
     bg_assets = _list_admin_image_assets()
     bg_source = vals.get("ADMIN_BACKGROUND_SOURCE", "default") or "default"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import pyotp
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -24,6 +25,7 @@ from bot.states.admin import (
     AdminBroadcastStates,
     AdminFactoryResetStates,
     AdminFindUserStates,
+    AdminSecurityStates,
     AdminSubscriptionStates,
 )
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
@@ -129,10 +131,27 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def _admin_profile_section_keyboard() -> InlineKeyboardMarkup:
+def _has_active_web_admin_session(user: User) -> bool:
+    exp = user.web_admin_session_expires_at
+    if not user.web_admin_session_token or exp is None:
+        return False
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return exp > datetime.now(timezone.utc)
+
+
+def _admin_profile_section_keyboard(user: User) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
-    b.row(InlineKeyboardButton(text="🔐 Сбросить Google Auth", callback_data="admin:profile:totp_reset"))
+    enabled = bool(user.web_admin_totp_enabled and (user.web_admin_totp_secret or "").strip())
+    b.row(
+        InlineKeyboardButton(
+            text="🔐 Отключить Google Auth" if enabled else "🔐 Подключить Google Auth",
+            callback_data="admin:profile:totp:disable" if enabled else "admin:profile:totp:enable",
+        )
+    )
+    if _has_active_web_admin_session(user):
+        b.row(InlineKeyboardButton(text="🚪 Отключить web-admin сессию", callback_data="admin:profile:web_session:disable"))
     b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
     return b.as_markup()
 
@@ -377,15 +396,72 @@ async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None) -> N
         caption=join_lines(
             "👨‍💼 " + bold("Админ-профиль"),
             "",
-            plain("Управление GitHub-входом и 2FA для web-admin."),
+            plain("Управление GitHub-входом, Google Auth и web-admin сессией."),
         ),
-        reply_markup=_admin_profile_section_keyboard(),
+        reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
     )
 
 
-@router.callback_query(F.data == "admin:profile:totp_reset")
-async def cb_admin_profile_totp_reset(
+@router.callback_query(F.data == "admin:profile:totp:enable")
+async def cb_admin_profile_totp_enable_start(
+    cq: CallbackQuery, db_user: User | None, state: FSMContext
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    if db_user.web_admin_totp_enabled and (db_user.web_admin_totp_secret or "").strip():
+        await cq.answer("Google Auth уже подключен.", show_alert=True)
+        return
+    secret = pyotp.random_base32()
+    await state.set_state(AdminSecurityStates.waiting_totp_enable_code)
+    await state.update_data(admin_totp_secret=secret)
+    await cq.answer()
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "👨‍💼 " + bold("Админ-профиль"),
+            "",
+            plain("Добавьте ключ в Google Authenticator и отправьте код из приложения следующим сообщением."),
+            plain("Ключ: ") + code(secret),
+        ),
+        reply_markup=_admin_profile_section_keyboard(db_user),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "admin:profile:totp:disable")
+async def cb_admin_profile_totp_disable_start(
+    cq: CallbackQuery, db_user: User | None, state: FSMContext
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    if not db_user.web_admin_totp_enabled or not (db_user.web_admin_totp_secret or "").strip():
+        await cq.answer("Google Auth не подключен.", show_alert=True)
+        return
+    await state.set_state(AdminSecurityStates.waiting_totp_disable_code)
+    await cq.answer()
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            "👨‍💼 " + bold("Админ-профиль"),
+            "",
+            plain("Отправьте текущий код из Google Authenticator, чтобы отключить защиту."),
+        ),
+        reply_markup=_admin_profile_section_keyboard(db_user),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data == "admin:profile:web_session:disable")
+async def cb_admin_profile_disable_web_session(
     cq: CallbackQuery, session: AsyncSession, db_user: User | None
 ) -> None:
     if cq.from_user is None or not _is_admin(cq.from_user.id):
@@ -394,21 +470,21 @@ async def cb_admin_profile_totp_reset(
     if db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
-    if not db_user.web_admin_totp_enabled and not (db_user.web_admin_totp_secret or "").strip():
-        await cq.answer("Google Auth уже отключен.", show_alert=True)
+    if not _has_active_web_admin_session(db_user):
+        await cq.answer("Активной web-admin сессии нет.", show_alert=True)
         return
-    db_user.web_admin_totp_enabled = False
-    db_user.web_admin_totp_secret = None
+    db_user.web_admin_session_token = None
+    db_user.web_admin_session_expires_at = None
     await session.commit()
-    await cq.answer("Google Auth сброшен.")
+    await cq.answer("Сессия отключена.")
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
             "👨‍💼 " + bold("Админ-профиль"),
             "",
-            plain("Google Auth для web-admin отключен."),
+            plain("Активная web-admin сессия отключена. Для входа потребуется новая авторизация."),
         ),
-        reply_markup=_admin_profile_section_keyboard(),
+        reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
     )
 
@@ -431,6 +507,66 @@ async def cb_admin_section_analytics(cq: CallbackQuery, db_user: User | None) ->
         reply_markup=_admin_analytics_section_keyboard(),
         settings=get_settings(),
     )
+
+
+@router.message(StateFilter(AdminSecurityStates.waiting_totp_enable_code), F.text)
+async def msg_admin_profile_totp_enable_code(
+    message: Message,
+    session: AsyncSession,
+    db_user: User | None,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        await message.answer("Сначала выполните /start.")
+        return
+    secret = str((await state.get_data()).get("admin_totp_secret") or "").strip()
+    if not secret:
+        await state.clear()
+        await message.answer("Настройка истекла. Нажмите кнопку подключения Google Auth заново.")
+        return
+    otp = "".join(ch for ch in (message.text or "") if ch.isdigit())
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        await message.answer("Неверный код. Отправьте актуальный код из Google Authenticator.")
+        return
+    db_user.web_admin_totp_secret = secret
+    db_user.web_admin_totp_enabled = True
+    await session.commit()
+    await state.clear()
+    await message.answer("Google Auth подключен для web-admin.")
+
+
+@router.message(StateFilter(AdminSecurityStates.waiting_totp_disable_code), F.text)
+async def msg_admin_profile_totp_disable_code(
+    message: Message,
+    session: AsyncSession,
+    db_user: User | None,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        await message.answer("Сначала выполните /start.")
+        return
+    secret = (db_user.web_admin_totp_secret or "").strip()
+    if not db_user.web_admin_totp_enabled or not secret:
+        await state.clear()
+        await message.answer("Google Auth уже отключен.")
+        return
+    otp = "".join(ch for ch in (message.text or "") if ch.isdigit())
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        await message.answer("Неверный код. Отправьте актуальный код из Google Authenticator.")
+        return
+    db_user.web_admin_totp_enabled = False
+    db_user.web_admin_totp_secret = None
+    await session.commit()
+    await state.clear()
+    await message.answer("Google Auth отключен для web-admin.")
 
 
 def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:

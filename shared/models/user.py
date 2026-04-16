@@ -28,6 +28,8 @@ class User(Base):
     github_profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     web_admin_totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     web_admin_totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    web_admin_session_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    web_admin_session_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

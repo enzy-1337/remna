@@ -16,14 +16,20 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from fastapi import FastAPI
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from api.routers import public_pages, tickets_api, web_admin, webhooks
 from shared.config import get_settings
+from shared.database import get_session_factory
+from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin_plain
 
@@ -31,6 +37,47 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+
+
+class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path or ""
+        if path.startswith("/admin") and not path.startswith("/admin/login"):
+            auth = request.session.get("wauth")
+            uid_raw = request.session.get("wauth_user_id")
+            token = str(request.session.get("wauth_session_token") or "").strip()
+            exp_raw = request.session.get("wauth_session_exp")
+            invalid = False
+            if auth:
+                try:
+                    uid = int(uid_raw)
+                    exp = int(exp_raw)
+                except (TypeError, ValueError):
+                    invalid = True
+                else:
+                    now_ts = int(datetime.now(timezone.utc).timestamp())
+                    if not token or exp <= now_ts:
+                        invalid = True
+                    else:
+                        factory = get_session_factory()
+                        async with factory() as session:
+                            user = await session.get(User, uid)
+                        if (
+                            user is None
+                            or (user.web_admin_session_token or "") != token
+                            or user.web_admin_session_expires_at is None
+                        ):
+                            invalid = True
+                        else:
+                            db_exp = user.web_admin_session_expires_at
+                            if db_exp.tzinfo is None:
+                                db_exp = db_exp.replace(tzinfo=timezone.utc)
+                            if db_exp <= datetime.now(timezone.utc):
+                                invalid = True
+                if invalid:
+                    request.session.clear()
+                    return RedirectResponse("/admin/login", status_code=303)
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -93,13 +140,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(WebAdminSessionValidationMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.web_admin_session_secret,
     session_cookie="remna_web_admin_session",
     same_site="lax",
     https_only=False,
+    max_age=86400,
 )
+
+
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")
 app.include_router(public_pages.router)
@@ -125,3 +176,11 @@ if _assets_dir.is_dir():
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, _exc):
+    path = request.url.path or "/"
+    if path.startswith("/api") or path.startswith("/webhooks"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return public_pages.render_not_found_page(path)

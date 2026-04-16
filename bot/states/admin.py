@@ -12,6 +12,11 @@ class AdminSubscriptionStates(StatesGroup):
     waiting_add_balance = State()
 
 
+class AdminSecurityStates(StatesGroup):
+    waiting_totp_enable_code = State()
+    waiting_totp_disable_code = State()
+
+
 class AdminFactoryResetStates(StatesGroup):
     """Подтверждение полного сброса БД (три проверки по данным Telegram)."""
 
