@@ -4939,10 +4939,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
             "<i class='fa-solid fa-arrow-up-right-from-square' aria-hidden='true'></i>Панель Remnawave</a></p>"
         )
     ties = "\n".join(parts)
-    bot_profile_href = "/"
-    if linked is not None:
-        un = (linked.username or "").strip().lstrip("@")
-        bot_profile_href = f"https://t.me/{url_quote(un)}" if un else f"tg://user?id={int(linked.telegram_id)}"
+    bot_profile_href = f"/admin/users/{int(linked.id)}" if linked is not None else "/admin/profile"
     account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
         account_link_button = """
