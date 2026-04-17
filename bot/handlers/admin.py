@@ -752,6 +752,7 @@ async def _build_user_card(
         sep,
         "💳 " + bold("Баланс и рефералы"),
         plain("Баланс: ") + bold(bal) + plain(" ₽"),
+        plain("Billing mode: ") + bold(u.billing_mode),
         plain("Приглашено по ссылке: ") + bold(str(invited)),
         plain("Триал использован: ") + bold("да" if u.trial_used else "нет"),
         sep,
@@ -809,6 +810,13 @@ async def _build_user_card(
         InlineKeyboardButton(
             text="💳 Добавить баланс",
             callback_data=f"admin:ab:{u.id}",
+        )
+    )
+    next_mode = "hybrid" if u.billing_mode == "legacy" else "legacy"
+    b.row(
+        InlineKeyboardButton(
+            text=f"🧾 Billing: переключить в {next_mode}",
+            callback_data=f"admin:bm:{u.id}",
         )
     )
     b.row(
@@ -1298,6 +1306,33 @@ async def cb_admin_unblock(
     u.is_blocked = False
     u.block_reason = None
     await session.commit()
+    await _render_user_card(cq, session, user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:bm:"))
+async def cb_admin_toggle_billing_mode(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    u = await session.get(User, uid)
+    if u is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    u.billing_mode = "hybrid" if u.billing_mode == "legacy" else "legacy"
+    await session.commit()
+    await cq.answer(f"Billing mode: {u.billing_mode}")
     await _render_user_card(cq, session, user_id=uid)
 
 
