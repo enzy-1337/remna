@@ -1304,7 +1304,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -4576,6 +4576,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <div class="flex flex-wrap items-end gap-2">
             <p class="m-0">Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
+            <p class="m-0">Billing mode: <b>{_esc(ud.billing_mode)}</b></p>
+            <form method="post" action="/admin/users/{user_id}/billing-mode/toggle" onsubmit="return confirm('Переключить billing mode пользователя #{user_id}?');">
+              <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5">
+                <i class="fa-solid fa-right-left" aria-hidden="true"></i>Переключить billing mode
+              </button>
+            </form>
             <form method="post" action="/admin/users/{user_id}/add-balance" class="flex flex-wrap items-end gap-2">
               <label class="form-control">
                 <span class="label-text text-xs opacity-70">Баланс +₽</span>
@@ -4813,6 +4819,21 @@ async def admin_user_delete_post(
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse("/admin/users?n=user_del", status_code=303)
+
+
+@router.post("/users/{user_id}/billing-mode/toggle")
+async def admin_user_toggle_billing_mode(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        user.billing_mode = "hybrid" if user.billing_mode == "legacy" else "legacy"
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=billing_mode_toggled", status_code=303)
 
 
 @router.post("/users/{user_id}/subscription/disable")
