@@ -7,7 +7,8 @@ import re
 
 from shared.md2 import bold, code, italic, link, plain, pre, spoiler, strike, underline
 
-_PH = "<<<PH_{}>>>"
+# Без «_» перед цифрой: иначе шаблон _0_ в «PH_0» срабатывает как _курсив_ в regex.
+_PH = "<<<PH{}>>>"
 
 
 def draft_to_markdown_v2(text: str) -> str:
@@ -52,8 +53,8 @@ def draft_to_markdown_v2(text: str) -> str:
     )
 
     parts: list[str] = []
-    for chunk in re.split(r"(<<<PH_\d+>>>)", s):
-        mm = re.fullmatch(r"<<<PH_(\d+)>>>", chunk)
+    for chunk in re.split(r"(<<<PH\d+>>>)", s):
+        mm = re.fullmatch(r"<<<PH(\d+)>>>", chunk)
         if mm:
             parts.append(vault[int(mm.group(1))])
         else:
