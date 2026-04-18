@@ -52,7 +52,7 @@ from shared.models.promo import PromoCode, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
-from shared.models.broadcast_mailing import BroadcastTemplate, ScheduledBroadcast
+from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
 from shared.services.billing_calculator import (
     estimate_pay_per_use_30d_rub,
@@ -76,7 +76,8 @@ from shared.services.billing_v2.detail_service import (
     summarize_month_total,
     usage_package_breakdown,
 )
-from shared.services.broadcast_service import apply_simple_formatting_for_broadcast, broadcast_html_preview_fragment
+from shared.broadcast_md2_convert import draft_to_markdown_v2
+from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
@@ -2517,10 +2518,17 @@ async def _admin_broadcast_job(text: str) -> None:
     if not tok:
         log.error("фоновая рассылка: BOT_TOKEN пуст — пропуск")
         return
+    draft = (text or "").strip()
     try:
-        log.info("фоновая рассылка из web-admin: длина текста=%s симв.", len((text or "").strip()))
+        log.info("фоновая рассылка из web-admin: длина текста=%s симв.", len(draft))
         async with Bot(token=tok) as bot:
-            ok, failed = await broadcast_to_users(bot, text)
+            ok, failed = await broadcast_to_users(bot, draft)
+        await save_broadcast_history(
+            body_draft=draft,
+            recipients_ok=ok,
+            recipients_failed=failed,
+            source="mass",
+        )
         log.info("фоновая рассылка завершена: доставлено=%s ошибок=%s", ok, failed)
     except Exception:
         log.exception("фоновая рассылка: необработанная ошибка")
@@ -2528,6 +2536,31 @@ async def _admin_broadcast_job(text: str) -> None:
 
 def _broadcast_tpl_meta_b64(*, tpl_id: int, title: str, body: str) -> str:
     payload = json.dumps({"id": tpl_id, "title": title, "body": body}, ensure_ascii=False)
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _sched_meta_b64(row: ScheduledBroadcast) -> str:
+    when = row.scheduled_at
+    if when is not None and when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    iso = when.isoformat() if when else ""
+    payload = json.dumps(
+        {"id": int(row.id), "body": row.body_text or "", "scheduled_at_utc": iso},
+        ensure_ascii=False,
+    )
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _history_meta_b64(row: BroadcastHistory) -> str:
+    payload = json.dumps(
+        {
+            "id": int(row.id),
+            "body": row.body_text or "",
+            "ok": int(row.recipients_ok),
+            "fail": int(row.recipients_failed),
+        },
+        ensure_ascii=False,
+    )
     return base64.b64encode(payload.encode("utf-8")).decode("ascii")
 
 
@@ -2562,9 +2595,14 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         alert = "<div class='alert alert-success mb-4'><span>Тестовое сообщение отправлено вам в Telegram.</span></div>" + alert
     if sp.get("n") == "scheduled":
         alert = "<div class='alert alert-success mb-4'><span>Отложенная рассылка добавлена в очередь.</span></div>" + alert
+    if sp.get("n") == "sched_ok":
+        alert = "<div class='alert alert-success mb-4'><span>Отложенная отправка обновлена.</span></div>" + alert
+    if sp.get("n") == "sched_del":
+        alert = "<div class='alert alert-success mb-4'><span>Отложенная отправка удалена.</span></div>" + alert
 
     tpl_cards: list[str] = []
-    pending_lines: list[str] = []
+    pending_cards: list[str] = []
+    hist_cards: list[str] = []
     async with await _session() as session:
         tpl_rows = (
             await session.execute(
@@ -2578,6 +2616,9 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
                 .order_by(ScheduledBroadcast.scheduled_at.asc())
                 .limit(25)
             )
+        ).scalars().all()
+        hist_rows = (
+            await session.execute(select(BroadcastHistory).order_by(desc(BroadcastHistory.sent_at)).limit(40))
         ).scalars().all()
 
     for t in tpl_rows:
@@ -2608,18 +2649,54 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             when_s = _fmt_dt_msk(when)
         else:
             when_s = "—"
-        snippet = _esc((j.body_text or "")[:80].replace("\n", " "))
-        pending_lines.append(
-            f"<li><span class='opacity-70'>{_esc(when_s)}</span> — {snippet}{'…' if len(j.body_text or '') > 80 else ''}</li>"
+        smeta = _sched_meta_b64(j)
+        prev_p = broadcast_html_preview_fragment(j.body_text or "")
+        pending_cards.append(
+            f"""
+      <div class="card bg-base-200/80 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-xs opacity-80">{_esc(when_s)}</span>
+          <span class="text-[10px] opacity-50">#{int(j.id)}</span>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_p}</div>
+        <div class="flex flex-wrap gap-1 pt-1">
+          <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">В поле ввода</button>
+          <button type="button" class="btn btn-ghost btn-xs bc-pend-edit" data-b64sched="{_esc(smeta)}">Правка</button>
+          <form method="post" action="/admin/broadcast/schedule/{int(j.id)}/delete" class="inline" onsubmit="return confirm('Удалить из очереди?');">
+            <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
+          </form>
+        </div>
+      </div>"""
+        )
+    for h in hist_rows:
+        hm = _history_meta_b64(h)
+        prev_h = broadcast_html_preview_fragment(h.body_text or "")
+        when_h = _fmt_dt_msk(h.sent_at)
+        src_l = _esc((h.source or "mass")[:16])
+        hist_cards.append(
+            f"""
+      <div class="card bg-base-200/60 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
+        <div class="flex items-start justify-between gap-2 text-xs opacity-80">
+          <span>{_esc(when_h)} · {src_l}</span>
+          <span class="opacity-70">✓{int(h.recipients_ok)} / ✗{int(h.recipients_failed)}</span>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_h}</div>
+        <div class="flex flex-wrap gap-1 pt-1">
+          <button type="button" class="btn btn-primary btn-xs bc-hist-use" data-b64hist="{_esc(hm)}">В поле ввода</button>
+        </div>
+      </div>"""
         )
 
     tpl_block = "".join(tpl_cards) or "<p class='text-sm opacity-50'>Шаблонов пока нет — создайте первый ниже.</p>"
     pend_block = (
-        "<ul class='list-disc pl-4 text-sm space-y-1'>"
-        + "".join(pending_lines)
-        + "</ul>"
-        if pending_lines
+        "".join(pending_cards)
+        if pending_cards
         else "<p class='text-sm opacity-50'>Нет запланированных отправок.</p>"
+    )
+    hist_block = (
+        "".join(hist_cards)
+        if hist_cards
+        else "<p class='text-sm opacity-50'>История появится после первой отправки всем или по расписанию.</p>"
     )
 
     body = f"""
@@ -2628,17 +2705,28 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         <div class="card bg-base-100 border border-base-content/10 shadow-lg">
           <div class="card-body gap-4">
             <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
-            <p class="text-sm opacity-80 leading-relaxed">Отправка всем пользователям из БД (как «Рассылка всем» в боте). Разметка как в Telegram HTML: <code class="bg-base-300 px-1 rounded text-xs">**жирный**</code>, <code class="bg-base-300 px-1 rounded text-xs">__подчёркнутый__</code>, также допустимы теги HTML для ссылок.</p>
-            <p class="text-xs opacity-70">Подсказка: в предпросмотре справа от поля текст отображается так же, как уйдёт в Telegram (в т.ч. жирный через **).</p>
+            <p class="text-sm opacity-80 leading-relaxed">Отправка всем из БД. Формат: <strong>MarkdownV2</strong> (как в Telegram Bot API): жирный <code class="bg-base-300 px-1 rounded text-xs">**</code> или <code class="bg-base-300 px-1 rounded text-xs">*текст*</code>, курсив <code class="bg-base-300 px-1 rounded text-xs">_курсив_</code>, подчёркнутый <code class="bg-base-300 px-1 rounded text-xs">__текст__</code>, зачёркнутый <code class="bg-base-300 px-1 rounded text-xs">~~</code>/<code class="bg-base-300 px-1 rounded text-xs">~</code>, моно <code class="bg-base-300 px-1 rounded text-xs">`код`</code>, блок <code class="bg-base-300 px-1 rounded text-xs">```</code>, ссылка <code class="bg-base-300 px-1 rounded text-xs">[текст](url)</code>, спойлер <code class="bg-base-300 px-1 rounded text-xs">||текст||</code>, цитата строкой с <code class="bg-base-300 px-1 rounded text-xs">&gt;</code>.</p>
+            <p class="text-xs opacity-70">Предпросмотр ниже повторяет переносы строк и разметку; в Telegram уйдёт сконвертированный MarkdownV2.</p>
             {alert}
             <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="Текст рассылки..." required></textarea>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-fmt-bold" title="Вставить ** для жирного"><b>**</b></button>
-              <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-fmt-under" title="Вставить __ для подчёркивания"><u>__</u></button>
+            <div class="flex flex-wrap gap-1 items-center">
+              <span class="text-xs opacity-60 w-full">Вставки:</span>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="**текст**">**жирный**</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="*текст*">*жирный*</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="_курсив_">_курсив_</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="__подчёрк__">__подчёрк__</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~~зачёрк~~">~~зачёрк~~</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~зачёрк~">~зачёрк~</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="||спойлер||">||спойлер||</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="`код`">`код`</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-pre" title="Блок кода">```блок```</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="[подпись](https://)">ссылка</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="&#10;&gt; цитата">цитата</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-date">дата/время</button>
             </div>
             <div id="bc-live-prev" class="rounded-xl border border-base-content/10 bg-base-200/50 p-3 text-sm">
-              <div class="text-xs opacity-60 mb-2">Предпросмотр</div>
-              <div class="rounded-2xl border border-base-content/20 inline-block max-w-full bg-[#2b5278] px-3 py-2 text-white shadow" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
+              <div class="text-xs opacity-60 mb-2">Предпросмотр (переносы строк как при отправке)</div>
+              <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] px-3 py-2 text-white shadow text-left" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
             </div>
             <div class="flex flex-wrap gap-2">
               <form id="bc-send" method="post" action="/admin/broadcast" class="inline">
@@ -2674,9 +2762,17 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             </div>
           </div>
           <div class="card bg-base-100 border border-base-content/10 shadow-lg">
-            <div class="card-body gap-2">
+            <div class="card-body gap-3">
               <h3 class="font-semibold">Очередь отложенных</h3>
-              {pend_block}
+              <p class="text-xs opacity-70">Редактирование и удаление только для статуса «ожидает».</p>
+              <div class="grid gap-3 max-h-[320px] overflow-y-auto pr-1">{pend_block}</div>
+            </div>
+          </div>
+          <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+            <div class="card-body gap-3">
+              <h3 class="font-semibold">История отправлений</h3>
+              <p class="text-xs opacity-70">Последние рассылки; «В поле ввода» — изменить текст и отправить снова.</p>
+              <div class="grid gap-3 max-h-[360px] overflow-y-auto pr-1">{hist_block}</div>
             </div>
           </div>
         </div>
@@ -2692,6 +2788,21 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <input name="title" id="bc-tpl-edit-title" class="input input-bordered input-sm" maxlength="160" /></label>
           <label class="form-control"><span class="label-text text-xs">Текст</span>
             <textarea name="tpl_body" id="bc-tpl-edit-body" class="textarea textarea-bordered min-h-[140px]"></textarea></label>
+          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+        </form>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+    <dialog id="bc-sched-modal" class="modal">
+      <div class="modal-box max-w-lg">
+        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
+        <h3 class="font-bold text-lg mb-2">Отложенная отправка</h3>
+        <form method="post" id="bc-sched-edit-form" action="/admin/broadcast/schedule/0/edit" class="flex flex-col gap-2">
+          <input type="hidden" name="scheduled_at_utc" id="bc-sched-edit-utc" value="" />
+          <label class="form-control"><span class="label-text text-xs">Текст сообщения</span>
+            <textarea name="tpl_body" id="bc-sched-edit-body" class="textarea textarea-bordered min-h-[160px] font-mono text-sm"></textarea></label>
+          <label class="form-control"><span class="label-text text-xs">Когда отправить</span>
+            <input type="datetime-local" id="bc-sched-edit-local" class="input input-bordered input-sm" required /></label>
           <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
         </form>
       </div>
@@ -2737,10 +2848,64 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         ta.value=x.slice(0,s)+w+x.slice(e);
         ta.focus(); ta.selectionStart=ta.selectionEnd=s+w.length; queueLive();
       }}
-      var fb=document.getElementById('bc-fmt-bold');
-      var fu=document.getElementById('bc-fmt-under');
-      if(fb)fb.addEventListener('click',function(){{ ins('**'); }});
-      if(fu)fu.addEventListener('click',function(){{ ins('__'); }});
+      function isoUtcToDatetimeLocal(iso){{
+        if(!iso)return '';
+        var d=new Date(iso);
+        if(isNaN(d.getTime()))return '';
+        var pad=function(n){{ return (n<10?'0':'')+n; }};
+        return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+      }}
+      document.querySelectorAll('[data-bc-ins]').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          ins(btn.getAttribute('data-bc-ins')||'');
+        }});
+      }});
+      var preBtn=document.getElementById('bc-ins-pre');
+      if(preBtn) preBtn.addEventListener('click',function(){{ ins('```\\n\\n```'); }});
+      var dtBtn=document.getElementById('bc-ins-date');
+      if(dtBtn) dtBtn.addEventListener('click',function(){{
+        ins(new Date().toLocaleString('ru-RU',{{hour12:false}}));
+      }});
+      document.querySelectorAll('.bc-pend-use').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          var m=btn.getAttribute('data-b64sched'); if(!m||!ta)return;
+          var o=jsonFromUtf8B64(m); if(!o)return;
+          ta.value=o.body||''; ta.focus(); queueLive();
+          if(window.remnaToast)window.remnaToast('success','Текст из очереди подставлен');
+        }});
+      }});
+      document.querySelectorAll('.bc-pend-edit').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          var m=btn.getAttribute('data-b64sched'); if(!m)return;
+          var o=jsonFromUtf8B64(m); if(!o)return;
+          var bodyEl=document.getElementById('bc-sched-edit-body');
+          var locEl=document.getElementById('bc-sched-edit-local');
+          var utcEl=document.getElementById('bc-sched-edit-utc');
+          var form=document.getElementById('bc-sched-edit-form');
+          if(bodyEl) bodyEl.value=o.body||'';
+          if(locEl) locEl.value=isoUtcToDatetimeLocal(o.scheduled_at_utc||'');
+          if(utcEl) utcEl.value='';
+          if(form) form.action='/admin/broadcast/schedule/'+encodeURIComponent(o.id)+'/edit';
+          document.getElementById('bc-sched-modal').showModal();
+        }});
+      }});
+      var sef=document.getElementById('bc-sched-edit-form');
+      if(sef) sef.addEventListener('submit',function(){{
+        var loc=document.getElementById('bc-sched-edit-local');
+        var utc=document.getElementById('bc-sched-edit-utc');
+        if(loc&&utc&&loc.value){{
+          var d=new Date(loc.value);
+          if(!isNaN(d.getTime())) utc.value=d.toISOString();
+        }}
+      }});
+      document.querySelectorAll('.bc-hist-use').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          var m=btn.getAttribute('data-b64hist'); if(!m||!ta)return;
+          var o=jsonFromUtf8B64(m); if(!o)return;
+          ta.value=o.body||''; ta.focus(); queueLive();
+          if(window.remnaToast)window.remnaToast('success','Текст из истории подставлен — измените и отправьте');
+        }});
+      }});
       document.querySelectorAll('.bc-tpl-use').forEach(function(btn){{
         btn.addEventListener('click',function(){{
           var m=btn.getAttribute('data-b64tpl'); if(!m||!ta)return;
@@ -2789,7 +2954,7 @@ async def admin_broadcast_preview_html(request: Request, text: str = Form("")) -
     if denied is not None:
         return JSONResponse({"html": "", "denied": True}, status_code=401)
     frag = broadcast_html_preview_fragment(text)
-    return JSONResponse({"html": frag})
+    return JSONResponse({"html": f'<div class="bc-prev-wrap">{frag}</div>'})
 
 
 @router.post("/broadcast/test")
@@ -2811,8 +2976,8 @@ async def admin_broadcast_test(request: Request, text: str = Form("")) -> Redire
         tid = 0
     if tid <= 0:
         return RedirectResponse("/admin/broadcast?err=test_no_tg", status_code=303)
-    html_body = apply_simple_formatting_for_broadcast(body)
-    await send_telegram_message(tid, html_body, parse_mode="HTML", settings=settings)
+    md_body = draft_to_markdown_v2(body)
+    await send_telegram_message(tid, md_body, parse_mode="MarkdownV2", settings=settings)
     return RedirectResponse("/admin/broadcast?n=test_sent", status_code=303)
 
 
@@ -2849,6 +3014,52 @@ async def admin_broadcast_schedule(
         )
         await session.commit()
     return RedirectResponse("/admin/broadcast?n=scheduled", status_code=303)
+
+
+@router.post("/broadcast/schedule/{sid}/delete")
+async def admin_broadcast_schedule_delete(request: Request, sid: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        row = await session.get(ScheduledBroadcast, sid)
+        if row is not None and row.status == "pending":
+            await session.delete(row)
+            await session.commit()
+    return RedirectResponse("/admin/broadcast?n=sched_del", status_code=303)
+
+
+@router.post("/broadcast/schedule/{sid}/edit")
+async def admin_broadcast_schedule_edit(
+    request: Request, sid: int, tpl_body: str = Form(""), scheduled_at_utc: str = Form("")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = (tpl_body or "").strip()
+    if not body:
+        return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
+    raw_iso = (scheduled_at_utc or "").strip().replace("Z", "+00:00")
+    if not raw_iso:
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    try:
+        scheduled_utc = datetime.fromisoformat(raw_iso)
+    except ValueError:
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    if scheduled_utc.tzinfo is None:
+        scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+    else:
+        scheduled_utc = scheduled_utc.astimezone(timezone.utc)
+    if scheduled_utc <= datetime.now(timezone.utc):
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    async with await _session() as session:
+        row = await session.get(ScheduledBroadcast, sid)
+        if row is None or row.status != "pending":
+            return RedirectResponse("/admin/broadcast", status_code=303)
+        row.body_text = body
+        row.scheduled_at = scheduled_utc
+        await session.commit()
+    return RedirectResponse("/admin/broadcast?n=sched_ok", status_code=303)
 
 
 @router.post("/broadcast/template")
@@ -6035,7 +6246,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     })();
     </script>"""
     body = f"""
-    <div class="tabs-env card bg-base-100 border border-base-content/10 shadow-lg">
+    <div class="tabs-env card bg-base-100 border-0 shadow-lg">
       <div class="card-body gap-4">
         <style>
           .tabs-env {{

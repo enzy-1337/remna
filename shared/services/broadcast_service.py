@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import html as html_lib
 import logging
-import re
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -15,9 +13,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.broadcast_md2_convert import draft_to_markdown_v2
 from shared.config import Settings
 from shared.database import get_session_factory
-from shared.models.broadcast_mailing import ScheduledBroadcast
+from shared.models.broadcast_mailing import BroadcastHistory, ScheduledBroadcast
 from shared.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -26,48 +25,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_DELAY_SEC = 0.05
 MAX_MESSAGE_LEN = 4096
 
-_RE_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
-_RE_UNDER = re.compile(r"__(.+?)__", re.DOTALL)
-
-
-def _bold_segments(raw: str) -> str:
-    parts: list[str] = []
-    last = 0
-    for m in _RE_BOLD.finditer(raw):
-        parts.append(html_lib.escape(raw[last : m.start()]))
-        parts.append("<b>" + html_lib.escape(m.group(1)) + "</b>")
-        last = m.end()
-    parts.append(html_lib.escape(raw[last:]))
-    return "".join(parts)
-
-
-def _underline_segments(htmlish: str) -> str:
-    parts: list[str] = []
-    last = 0
-    for m in _RE_UNDER.finditer(htmlish):
-        parts.append(htmlish[last : m.start()])
-        parts.append("<u>" + html_lib.escape(m.group(1)) + "</u>")
-        last = m.end()
-    parts.append(htmlish[last:])
-    return "".join(parts)
-
-
 def apply_simple_formatting_for_broadcast(text: str) -> str:
-    """
-    Упрощённая разметка для массовой рассылки (HTML в Telegram):
-    - **жирный** → <b>жирный</b>
-    - __подчёркнутый__ → <u>подчёркнутый</u>
-    Фрагменты вне разметки экранируются; внутри ** и __ — безопасное экранирование содержимого.
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return ""
-    return _underline_segments(_bold_segments(raw))
+    """Совместимость: черновик → MarkdownV2 (для старых вызовов)."""
+    return draft_to_markdown_v2(text)
 
 
 def broadcast_html_preview_fragment(text: str) -> str:
-    """Фрагмент HTML для предпросмотра в админке (как для Telegram HTML)."""
-    return apply_simple_formatting_for_broadcast(text)
+    """HTML-предпросмотр черновика (MarkdownV2-подобная разметка)."""
+    from shared.broadcast_md2_convert import draft_to_preview_html
+
+    return draft_to_preview_html(text)
 
 
 async def collect_recipient_telegram_ids(
@@ -89,17 +56,17 @@ async def broadcast_to_users(
     *,
     skip_blocked: bool = True,
     delay_sec: float = DEFAULT_DELAY_SEC,
-    parse_mode: str | None = ParseMode.HTML,
+    parse_mode: str | None = ParseMode.MARKDOWN_V2,
 ) -> tuple[int, int]:
     """
     Отправляет сообщение всем пользователям из БД.
-    По умолчанию HTML: <b>, <i>, <u>, <s>, <code>, <pre>, <a href="">, эмодзи как есть.
+    Черновик админки конвертируется в MarkdownV2 (см. shared.broadcast_md2_convert).
     parse_mode=None — только обычный текст без разметки.
     """
-    body = (text or "").strip()
-    if not body:
+    draft = (text or "").strip()
+    if not draft:
         return 0, 0
-    body = apply_simple_formatting_for_broadcast(body)
+    body = draft_to_markdown_v2(draft)
     body = body[:MAX_MESSAGE_LEN]
 
     factory = get_session_factory()
@@ -116,9 +83,8 @@ async def broadcast_to_users(
         try:
             await bot.send_message(chat_id, body, parse_mode=parse_mode)
         except TelegramBadRequest:
-            # Часто ломается разметка HTML — повтор без parse_mode (как обычный текст)
             if parse_mode:
-                await bot.send_message(chat_id, body, parse_mode=None)
+                await bot.send_message(chat_id, draft[:MAX_MESSAGE_LEN], parse_mode=None)
             else:
                 raise
 
@@ -147,6 +113,27 @@ async def broadcast_to_users(
 
     logger.info("broadcast: завершено ok=%s failed=%s (всего в выборке %s)", ok, failed, n)
     return ok, failed
+
+
+async def save_broadcast_history(
+    *,
+    body_draft: str,
+    recipients_ok: int,
+    recipients_failed: int,
+    source: str,
+) -> None:
+    src = (source or "mass")[:32]
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(
+            BroadcastHistory(
+                body_text=body_draft[:12000],
+                recipients_ok=max(0, int(recipients_ok)),
+                recipients_failed=max(0, int(recipients_failed)),
+                source=src,
+            )
+        )
+        await session.commit()
 
 
 async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
@@ -187,8 +174,15 @@ async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
         return
 
     try:
+        ok = failed = 0
         async with Bot(token=tok) as bot:
-            await broadcast_to_users(bot, body)
+            ok, failed = await broadcast_to_users(bot, body)
+        await save_broadcast_history(
+            body_draft=body,
+            recipients_ok=ok,
+            recipients_failed=failed,
+            source="scheduled",
+        )
         async with factory() as session:
             r3 = await session.get(ScheduledBroadcast, job_id)
             if r3 is not None:

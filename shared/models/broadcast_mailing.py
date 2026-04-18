@@ -33,3 +33,16 @@ class ScheduledBroadcast(Base):
     error_text: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BroadcastHistory(Base):
+    """Лог отправленных массовых рассылок (черновик текста как в админке)."""
+
+    __tablename__ = "broadcast_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    body_text: Mapped[str] = mapped_column(Text())
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    recipients_ok: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    recipients_failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    source: Mapped[str] = mapped_column(String(32), default="mass", server_default="mass")
