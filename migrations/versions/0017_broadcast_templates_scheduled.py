@@ -54,8 +54,11 @@ def upgrade() -> None:
         sa.text(
             "INSERT INTO broadcast_templates (title, body, sort_order) "
             "VALUES (:title, :body, :sort)"
-        ),
-        {"title": "Приветствие", "body": "👋 **Привет!**", "sort": 0},
+        ).bindparams(
+            title="Приветствие",
+            body="👋 **Привет!**",
+            sort=0,
+        )
     )
 
 
