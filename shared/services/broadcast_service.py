@@ -115,6 +115,36 @@ async def broadcast_to_users(
     return ok, failed
 
 
+async def send_broadcast_to_channel(
+    bot: Bot,
+    text: str,
+    *,
+    chat_id: int,
+    parse_mode: str | None = ParseMode.MARKDOWN_V2,
+) -> bool:
+    """Одно сообщение в канал/супергруппу."""
+    draft = (text or "").strip()
+    if not draft:
+        return False
+    body = draft_to_markdown_v2(draft)
+    body = body[:MAX_MESSAGE_LEN]
+    try:
+        await bot.send_message(chat_id, body, parse_mode=parse_mode)
+        return True
+    except TelegramBadRequest:
+        if parse_mode:
+            try:
+                await bot.send_message(chat_id, draft[:MAX_MESSAGE_LEN], parse_mode=None)
+                return True
+            except Exception:
+                logger.warning("broadcast channel send failed chat=%s", chat_id, exc_info=True)
+                return False
+        return False
+    except Exception:
+        logger.warning("broadcast channel send failed chat=%s", chat_id, exc_info=True)
+        return False
+
+
 async def save_broadcast_history(
     *,
     body_draft: str,
@@ -173,16 +203,42 @@ async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
                 await session.commit()
         return
 
+    send_u = bool(getattr(row, "send_to_users", True))
+    send_ch = bool(getattr(row, "send_to_channel", False))
+    if not send_u and not send_ch:
+        async with factory() as session:
+            r2 = await session.get(ScheduledBroadcast, job_id)
+            if r2 is not None:
+                r2.status = "failed"
+                r2.error_text = "no targets selected"
+                r2.sent_at = datetime.now(timezone.utc)
+                await session.commit()
+        return
+
     try:
         ok = failed = 0
+        ch_sent = False
         async with Bot(token=tok) as bot:
-            ok, failed = await broadcast_to_users(bot, body)
-        await save_broadcast_history(
-            body_draft=body,
-            recipients_ok=ok,
-            recipients_failed=failed,
-            source="scheduled",
-        )
+            if send_u:
+                ok, failed = await broadcast_to_users(bot, body)
+            if send_ch:
+                cid = getattr(settings, "broadcast_main_channel_id", None)
+                if cid:
+                    ch_sent = await send_broadcast_to_channel(bot, body, chat_id=int(cid))
+        if send_u:
+            await save_broadcast_history(
+                body_draft=body,
+                recipients_ok=ok,
+                recipients_failed=failed,
+                source="scheduled",
+            )
+        if send_ch:
+            await save_broadcast_history(
+                body_draft=body,
+                recipients_ok=1 if ch_sent else 0,
+                recipients_failed=0 if ch_sent else 1,
+                source="channel",
+            )
         async with factory() as session:
             r3 = await session.get(ScheduledBroadcast, job_id)
             if r3 is not None:

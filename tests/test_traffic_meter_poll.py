@@ -97,18 +97,17 @@ class TrafficMeterPollIntegrationTests(IsolatedAsyncioTestCase):
                 mock_rw_cls.return_value.get_user = AsyncMock(return_value=uinf_300mb)
                 n = await sync_user_traffic_meter_from_panel(session, user=u, settings=settings)
 
-            self.assertEqual(n, 1)
+            # Первый опрос без записанных traffic_gb_step — только базовая линия, без списания.
+            self.assertEqual(n, 0)
             meter = (
                 await session.execute(select(BillingTrafficMeter).where(BillingTrafficMeter.user_id == u.id))
             ).scalar_one()
             self.assertEqual(meter.charged_gb_steps, 1)
-            ev = (
-                await session.execute(
-                    select(BillingUsageEvent).where(BillingUsageEvent.user_id == u.id).limit(1)
-                )
+            ev_cnt = (
+                await session.execute(select(func.count()).select_from(BillingUsageEvent))
             ).scalar_one()
-            self.assertTrue(ev.event_id.startswith("traffic_meter:"))
-            self.assertEqual(u.balance, Decimal("95"))
+            self.assertEqual(int(ev_cnt or 0), 0)
+            self.assertEqual(u.balance, Decimal("100"))
 
             with patch(
                 "shared.services.billing_v2.traffic_meter_poll_service.RemnaWaveClient"
@@ -130,7 +129,7 @@ class TrafficMeterPollIntegrationTests(IsolatedAsyncioTestCase):
 
             self.assertEqual(n3, 1)
             self.assertEqual(meter.charged_gb_steps, 2)
-            self.assertEqual(u.balance, Decimal("90"))
+            self.assertEqual(u.balance, Decimal("95"))
 
             await session.commit()
 

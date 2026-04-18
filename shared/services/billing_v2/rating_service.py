@@ -210,7 +210,11 @@ async def charge_daily_device_once(
         )
         return True
 
-    plan = await _active_package_plan(session, user_id=user.id, now=ev_ts)
+    plan = (
+        None
+        if user.billing_mode == "hybrid"
+        else await _active_package_plan(session, user_id=user.id, now=ev_ts)
+    )
     package_covered = False
     if plan is not None and plan.device_limit is not None and plan.device_limit > 0:
         active_hwids = (

@@ -151,18 +151,26 @@ async def api_tickets_list(
     q: str | None = Query(default=None),
     sort: str = Query(default="desc"),
     limit: int = Query(default=100, ge=1, le=500),
+    topic_id: int | None = Query(default=None),
+    assigned: str | None = Query(default=None),
+    user_billing: str | None = Query(default=None),
 ) -> dict:
     _require_api_login(request)
     wauth = request.session.get("wauth") or {}
     admin_key = int(wauth.get("telegram_id") or 0)
+    me_uid = int((request.session.get("wauth_user_id") or 0))
     cache_key = (
         admin_key,
+        me_uid,
         (status or "").strip(),
         (date_from or "").strip(),
         (date_to or "").strip(),
         (q or "").strip(),
         (sort or "desc").strip().lower(),
         int(limit),
+        int(topic_id) if topic_id is not None else -1,
+        (assigned or "").strip().lower(),
+        (user_billing or "").strip().lower(),
     )
     now_m = time.monotonic()
     cached = _TICKETS_LIST_CACHE.get(cache_key)
@@ -184,6 +192,22 @@ async def api_tickets_list(
             "(CAST(t.id AS TEXT) ILIKE :q OR COALESCE(m0.text,'') ILIKE :q OR COALESCE(u.first_name,'') ILIKE :q OR COALESCE(u.username,'') ILIKE :q)"
         )
         params["q"] = f"%{q.strip()}%"
+    if topic_id is not None:
+        where.append("t.topic_id = :tpid")
+        params["tpid"] = int(topic_id)
+    asg = (assigned or "").strip().lower()
+    if asg == "none":
+        where.append("t.assigned_admin_id IS NULL")
+    elif asg == "me" and me_uid > 0:
+        where.append("t.assigned_admin_id = :asgme")
+        params["asgme"] = me_uid
+    elif asg.isdigit():
+        where.append("t.assigned_admin_id = :asgn")
+        params["asgn"] = int(asg)
+    ub = (user_billing or "").strip().lower()
+    if ub in ("hybrid", "legacy"):
+        where.append("u.billing_mode = :ubm")
+        params["ubm"] = ub
     ord_dir = "ASC" if sort.strip().lower() == "asc" else "DESC"
     sql = f"""
         SELECT

@@ -86,7 +86,13 @@ async def sync_user_traffic_meter_from_panel(
     ).scalar_one_or_none()
     if meter is None:
         legacy = await _count_traffic_gb_step_events(session, user.id)
-        initial = min(steps_due, legacy)
+        if legacy > 0:
+            # Уже есть списания вебхуками — не дублируем при первом появлении счётчика.
+            initial = min(steps_due, legacy)
+        else:
+            # Нет записанных шагов — текущий объём по панели считаем базой (не списываем «старый»
+            # трафик до hybrid / до первого опроса счётчика).
+            initial = steps_due
         meter = BillingTrafficMeter(user_id=user.id, charged_gb_steps=initial)
         session.add(meter)
         await session.flush()

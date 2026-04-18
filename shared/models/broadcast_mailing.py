@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.models.base import Base
@@ -28,6 +28,8 @@ class ScheduledBroadcast(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     body_text: Mapped[str] = mapped_column(Text())
+    send_to_users: Mapped[bool] = mapped_column(default=True, server_default="true")
+    send_to_channel: Mapped[bool] = mapped_column(default=False, server_default="false")
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
     error_text: Mapped[str | None] = mapped_column(Text(), nullable=True)

@@ -238,7 +238,19 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "BILLING_DEVICE_DAILY_RUB",
                 "Сутки за устройство (₽)",
                 lambda s: str(s.billing_device_daily_rub),
-                "За каждое уникальное HWID за календарный день (если не покрыто пакетом).",
+                "Hybrid: только за использованные устройства за день; без бесплатных слотов из пакета.",
+            ),
+            (
+                "BILLING_HYBRID_HWID_SLOTS",
+                "Hybrid: слотов HWID на панели",
+                lambda s: str(s.billing_hybrid_hwid_slots),
+                "Максимум одновременных HWID без докупки слотов (обычно 15).",
+            ),
+            (
+                "BROADCAST_MAIN_CHANNEL_ID",
+                "Канал для рассылки из админки",
+                lambda s: str(getattr(s, "broadcast_main_channel_id", "") or ""),
+                "Отрицательный chat_id; 0 или пусто — только пользователям при отметке «канал».",
             ),
             (
                 "BILLING_DEVICE_DAILY_JOB_INTERVAL_SEC",

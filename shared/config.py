@@ -267,6 +267,18 @@ class Settings(BaseSettings):
     )
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
+    billing_hybrid_hwid_slots: int = Field(
+        default=15,
+        ge=2,
+        le=64,
+        validation_alias="BILLING_HYBRID_HWID_SLOTS",
+        description="Hybrid/PAYG: лимит HWID в панели и слотов подписки (без докупки; оплата за фактически использованные устройства по суточной ставке).",
+    )
+    broadcast_main_channel_id: int | None = Field(
+        default=-1002701615639,
+        validation_alias="BROADCAST_MAIN_CHANNEL_ID",
+        description="ID канала для опциональной рассылки из web-admin (отрицательный id). 0 — выкл.",
+    )
     billing_mobile_gb_extra_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_MOBILE_GB_EXTRA_RUB")
     billing_optimized_route_gb_extra_rub: Decimal = Field(
         default=Decimal("2.5"),

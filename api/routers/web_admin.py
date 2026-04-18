@@ -2505,12 +2505,18 @@ async def admin_logout(request: Request):
     return RedirectResponse("/admin/login", status_code=303)
 
 
-async def _admin_broadcast_job(text: str) -> None:
+async def _admin_broadcast_job(
+    text: str,
+    *,
+    send_users: bool = True,
+    send_channel: bool = False,
+    channel_id: int | None = None,
+) -> None:
     import logging
 
     from aiogram import Bot
 
-    from shared.services.broadcast_service import broadcast_to_users
+    from shared.services.broadcast_service import broadcast_to_users, send_broadcast_to_channel
 
     log = logging.getLogger("api.broadcast")
     settings = get_settings()
@@ -2520,16 +2526,39 @@ async def _admin_broadcast_job(text: str) -> None:
         return
     draft = (text or "").strip()
     try:
-        log.info("фоновая рассылка из web-admin: длина текста=%s симв.", len(draft))
-        async with Bot(token=tok) as bot:
-            ok, failed = await broadcast_to_users(bot, draft)
-        await save_broadcast_history(
-            body_draft=draft,
-            recipients_ok=ok,
-            recipients_failed=failed,
-            source="mass",
+        log.info(
+            "фоновая рассылка из web-admin: длина текста=%s симв., users=%s channel=%s",
+            len(draft),
+            send_users,
+            send_channel,
         )
-        log.info("фоновая рассылка завершена: доставлено=%s ошибок=%s", ok, failed)
+        ok = failed = 0
+        ch_ok = False
+        async with Bot(token=tok) as bot:
+            if send_users:
+                ok, failed = await broadcast_to_users(bot, draft)
+            if send_channel and channel_id:
+                ch_ok = await send_broadcast_to_channel(bot, draft, chat_id=int(channel_id))
+        if send_users:
+            await save_broadcast_history(
+                body_draft=draft,
+                recipients_ok=ok,
+                recipients_failed=failed,
+                source="mass",
+            )
+        if send_channel:
+            await save_broadcast_history(
+                body_draft=draft,
+                recipients_ok=1 if ch_ok else 0,
+                recipients_failed=0 if ch_ok else 1,
+                source="channel",
+            )
+        log.info(
+            "фоновая рассылка завершена: users ok=%s fail=%s channel_ok=%s",
+            ok,
+            failed,
+            ch_ok,
+        )
     except Exception:
         log.exception("фоновая рассылка: необработанная ошибка")
 
@@ -2545,7 +2574,13 @@ def _sched_meta_b64(row: ScheduledBroadcast) -> str:
         when = when.replace(tzinfo=timezone.utc)
     iso = when.isoformat() if when else ""
     payload = json.dumps(
-        {"id": int(row.id), "body": row.body_text or "", "scheduled_at_utc": iso},
+        {
+            "id": int(row.id),
+            "body": row.body_text or "",
+            "scheduled_at_utc": iso,
+            "send_to_users": bool(getattr(row, "send_to_users", True)),
+            "send_to_channel": bool(getattr(row, "send_to_channel", False)),
+        },
         ensure_ascii=False,
     )
     return base64.b64encode(payload.encode("utf-8")).decode("ascii")
@@ -2569,6 +2604,14 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
+    bc_settings = get_settings()
+    bc_ch_id = getattr(bc_settings, "broadcast_main_channel_id", None)
+    bc_ch_hint = (
+        f"<p class='text-xs opacity-60'>Канал по умолчанию: <code class='bg-base-300 px-1 rounded'>{bc_ch_id}</code> "
+        "(переменная <code class='bg-base-300 px-1 rounded'>BROADCAST_MAIN_CHANNEL_ID</code>).</p>"
+        if bc_ch_id
+        else "<p class='text-xs text-warning'>Канал не задан в конфиге — отметка «В канал» не сработает, пока не задан BROADCAST_MAIN_CHANNEL_ID.</p>"
+    )
     sp = request.query_params
     alert = ""
     if sp.get("started") == "1":
@@ -2585,6 +2628,10 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         alert = "<div class='alert alert-warning mb-4'><span>Нет Telegram ID в сессии: войдите через Telegram или провьте профиль.</span></div>"
     elif err == "schedule_bad_time":
         alert = "<div class='alert alert-error mb-4'><span>Неверная дата или время отложенной отправки.</span></div>"
+    elif err == "no_targets":
+        alert = "<div class='alert alert-warning mb-4'><span>Выберите хотя бы одну цель: пользователям из БД или канал.</span></div>"
+    elif err == "no_channel":
+        alert = "<div class='alert alert-error mb-4'><span>В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).</span></div>"
     elif err == "template_bad":
         alert = "<div class='alert alert-error mb-4'><span>Заполните название и текст шаблона.</span></div>"
     if sp.get("n") == "tpl_ok":
@@ -2651,6 +2698,12 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             when_s = "—"
         smeta = _sched_meta_b64(j)
         prev_p = broadcast_html_preview_fragment(j.body_text or "")
+        parts_tgt: list[str] = []
+        if getattr(j, "send_to_users", True):
+            parts_tgt.append("БД")
+        if getattr(j, "send_to_channel", False):
+            parts_tgt.append("канал")
+        tgt_s = " + ".join(parts_tgt) if parts_tgt else "—"
         pending_cards.append(
             f"""
       <div class="card bg-base-200/80 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
@@ -2658,6 +2711,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           <span class="text-xs opacity-80">{_esc(when_s)}</span>
           <span class="text-[10px] opacity-50">#{int(j.id)}</span>
         </div>
+        <div class="text-[10px] opacity-70">Куда: {_esc(tgt_s)}</div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_p}</div>
         <div class="flex flex-wrap gap-1 pt-1">
           <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">В поле ввода</button>
@@ -2707,6 +2761,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
             <p class="text-sm opacity-80 leading-relaxed">Отправка всем из БД. Формат: <strong>MarkdownV2</strong> (как в Telegram Bot API): жирный <code class="bg-base-300 px-1 rounded text-xs">**</code> или <code class="bg-base-300 px-1 rounded text-xs">*текст*</code>, курсив <code class="bg-base-300 px-1 rounded text-xs">_курсив_</code>, подчёркнутый <code class="bg-base-300 px-1 rounded text-xs">__текст__</code>, зачёркнутый <code class="bg-base-300 px-1 rounded text-xs">~~</code>/<code class="bg-base-300 px-1 rounded text-xs">~</code>, моно <code class="bg-base-300 px-1 rounded text-xs">`код`</code>, блок <code class="bg-base-300 px-1 rounded text-xs">```</code>, ссылка <code class="bg-base-300 px-1 rounded text-xs">[текст](url)</code>, спойлер <code class="bg-base-300 px-1 rounded text-xs">||текст||</code>, цитата строкой с <code class="bg-base-300 px-1 rounded text-xs">&gt;</code>.</p>
             <p class="text-xs opacity-70">Предпросмотр ниже повторяет переносы строк и разметку; в Telegram уйдёт сконвертированный MarkdownV2.</p>
+            {bc_ch_hint}
             {alert}
             <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="Текст рассылки..." required></textarea>
             <div class="flex flex-wrap gap-1 items-center">
@@ -2728,9 +2783,20 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
               <div class="text-xs opacity-60 mb-2">Предпросмотр (переносы строк как при отправке)</div>
               <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] px-3 py-2 text-white shadow text-left" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
             </div>
+            <div class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
+              <span class="text-xs font-medium opacity-80">Куда отправить</span>
+              <label class="label cursor-pointer justify-start gap-3 py-1">
+                <input type="checkbox" name="send_users" id="bc-cb-users" form="bc-send" value="1" class="checkbox checkbox-sm" checked />
+                <span class="label-text text-sm">Всем пользователям из базы (не заблокированным)</span>
+              </label>
+              <label class="label cursor-pointer justify-start gap-3 py-1">
+                <input type="checkbox" name="send_channel" id="bc-cb-channel" form="bc-send" value="1" class="checkbox checkbox-sm" />
+                <span class="label-text text-sm">В главный канал (ID из конфига)</span>
+              </label>
+            </div>
             <div class="flex flex-wrap gap-2">
-              <form id="bc-send" method="post" action="/admin/broadcast" class="inline">
-                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить всем (в фоне)</button>
+              <form id="bc-send" method="post" action="/admin/broadcast" class="inline flex flex-wrap items-center gap-2">
+                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить (в фоне)</button>
               </form>
               <form method="post" action="/admin/broadcast/test" id="bc-test-f" class="inline">
                 <input type="hidden" name="text" id="bc-test-hidden" value="" />
@@ -2740,6 +2806,8 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <form method="post" action="/admin/broadcast/schedule" id="bc-sched-f" class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
               <span class="text-sm font-medium">Отправка по времени</span>
               <input type="hidden" name="text" id="bc-sched-body" value="" />
+              <input type="hidden" name="send_users" id="bc-sched-h-su" value="1" />
+              <input type="hidden" name="send_channel" id="bc-sched-h-sc" value="" />
               <input type="hidden" name="scheduled_at_utc" id="bc-sched-utc" value="" />
               <input type="datetime-local" name="scheduled_at_local" id="bc-sched-local" class="input input-bordered input-sm w-full max-w-xs" required />
               <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 w-fit gap-1.5"><i class="fa-solid fa-clock" aria-hidden="true"></i>Запланировать</button>
@@ -2803,6 +2871,14 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <textarea name="tpl_body" id="bc-sched-edit-body" class="textarea textarea-bordered min-h-[160px] font-mono text-sm"></textarea></label>
           <label class="form-control"><span class="label-text text-xs">Когда отправить</span>
             <input type="datetime-local" id="bc-sched-edit-local" class="input input-bordered input-sm" required /></label>
+          <label class="label cursor-pointer justify-start gap-2">
+            <input type="checkbox" name="send_users" id="bc-sched-edit-su" value="1" class="checkbox checkbox-sm" checked />
+            <span class="label-text text-xs">Пользователям из БД</span>
+          </label>
+          <label class="label cursor-pointer justify-start gap-2">
+            <input type="checkbox" name="send_channel" id="bc-sched-edit-sc" value="1" class="checkbox checkbox-sm" />
+            <span class="label-text text-xs">В канал</span>
+          </label>
           <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
         </form>
       </div>
@@ -2885,6 +2961,10 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           if(bodyEl) bodyEl.value=o.body||'';
           if(locEl) locEl.value=isoUtcToDatetimeLocal(o.scheduled_at_utc||'');
           if(utcEl) utcEl.value='';
+          var esu=document.getElementById('bc-sched-edit-su');
+          var esc=document.getElementById('bc-sched-edit-sc');
+          if(esu) esu.checked = (o.send_to_users !== false && o.send_to_users !== undefined) ? !!o.send_to_users : true;
+          if(esc) esc.checked = !!o.send_to_channel;
           if(form) form.action='/admin/broadcast/schedule/'+encodeURIComponent(o.id)+'/edit';
           document.getElementById('bc-sched-modal').showModal();
         }});
@@ -2941,6 +3021,12 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           var d=new Date(loc.value);
           if(!isNaN(d.getTime())) utc.value=d.toISOString();
         }}
+        var su=document.getElementById('bc-cb-users');
+        var sc=document.getElementById('bc-cb-channel');
+        var hsu=document.getElementById('bc-sched-h-su');
+        var hsc=document.getElementById('bc-sched-h-sc');
+        if(hsu) hsu.value = su&&su.checked ? '1' : '';
+        if(hsc) hsc.value = sc&&sc.checked ? '1' : '';
       }});
     }})();
     </script>
@@ -2983,7 +3069,11 @@ async def admin_broadcast_test(request: Request, text: str = Form("")) -> Redire
 
 @router.post("/broadcast/schedule")
 async def admin_broadcast_schedule(
-    request: Request, text: str = Form(""), scheduled_at_utc: str = Form("")
+    request: Request,
+    text: str = Form(""),
+    scheduled_at_utc: str = Form(""),
+    send_users: str | None = Form(None),
+    send_channel: str | None = Form(None),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -2991,6 +3081,15 @@ async def admin_broadcast_schedule(
     body = (text or "").strip()
     if not body:
         return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
+    su = send_users == "1"
+    sc = send_channel == "1"
+    if not su and not sc:
+        return RedirectResponse("/admin/broadcast?err=no_targets", status_code=303)
+    if sc:
+        sch = get_settings()
+        cid0 = getattr(sch, "broadcast_main_channel_id", None)
+        if cid0 is None or int(cid0) == 0:
+            return RedirectResponse("/admin/broadcast?err=no_channel", status_code=303)
     raw_iso = (scheduled_at_utc or "").strip().replace("Z", "+00:00")
     if not raw_iso:
         return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
@@ -3010,6 +3109,8 @@ async def admin_broadcast_schedule(
                 body_text=body,
                 scheduled_at=scheduled_utc,
                 status="pending",
+                send_to_users=su,
+                send_to_channel=sc,
             )
         )
         await session.commit()
@@ -3031,7 +3132,12 @@ async def admin_broadcast_schedule_delete(request: Request, sid: int) -> Redirec
 
 @router.post("/broadcast/schedule/{sid}/edit")
 async def admin_broadcast_schedule_edit(
-    request: Request, sid: int, tpl_body: str = Form(""), scheduled_at_utc: str = Form("")
+    request: Request,
+    sid: int,
+    tpl_body: str = Form(""),
+    scheduled_at_utc: str = Form(""),
+    send_users: str | None = Form(None),
+    send_channel: str | None = Form(None),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -3052,12 +3158,23 @@ async def admin_broadcast_schedule_edit(
         scheduled_utc = scheduled_utc.astimezone(timezone.utc)
     if scheduled_utc <= datetime.now(timezone.utc):
         return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    su = send_users == "1"
+    sc = send_channel == "1"
+    if not su and not sc:
+        return RedirectResponse("/admin/broadcast?err=no_targets", status_code=303)
+    if sc:
+        sch = get_settings()
+        cid0 = getattr(sch, "broadcast_main_channel_id", None)
+        if cid0 is None or int(cid0) == 0:
+            return RedirectResponse("/admin/broadcast?err=no_channel", status_code=303)
     async with await _session() as session:
         row = await session.get(ScheduledBroadcast, sid)
         if row is None or row.status != "pending":
             return RedirectResponse("/admin/broadcast", status_code=303)
         row.body_text = body
         row.scheduled_at = scheduled_utc
+        row.send_to_users = su
+        row.send_to_channel = sc
         await session.commit()
     return RedirectResponse("/admin/broadcast?n=sched_ok", status_code=303)
 
@@ -3114,7 +3231,13 @@ async def admin_broadcast_template_delete(request: Request, tpl_id: int) -> Redi
 
 
 @router.post("/broadcast")
-async def admin_broadcast_post(request: Request, background: BackgroundTasks, text: str = Form("")) -> RedirectResponse:
+async def admin_broadcast_post(
+    request: Request,
+    background: BackgroundTasks,
+    text: str = Form(""),
+    send_users: str | None = Form(None),
+    send_channel: str | None = Form(None),
+) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
@@ -3124,7 +3247,17 @@ async def admin_broadcast_post(request: Request, background: BackgroundTasks, te
     settings = get_settings()
     if not (settings.bot_token or "").strip():
         return RedirectResponse("/admin/broadcast?err=no_bot_token", status_code=303)
-    background.add_task(_admin_broadcast_job, body)
+    su = send_users == "1"
+    sc = send_channel == "1"
+    if not su and not sc:
+        return RedirectResponse("/admin/broadcast?err=no_targets", status_code=303)
+    ch_id: int | None = None
+    if sc:
+        cid = getattr(settings, "broadcast_main_channel_id", None)
+        if cid is None or int(cid) == 0:
+            return RedirectResponse("/admin/broadcast?err=no_channel", status_code=303)
+        ch_id = int(cid)
+    background.add_task(_admin_broadcast_job, body, send_users=su, send_channel=sc, channel_id=ch_id)
     return RedirectResponse("/admin/broadcast?started=1", status_code=303)
 
 
@@ -3736,7 +3869,7 @@ async def admin_tickets(request: Request) -> HTMLResponse:
           <h2 class="card-title text-2xl"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Тикеты</h2>
           <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/admin/tickets" title="Сбросить фильтры"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Сброс</a>
         </div>
-        <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <label class="form-control"><span class="label-text text-xs opacity-70">Статус</span>
             <select id="tk-status" class="select select-bordered select-sm h-9 min-h-9 text-sm">
               <option value="">Все</option>
@@ -3745,13 +3878,30 @@ async def admin_tickets(request: Request) -> HTMLResponse:
               <option value="closed">Закрыт</option>
             </select>
           </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Тема (topic_id)</span>
+            <input id="tk-topic" type="number" min="0" step="1" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="пусто — все" />
+          </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Назначение</span>
+            <select id="tk-assigned" class="select select-bordered select-sm h-9 min-h-9 text-sm">
+              <option value="">Все</option>
+              <option value="none">Без ответственного</option>
+              <option value="me">На мне</option>
+            </select>
+          </label>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Биллинг юзера</span>
+            <select id="tk-billing" class="select select-bordered select-sm h-9 min-h-9 text-sm">
+              <option value="">Все</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="legacy">Legacy</option>
+            </select>
+          </label>
           <label class="form-control"><span class="label-text text-xs opacity-70">Дата с</span>
             <input id="tk-from" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
           </label>
           <label class="form-control"><span class="label-text text-xs opacity-70">Дата по</span>
             <input id="tk-to" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">Поиск</span>
+          <label class="form-control md:col-span-2 xl:col-span-2"><span class="label-text text-xs opacity-70">Поиск</span>
             <input id="tk-q" type="text" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="ID, текст, имя, username" />
           </label>
         </div>
@@ -3771,6 +3921,9 @@ async def admin_tickets(request: Request) -> HTMLResponse:
       var grid=document.getElementById('tk-grid');
       var empty=document.getElementById('tk-empty');
       var st=document.getElementById('tk-status');
+      var topic=document.getElementById('tk-topic');
+      var assigned=document.getElementById('tk-assigned');
+      var billing=document.getElementById('tk-billing');
       var df=document.getElementById('tk-from');
       var dt=document.getElementById('tk-to');
       var q=document.getElementById('tk-q');
@@ -3802,10 +3955,13 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         var nm=(u.first_name||u.username||('user#'+u.id||'—'));
         var prev=esc((t.preview||'').slice(0,180));
         var ass=t.assigned_admin_id?('#'+t.assigned_admin_id):'—';
+        var top=(t.topic_id!==undefined&&t.topic_id!==null)?('<span class=\"badge badge-ghost badge-xs\">topic '+esc(String(t.topic_id))+'</span>'):'';
         return ''
           +'<div class=\"card bg-base-100 border border-base-content/10 shadow-md hover:shadow-lg transition-shadow\">'
           +'<div class=\"card-body gap-3\">'
-          +'<div class=\"flex items-start justify-between gap-2\"><h3 class=\"card-title text-lg\">Тикет #'+t.id+'</h3>'+statusBadge(t.status)+'</div>'
+          +'<div class=\"flex items-start justify-between gap-2 flex-wrap\">'
+          +'<div class=\"flex items-center gap-2 flex-wrap\"><h3 class=\"card-title text-lg\">Тикет #'+t.id+'</h3>'+top+'</div>'
+          +statusBadge(t.status)+'</div>'
           +'<div class=\"flex items-center gap-3\">'+avatarFor(u)
           +'<div class=\"min-w-0\"><a class=\"link link-primary font-medium truncate block\" href=\"/admin/users/'+u.id+'\">'+esc(nm)+'</a>'
           +'<p class=\"text-xs opacity-70 truncate\">'+esc(uname)+'</p></div></div>'
@@ -3821,6 +3977,9 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         inFlight=new AbortController();
         var p=new URLSearchParams();
         if(st.value)p.set('status',st.value);
+        if(topic&&String(topic.value||'').trim()!=='') p.set('topic_id', String(parseInt(topic.value,10)||0));
+        if(assigned&&assigned.value)p.set('assigned',assigned.value);
+        if(billing&&billing.value)p.set('user_billing',billing.value);
         if(df.value)p.set('date_from',df.value);
         if(dt.value)p.set('date_to',dt.value);
         if((q.value||'').trim())p.set('q',q.value.trim());
@@ -3847,6 +4006,9 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         debounceTimer=setTimeout(function(){loadTickets();},320);
       });
       st.addEventListener('change',loadTickets);
+      if(topic) topic.addEventListener('change',loadTickets);
+      if(assigned) assigned.addEventListener('change',loadTickets);
+      if(billing) billing.addEventListener('change',loadTickets);
       df.addEventListener('change',loadTickets);
       dt.addEventListener('change',loadTickets);
       sort.addEventListener('change',loadTickets);
@@ -4308,6 +4470,7 @@ async def admin_users(
     risk: str = "",
     bill: str = "",
     gh: str = "",
+    usage: str = "",
     sort: str = "",
 ) -> HTMLResponse:
     denied = _require_login(request)
@@ -4319,9 +4482,10 @@ async def admin_users(
     risk_f = (risk or "").strip().lower()
     bill_f = (bill or "").strip().lower()
     gh_f = (gh or "").strip().lower()
+    usage_f = (usage or "").strip().lower()
     sort_f = (sort or "").strip().lower()
     page = max(1, page)
-    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, sort_f)
+    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f)
     now_m = time.monotonic()
     cached_users = _USERS_HTML_CACHE.get(cache_key)
     if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
@@ -4401,6 +4565,28 @@ async def admin_users(
         elif gh_f == "0":
             query = query.where(User.github_username.is_(None))
             count_query = count_query.where(User.github_username.is_(None))
+        if usage_f == "payg_active":
+            since_u = now_for_filter - timedelta(days=14)
+            payg_exists = exists().where(
+                BillingUsageEvent.user_id == User.id,
+                BillingUsageEvent.created_at >= since_u,
+                BillingUsageEvent.event_type.in_(("traffic_gb_step", "device_daily")),
+            )
+            query = query.where(payg_exists)
+            count_query = count_query.where(payg_exists)
+        elif usage_f == "heavy":
+            since_h = now_for_filter - timedelta(days=30)
+            heavy_sq = (
+                select(BillingUsageEvent.user_id.label("uid"))
+                .where(
+                    BillingUsageEvent.created_at >= since_h,
+                    BillingUsageEvent.event_type.in_(("traffic_gb_step", "device_daily")),
+                )
+                .group_by(BillingUsageEvent.user_id)
+                .having(func.count(BillingUsageEvent.id) >= 45)
+            ).subquery()
+            query = query.where(User.id.in_(select(heavy_sq.c.uid)))
+            count_query = count_query.where(User.id.in_(select(heavy_sq.c.uid)))
         if sort_f == "bal_desc":
             query = query.order_by(desc(User.balance), desc(User.id))
         elif sort_f == "bal_asc":
@@ -4460,6 +4646,7 @@ async def admin_users(
             "risk": risk_f,
             "bill": bill_f,
             "gh": gh_f,
+            "usage": usage_f,
             "sort": sort_f,
         },
     )
@@ -4518,6 +4705,17 @@ async def admin_users(
         + (" selected" if gh_f == "0" else "")
         + '>Без GitHub</option>'
     )
+    usage_opts = (
+        '<option value=""'
+        + (" selected" if not usage_f else "")
+        + '>Все</option>'
+        + '<option value="payg_active"'
+        + (" selected" if usage_f == "payg_active" else "")
+        + '>PAYG за 14 дн.</option>'
+        + '<option value="heavy"'
+        + (" selected" if usage_f == "heavy" else "")
+        + '>Массовое потребление (≥45 событий / 30 дн.)</option>'
+    )
     sort_opts = (
         '<option value=""'
         + (" selected" if not sort_f else "")
@@ -4550,8 +4748,11 @@ async def admin_users(
         f"<select id='us-bill' name='bill' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{bill_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>GitHub</span>"
         f"<select id='us-gh' name='gh' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{gh_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Потребление</span>"
+        f"<select id='us-usage' name='usage' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{usage_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Сортировка</span>"
         f"<select id='us-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
+        "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/users' title='Сбросить все фильтры'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>Сбросить</a>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
@@ -4560,7 +4761,7 @@ async def admin_users(
         "<script>(function(){"
         "var form=document.getElementById('us-form'); if(!form)return;"
         "var q=document.getElementById('us-q'); var sub=document.getElementById('us-sub'); var blk=document.getElementById('us-blocked'); var risk=document.getElementById('us-risk');"
-        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var sort=document.getElementById('us-sort');"
+        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var usage=document.getElementById('us-usage'); var sort=document.getElementById('us-sort');"
         "var timer=null;"
         "function submitLater(ms){ if(timer)clearTimeout(timer); timer=setTimeout(function(){ form.submit(); }, ms); }"
         "if(q){ q.addEventListener('input', function(){ submitLater(320); }); q.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); form.submit(); } }); }"
@@ -4569,6 +4770,7 @@ async def admin_users(
         "if(risk)risk.addEventListener('change', function(){ form.submit(); });"
         "if(bill)bill.addEventListener('change', function(){ form.submit(); });"
         "if(gh)gh.addEventListener('change', function(){ form.submit(); });"
+        "if(usage)usage.addEventListener('change', function(){ form.submit(); });"
         "if(sort)sort.addEventListener('change', function(){ form.submit(); });"
         "})();</script>"
     )

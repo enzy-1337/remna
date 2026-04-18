@@ -36,6 +36,13 @@ MIN_DEVICES = 2
 MAX_DEVICES = 10
 
 
+def hybrid_subscription_hwid_cap(settings: Settings, user: User) -> int | None:
+    """Hybrid: фиксированный лимит слотов/HWID в панели (оплата по факту использования)."""
+    if settings.billing_v2_enabled and user.billing_mode == "hybrid":
+        return int(settings.billing_hybrid_hwid_slots)
+    return None
+
+
 def plan_tariff_button_label(plan: Plan) -> str:
     """Текст кнопки тарифа со скидкой, напр.: «3 месяца — 370 ₽ (-5%)»."""
     name = (plan.name or "")[:28]
@@ -254,7 +261,11 @@ async def purchase_plan_with_balance(
 
     now = datetime.now(timezone.utc)
     active = await get_active_subscription(session, user.id)
-    dev_limit = active.devices_count if active else MIN_DEVICES
+    hybrid_cap = hybrid_subscription_hwid_cap(settings, user)
+    if hybrid_cap is not None:
+        dev_limit = hybrid_cap
+    else:
+        dev_limit = active.devices_count if active else MIN_DEVICES
 
     base = now
     if active and active.expires_at > now:
@@ -341,21 +352,24 @@ async def purchase_plan_with_balance(
         active.status = "active"
         active.remnawave_sub_uuid = rw_uuid
         active.auto_renew = True
+        if hybrid_cap is not None:
+            active.devices_count = hybrid_cap
         sub = active
     else:
+        dc = hybrid_cap if hybrid_cap is not None else MIN_DEVICES
         sub = Subscription(
             user_id=user.id,
             plan_id=base_plan.id,
             remnawave_sub_uuid=rw_uuid,
             status="active",
-            devices_count=MIN_DEVICES,
+            devices_count=dc,
             started_at=now,
             expires_at=new_expires,
             auto_renew=True,
         )
         session.add(sub)
         await session.flush()
-        for i in range(1, MIN_DEVICES + 1):
+        for i in range(1, dc + 1):
             session.add(
                 Device(subscription_id=sub.id, user_id=user.id, name=f"Устройство {i}")
             )
@@ -815,6 +829,7 @@ async def provision_hybrid_payg_panel_if_needed(
                 user.remnawave_uuid = uuid_lib.UUID(str(existing["uuid"]))
             else:
                 uname = build_remnawave_username_from_db_user(user)
+                hw_cap = int(settings.billing_hybrid_hwid_slots)
                 created = await _create_rw_user_retries(
                     rw,
                     base_username=uname,
@@ -822,7 +837,7 @@ async def provision_hybrid_payg_panel_if_needed(
                     expire_at=payg_horizon,
                     traffic_limit_bytes=0,
                     description=desc,
-                    hwid_device_limit=MIN_DEVICES,
+                    hwid_device_limit=hw_cap,
                     active_internal_squads=squads,
                 )
                 uid = created.get("uuid")
@@ -832,7 +847,7 @@ async def provision_hybrid_payg_panel_if_needed(
         await update_rw_user_respecting_hwid_limit(
             rw,
             str(user.remnawave_uuid),
-            devices_limit_for_panel=MIN_DEVICES,
+            devices_limit_for_panel=int(settings.billing_hybrid_hwid_slots),
             expire_at=payg_horizon,
             traffic_limit_bytes=0,
             status="ACTIVE",
@@ -846,19 +861,20 @@ async def provision_hybrid_payg_panel_if_needed(
     uid = user.remnawave_uuid
     assert uid is not None
 
+    hw_cap = int(settings.billing_hybrid_hwid_slots)
     sub = Subscription(
         user_id=user.id,
         plan_id=base_plan.id,
         remnawave_sub_uuid=uid,
         status="active",
-        devices_count=MIN_DEVICES,
+        devices_count=hw_cap,
         started_at=now,
         expires_at=payg_horizon,
         auto_renew=True,
     )
     session.add(sub)
     await session.flush()
-    for i in range(1, MIN_DEVICES + 1):
+    for i in range(1, hw_cap + 1):
         session.add(Device(subscription_id=sub.id, user_id=user.id, name=f"Устройство {i}"))
     await ensure_placeholder_devices(session, sub)
     session.add(
@@ -965,6 +981,8 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
         sub.expires_at = now + timedelta(days=int(settings.billing_payg_subscription_days))
         sub.status = "active"
         sub.auto_renew = True
+        sub.devices_count = int(settings.billing_hybrid_hwid_slots)
+        await ensure_placeholder_devices(session, sub)
 
         if user.remnawave_uuid is not None:
             try:
