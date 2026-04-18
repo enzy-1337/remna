@@ -9,6 +9,7 @@ from shared.config import Settings
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 from shared.database import get_session_factory
 import asyncio
 import logging
@@ -72,6 +73,10 @@ async def maybe_switch_to_hybrid(
         )
     )
     await session.flush()
+    try:
+        await baseline_meter_at_hybrid_transition(session, user=user, settings=settings)
+    except Exception:
+        logger.exception("baseline_meter_at_hybrid_transition failed user_id=%s", user.id)
     return True
 
 

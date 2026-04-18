@@ -37,6 +37,36 @@ def gb_steps_due_from_used_gb(used_gb: float | None) -> int:
     return min(_MAX_CHARGES_PER_USER_PER_TICK * 10, int(math.ceil(u - _EPS)))
 
 
+async def baseline_meter_at_hybrid_transition(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+) -> None:
+    """
+    После перехода на hybrid выставляет charged_gb_steps по текущему used_gb из панели,
+    чтобы не списать PAYG за гигабайты, «намотанные» до перехода (если счётчик уже есть — перезаписываем).
+    """
+    if user.remnawave_uuid is None:
+        return
+    rw = RemnaWaveClient(settings)
+    try:
+        uinf = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError as e:
+        logger.warning("baseline_meter_at_hybrid_transition: get_user user_id=%s err=%s", user.id, e)
+        return
+    used_gb, _lim = extract_traffic_gb_from_rw_user(uinf)
+    steps_due = gb_steps_due_from_used_gb(used_gb)
+    meter = (
+        await session.execute(select(BillingTrafficMeter).where(BillingTrafficMeter.user_id == user.id).limit(1))
+    ).scalar_one_or_none()
+    if meter is None:
+        session.add(BillingTrafficMeter(user_id=user.id, charged_gb_steps=steps_due))
+    else:
+        meter.charged_gb_steps = steps_due
+    await session.flush()
+
+
 async def _count_traffic_gb_step_events(session: AsyncSession, user_id: int) -> int:
     r = await session.execute(
         select(func.count())

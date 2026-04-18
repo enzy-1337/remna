@@ -7,6 +7,7 @@ import base64
 import hmac
 import html
 import json
+import logging
 import time
 from calendar import monthrange
 from pathlib import Path
@@ -79,6 +80,7 @@ from shared.services.billing_v2.detail_service import (
 from shared.broadcast_md2_convert import draft_to_markdown_v2
 from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
+from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
@@ -97,6 +99,37 @@ from shared.subscription_qr import subscription_url_qr_png
 from tickets.config import config as tickets_config
 
 _RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
+
+_TRANSACTION_TYPE_HINTS_RU: dict[str, str] = {
+    "topup": "Пополнение баланса через платёжную систему (Platega, CryptoBot и т.д.)",
+    "subscription": "Покупка тарифа или продление с баланса",
+    "subscription_autorenew": "Автопродление PAYG-подписки (списание 0 ₽ в метаданных продления)",
+    "manual_add": "Покупка дополнительного слота устройства с баланса",
+    "admin_balance_add": "Ручное начисление суммы администратором из web-admin или бота",
+    "admin_balance_reset": "Обнуление баланса администратором в web-admin",
+    "billing_transition": "Техническая запись перехода на гибридный биллинг (legacy → hybrid)",
+    "usage_charge": "Списание PAYG: трафик по ГБ или суточная плата за устройство (метаданные уточняют источник)",
+    "promo_topup_bonus": "Бонусные рубли по промокоду при пополнении",
+    "first_topup_balance_bonus": "Бонус при первом пополнении (% от суммы или акция)",
+    "referral_signup": "Приветственное начисление по реферальной ссылке при регистрации",
+    "referral_signup_invited": "Приветственное начисление приглашённому по реферальной ссылке",
+    "referral_payment_percent": "Процент на баланс пригласившему от платежа приглашённого",
+}
+
+
+def _txn_type_hint_html(txn_type: str) -> str:
+    tt = (txn_type or "").strip()
+    hint = _TRANSACTION_TYPE_HINTS_RU.get(tt)
+    inner = _esc(tt)
+    if hint:
+        return (
+            f'<span class="cursor-help border-b border-dotted border-base-content/35" '
+            f'title="{_esc_attr(hint)}">{inner}</span>'
+        )
+    return inner
+
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["web-admin"])
 
@@ -1005,6 +1038,16 @@ def _layout(
         <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">Карточка устройства</h3>
         <div id="remna-hwid-json-card" class="flex-1 overflow-auto rounded-lg border border-base-content/10 bg-base-200 p-4"></div>
       </div>
+    </div>
+    <div id="remna-confirm-overlay" class="fixed inset-0 z-[160] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-confirm-title">
+      <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
+        <h3 id="remna-confirm-title" class="font-bold text-lg mb-2">Подтверждение</h3>
+        <p id="remna-confirm-msg" class="text-sm opacity-85 mb-6 whitespace-pre-wrap"></p>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn btn-ghost" id="remna-confirm-cancel">Отмена</button>
+          <button type="button" class="btn btn-primary" id="remna-confirm-ok">Да</button>
+        </div>
+      </div>
     </div>"""
     elif not show_nav:
         main_cls = "min-h-screen flex items-center justify-center p-4 w-full"
@@ -1192,7 +1235,66 @@ def _layout(
         + '</div>'
         + '<div class="grid gap-3 sm:grid-cols-2">'+grid+'</div>';
     }
-    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();remnaCloseHwidJson();};
+    var remnaPendingForm=null;
+    var remnaPendingResolve=null;
+    function remnaHideConfirmOverlay(){
+      var o=document.getElementById('remna-confirm-overlay');
+      if(o){o.classList.add('hidden');o.classList.remove('flex');}
+    }
+    function remnaAbortConfirm(){
+      remnaHideConfirmOverlay();
+      remnaPendingForm=null;
+      if(remnaPendingResolve){var r=remnaPendingResolve;remnaPendingResolve=null;r(false);}
+    }
+    window.remnaCloseAllModals=function(){remnaCloseHwid();remnaCloseSlot();remnaCloseSubdis();remnaCloseHwidJson();remnaAbortConfirm();};
+    document.addEventListener('submit',function(e){
+      var f=e.target;
+      if(!(f instanceof HTMLFormElement))return;
+      var msg=f.getAttribute('data-remna-confirm-msg');
+      if(!msg)return;
+      if(f.getAttribute('data-remna-confirmed')==='1'){
+        f.removeAttribute('data-remna-confirmed');
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      remnaPendingForm=f;
+      remnaPendingResolve=null;
+      var msgEl=document.getElementById('remna-confirm-msg');
+      var titleEl=document.getElementById('remna-confirm-title');
+      if(msgEl)msgEl.textContent=msg;
+      if(titleEl)titleEl.textContent='Подтверждение';
+      var ov=document.getElementById('remna-confirm-overlay');
+      if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
+    },true);
+    (function(){
+      var okBtn=document.getElementById('remna-confirm-ok');
+      var cancelBtn=document.getElementById('remna-confirm-cancel');
+      if(okBtn)okBtn.addEventListener('click',function(){
+        remnaHideConfirmOverlay();
+        if(remnaPendingForm){
+          var pf=remnaPendingForm;
+          remnaPendingForm=null;
+          pf.setAttribute('data-remna-confirmed','1');
+          pf.submit();
+          return;
+        }
+        if(remnaPendingResolve){var r=remnaPendingResolve;remnaPendingResolve=null;r(true);}
+      });
+      if(cancelBtn)cancelBtn.addEventListener('click',remnaAbortConfirm);
+    })();
+    window.remnaConfirmPromise=function(message,title){
+      return new Promise(function(resolve){
+        remnaPendingForm=null;
+        remnaPendingResolve=resolve;
+        var msgEl=document.getElementById('remna-confirm-msg');
+        var titleEl=document.getElementById('remna-confirm-title');
+        if(msgEl)msgEl.textContent=message||'';
+        if(titleEl)titleEl.textContent=title||'Подтверждение';
+        var ov=document.getElementById('remna-confirm-overlay');
+        if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
+      });
+    };
     document.addEventListener('click',function(e){
       var t=e.target;
       if(t&&t.getAttribute&&t.getAttribute('data-remna-close')==='hwid'){e.preventDefault();remnaCloseHwid();}
@@ -1207,6 +1309,8 @@ def _layout(
       if(sd&&t===sd)remnaCloseSubdis();
       var jn=t&&t.closest&&t.closest('#remna-hwid-json-overlay');
       if(jn&&t===jn)remnaCloseHwidJson();
+      var cfm=t&&t.closest&&t.closest('#remna-confirm-overlay');
+      if(cfm&&t===cfm)remnaAbortConfirm();
       var openH=t&&t.closest&&t.closest('[data-remna-open-hwid]');
       if(openH){
         e.preventDefault();
@@ -1308,7 +1412,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -2682,7 +2786,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         <div class="flex flex-wrap gap-1 pt-1">
           <button type="button" class="btn btn-primary btn-xs bc-tpl-use" data-b64tpl="{_esc(meta_b64)}">В поле ввода</button>
           <button type="button" class="btn btn-ghost btn-xs bc-tpl-edit" data-b64tpl="{_esc(meta_b64)}">Правка</button>
-          <form method="post" action="/admin/broadcast/template/{int(t.id)}/delete" class="inline" onsubmit="return confirm('Удалить шаблон?');">
+          <form method="post" action="/admin/broadcast/template/{int(t.id)}/delete" class="inline" data-remna-confirm-msg="Удалить шаблон?">
             <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
           </form>
         </div>
@@ -2716,7 +2820,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         <div class="flex flex-wrap gap-1 pt-1">
           <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">В поле ввода</button>
           <button type="button" class="btn btn-ghost btn-xs bc-pend-edit" data-b64sched="{_esc(smeta)}">Правка</button>
-          <form method="post" action="/admin/broadcast/schedule/{int(j.id)}/delete" class="inline" onsubmit="return confirm('Удалить из очереди?');">
+          <form method="post" action="/admin/broadcast/schedule/{int(j.id)}/delete" class="inline" data-remna-confirm-msg="Удалить из очереди?">
             <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
           </form>
         </div>
@@ -4243,7 +4347,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +'<input type="hidden" name="enabled" value="'+nxt+'"/>'
             +'<button type="submit" class="btn btn-ghost btn-xs">'+esc(lbl)+'</button>'
             +'</form>';
-          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" onsubmit="return confirm(&quot;Отключить подписку пользователя?&quot;);">'
+          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" data-remna-confirm-msg="Отключить подписку пользователя?">'
             +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
             +'<button type="submit" class="btn btn-error btn-outline btn-sm">Отключить подписку</button>'
             +'</form>';
@@ -4396,7 +4500,12 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       }});
       document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
       document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
-      document.getElementById('tk-set-closed').addEventListener('click', async function(){{if(!confirm("Закрыть тикет?"))return;try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{failToast("Не удалось закрыть тикет");}}}});
+      document.getElementById('tk-set-closed').addEventListener('click', async function(){{
+        var ok=false;
+        try{{ ok = await window.remnaConfirmPromise('Закрыть тикет?','Подтверждение'); }}catch(_e){{ return; }}
+        if(!ok)return;
+        try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{failToast('Не удалось закрыть тикет');}}
+      }});
       document.getElementById('tk-assign-save').addEventListener('click', async function(){{
         var tg=assign.value||'';
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
@@ -5171,7 +5280,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         for sid, st, sa, se, dc in subs_tuples
     )
     tx_rows = "".join(
-        f"<tr><td>{tid}</td><td>{_esc(tt)}</td><td>{_esc(ta)}</td><td>{_esc(ts)}</td>"
+        f"<tr><td>{tid}</td><td>{_txn_type_hint_html(tt)}</td><td>{_esc(ta)}</td><td>{_esc(ts)}</td>"
         f"<td>{_esc(tp or '-')}</td><td>{_fmt_dt_msk(tc)}</td></tr>"
         for tid, tt, ta, ts, tp, tc in txs_tuples
     )
@@ -5237,6 +5346,20 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 risk_text = "Риск вне ближайших суток"
     risk_24 = _fmt_dt_msk(ud.risk_notified_24h_at) if ud.risk_notified_24h_at else "—"
     risk_1 = _fmt_dt_msk(ud.risk_notified_1h_at) if ud.risk_notified_1h_at else "—"
+    admin_ids_ui = frozenset(int(x) for x in (settings.admin_telegram_ids or []))
+    show_github_in_profile = int(ud.telegram_id) in admin_ids_ui
+    github_lines_html = ""
+    if show_github_in_profile:
+        github_lines_html = (
+            f"<p>GitHub: <b>{_esc(ud.github_username or '-')}</b></p>"
+            + _copy_line(label="GitHub URL", value=str(ud.github_profile_url) if ud.github_profile_url else "—")
+        )
+    else:
+        github_lines_html = (
+            "<p class=\"text-xs opacity-70\">GitHub скрыт: ссылка и профиль показываются только для Telegram ID из "
+            "<code class=\"bg-base-300 px-1 rounded text-[11px]\">ADMIN_TELEGRAM_IDS</code>.</p>"
+        )
+
     negative_risk_block = f"""
     <div class="rounded-2xl border border-warning/30 bg-base-200/30 p-4">
       <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Риск ухода в минус</h3>
@@ -5248,6 +5371,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <p>Последнее уведомление 24ч: <b>{_esc(risk_24)}</b></p>
         <p>Последнее уведомление 1ч: <b>{_esc(risk_1)}</b></p>
       </div>
+      <form method="post" action="/admin/users/{user_id}/risk-notify/reset" class="inline mt-3"
+        data-remna-confirm-msg="{_esc_attr('Сбросить отметки уведомлений о риске минуса (уведомления 24 ч и 1 ч)?')}">
+        <button type="submit" class="btn btn-outline btn-warning btn-sm h-9 min-h-9 gap-1.5">
+          <i class="fa-solid fa-bell-slash" aria-hidden="true"></i>Сбросить статистику риска
+        </button>
+      </form>
     </div>
     """
 
@@ -5378,17 +5507,17 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="grid gap-2 text-sm sm:grid-cols-2">
             <p>Имя: <b>{_esc((ud.first_name or '') + ' ' + (ud.last_name or ''))}</b></p>
             <p>Username: <b>{_esc(ud.username or '-')}</b></p>
-            <p>GitHub: <b>{_esc(ud.github_username or '-')}</b></p>
+            {github_lines_html}
           </div>
           {_copy_line(label="ID в боте", value=str(ud.id))}
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
-          {_copy_line(label="GitHub URL", value=str(ud.github_profile_url) if ud.github_profile_url else "—")}
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <div class="flex flex-wrap items-end gap-2">
             <p class="m-0">Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
             <p class="m-0">Billing mode: <b>{_esc(ud.billing_mode)}</b></p>
-            <form method="post" action="/admin/users/{user_id}/billing-mode/toggle" onsubmit="return confirm('Переключить billing mode пользователя #{user_id}?');">
+            <form method="post" action="/admin/users/{user_id}/billing-mode/toggle"
+              data-remna-confirm-msg="{_esc_attr(f'Переключить billing mode пользователя #{user_id}?')}">
               <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5">
                 <i class="fa-solid fa-right-left" aria-hidden="true"></i>Переключить billing mode
               </button>
@@ -5409,7 +5538,8 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 <i class="fa-solid fa-plus" aria-hidden="true"></i>Выдать
               </button>
             </form>
-            <form method="post" action="/admin/users/{user_id}/reset-balance" onsubmit="return confirm('Обнулить баланс пользователя #{user_id}?');">
+            <form method="post" action="/admin/users/{user_id}/reset-balance"
+              data-remna-confirm-msg="{_esc_attr(f'Обнулить баланс пользователя #{user_id}?')}">
               <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
                 <i class="fa-solid fa-eraser" aria-hidden="true"></i>Обнулить
               </button>
@@ -5424,7 +5554,8 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="rounded-xl border border-error/40 bg-error/5 p-4">
             <h3 class="text-sm font-bold uppercase tracking-wide text-error">Опасная зона</h3>
             <p class="text-xs opacity-80 mt-2">Полное удаление из PostgreSQL (подписки, транзакции и связанные данные по CASCADE) и удаление учётной записи в Remnawave, если задан UUID и не включён REMNAWAVE_STUB.</p>
-            <form method="post" action="/admin/users/{user_id}/delete" class="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end" onsubmit="return confirm('Удалить пользователя #{user_id} навсегда? Это необратимо.');">
+            <form method="post" action="/admin/users/{user_id}/delete" class="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
+              data-remna-confirm-msg="{_esc_attr('Удалить пользователя навсегда? Это необратимо.')}">
               <label class="form-control w-full max-w-xs">
                 <span class="label-text text-xs font-medium">Подтверждение: введите Telegram ID</span>
                 <input type="text" name="confirm_telegram_id" required inputmode="numeric" autocomplete="off" placeholder="{_esc(str(ud.telegram_id))}" class="input input-bordered input-sm h-9 min-h-9 font-mono" />
@@ -5637,14 +5768,37 @@ async def admin_user_toggle_billing_mode(request: Request, user_id: int) -> Redi
     denied = _require_login(request)
     if denied is not None:
         return denied
+    settings = get_settings()
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
         user.billing_mode = "hybrid" if user.billing_mode == "legacy" else "legacy"
+        await session.flush()
+        if user.billing_mode == "hybrid":
+            try:
+                await baseline_meter_at_hybrid_transition(session, user=user, settings=settings)
+            except Exception:
+                logger.exception("baseline_meter_at_hybrid_transition failed user_id=%s", user.id)
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=billing_mode_toggled", status_code=303)
+
+
+@router.post("/users/{user_id}/risk-notify/reset")
+async def admin_user_risk_notify_reset(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        user.risk_notified_24h_at = None
+        user.risk_notified_1h_at = None
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=risk_reset", status_code=303)
 
 
 @router.post("/users/{user_id}/subscription/disable")
@@ -5828,7 +5982,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
         account_link_button = """
-          <form method="post" action="/admin/profile/github/unlink" onsubmit="return confirm('Отменить связку Telegram и GitHub?');">
+          <form method="post" action="/admin/profile/github/unlink" data-remna-confirm-msg="Отменить связку Telegram и GitHub?">
             <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9 gap-1.5">
               <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отменить связку аккаунтов
             </button>
@@ -6576,7 +6730,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
           <i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>
           <span>Операция массовая. Перед запуском проверьте настройки BILLING_TRANSITION_* и BILLING_PAYG_SUBSCRIPTION_DAYS.</span>
         </div>
-        <form method="post" action="/admin/payg/mass-convert" onsubmit="return confirm('Запустить массовую конвертацию legacy подписок в PAYG?');" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/payg/mass-convert" data-remna-confirm-msg="Запустить массовую конвертацию legacy подписок в PAYG?" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
             <span class="label-text text-xs opacity-70">Подтверждение: введите PAYG</span>
             <input
@@ -6600,7 +6754,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
         <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
       <div class="card-body gap-4 pt-0">
-        <form method="post" action="/admin/settings/backup/run" onsubmit="return confirm('Запустить пробный бэкап PostgreSQL сейчас?');" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/settings/backup/run" data-remna-confirm-msg="Запустить пробный бэкап PostgreSQL сейчас?" class="flex flex-wrap items-end gap-2">
           <button class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5" type="submit">
             <i class="fa-solid fa-database" aria-hidden="true"></i>Пробный бэкап сейчас
           </button>
@@ -6898,7 +7052,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
         <div class="flex flex-wrap gap-2">
           <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
-          <form method="post" action="/admin/promos/{promo.id}/delete" onsubmit="return confirm('Удалить промокод?');">
+          <form method="post" action="/admin/promos/{promo.id}/delete" data-remna-confirm-msg="Удалить промокод?">
             <button class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
           </form>
         </div>
@@ -7077,7 +7231,7 @@ def _admin_plan_form(
     delete_block = ""
     if plan_id is not None and p is not None and p.name not in _RESERVED_PLAN_NAMES:
         delete_block = f"""
-        <form method="post" action="/admin/tariffs/{plan_id}/delete" class="mt-2" onsubmit="return confirm('Удалить тариф «{_esc_attr(p.name)}»? Это возможно только если нет записей подписок с этим plan_id.');">
+        <form method="post" action="/admin/tariffs/{plan_id}/delete" class="mt-2" data-remna-confirm-msg="{_esc_attr(f'Удалить тариф «{p.name}»? Это возможно только если нет записей подписок с этим plan_id.')}">
           <button type="submit" class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить тариф</button>
         </form>
         """
