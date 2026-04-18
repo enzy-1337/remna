@@ -2704,6 +2704,15 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       var previewEndpoint='/admin/broadcast/preview-html';
       var deb=null;
       function esc(s){{return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
+      function jsonFromUtf8B64(b64){{
+        try{{
+          var bin=atob(b64||'');
+          var bytes=new Uint8Array(bin.length);
+          for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i)&255;
+          var txt=new TextDecoder('utf-8').decode(bytes);
+          return JSON.parse(txt);
+        }}catch(_e){{ return null; }}
+      }}
       async function renderLive(){{
         var v=(ta&&ta.value)||'';
         if(!live)return;
@@ -2735,14 +2744,14 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       document.querySelectorAll('.bc-tpl-use').forEach(function(btn){{
         btn.addEventListener('click',function(){{
           var m=btn.getAttribute('data-b64tpl'); if(!m||!ta)return;
-          try{{ var o=JSON.parse(atob(m)); ta.value=o.body||''; ta.focus(); queueLive(); if(window.remnaToast)window.remnaToast('success','Шаблон подставлен'); }}catch(e){{}}
+          try{{ var o=jsonFromUtf8B64(m); if(o){{ ta.value=o.body||''; ta.focus(); queueLive(); if(window.remnaToast)window.remnaToast('success','Шаблон подставлен'); }} }}catch(e){{}}
         }});
       }});
       document.querySelectorAll('.bc-tpl-edit').forEach(function(btn){{
         btn.addEventListener('click',function(){{
           var m=btn.getAttribute('data-b64tpl'); if(!m)return;
           try{{
-            var o=JSON.parse(atob(m));
+            var o=jsonFromUtf8B64(m); if(!o)return;
             document.getElementById('bc-tpl-edit-id').value=o.id||'0';
             document.getElementById('bc-tpl-edit-title').value=o.title||'';
             document.getElementById('bc-tpl-edit-body').value=o.body||'';
@@ -6174,7 +6183,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     </details>
     <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <summary class="card-body cursor-pointer select-none">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Бэкап PostgreSQL</h2>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Бэкап</h2>
         <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
       <div class="card-body gap-4 pt-0">
