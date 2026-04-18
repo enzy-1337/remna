@@ -16,7 +16,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -32,6 +32,7 @@ from shared.database import get_session_factory
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin_plain
+from shared.services.broadcast_service import tick_scheduled_broadcast_queue
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,12 +44,13 @@ class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path or ""
         if path.startswith("/admin") and not path.startswith("/admin/login"):
-            auth = request.session.get("wauth")
             uid_raw = request.session.get("wauth_user_id")
             token = str(request.session.get("wauth_session_token") or "").strip()
             exp_raw = request.session.get("wauth_session_exp")
+            auth = request.session.get("wauth")
+            session_handles = uid_raw is not None and token and exp_raw is not None
             invalid = False
-            if auth:
+            if auth or session_handles:
                 try:
                     uid = int(uid_raw)
                     exp = int(exp_raw)
@@ -62,18 +64,24 @@ class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
                         factory = get_session_factory()
                         async with factory() as session:
                             user = await session.get(User, uid)
-                        if (
-                            user is None
-                            or (user.web_admin_session_token or "") != token
-                            or user.web_admin_session_expires_at is None
-                        ):
-                            invalid = True
-                        else:
-                            db_exp = user.web_admin_session_expires_at
-                            if db_exp.tzinfo is None:
-                                db_exp = db_exp.replace(tzinfo=timezone.utc)
-                            if db_exp <= datetime.now(timezone.utc):
+                            if (
+                                user is None
+                                or (user.web_admin_session_token or "") != token
+                                or user.web_admin_session_expires_at is None
+                            ):
                                 invalid = True
+                            else:
+                                db_exp = user.web_admin_session_expires_at
+                                if db_exp.tzinfo is None:
+                                    db_exp = db_exp.replace(tzinfo=timezone.utc)
+                                now_utc = datetime.now(timezone.utc)
+                                if db_exp <= now_utc:
+                                    invalid = True
+                                elif not invalid:
+                                    new_exp = now_utc + timedelta(hours=24)
+                                    user.web_admin_session_expires_at = new_exp
+                                    await session.commit()
+                                    request.session["wauth_session_exp"] = int(new_exp.timestamp())
                 if invalid:
                     request.session.clear()
                     return RedirectResponse("/admin/login", status_code=303)
@@ -121,9 +129,25 @@ async def lifespan(app: FastAPI):
             )
         except Exception:
             log.debug("admin notify webhook startup", exc_info=True)
+    async def broadcast_schedule_tick() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await tick_scheduled_broadcast_queue(s)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("scheduled broadcast tick")
+
+    sched_task = asyncio.create_task(broadcast_schedule_tick())
     try:
         yield
     finally:
+        sched_task.cancel()
+        try:
+            await sched_task
+        except asyncio.CancelledError:
+            pass
         if s.telegram_webhook_enabled:
             stop_event.set()
             from bot.background_loops import cancel_background_tasks
@@ -147,7 +171,7 @@ app.add_middleware(
     session_cookie="remna_web_admin_session",
     same_site="lax",
     https_only=False,
-    max_age=86400,
+    max_age=86400 * 14,
 )
 
 

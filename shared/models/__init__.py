@@ -1,6 +1,7 @@
 """SQLAlchemy-модели (полная схема ТЗ)."""
 
 from shared.models.base import Base
+from shared.models.broadcast_mailing import BroadcastTemplate, ScheduledBroadcast
 from shared.models.billing_cron_checkpoint import BillingCronCheckpoint
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
@@ -19,6 +20,8 @@ from shared.models.user import User
 
 __all__ = [
     "Base",
+    "BroadcastTemplate",
+    "ScheduledBroadcast",
     "BillingTrafficMeter",
     "BillingUsageEvent",
     "BillingLedgerEntry",

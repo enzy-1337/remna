@@ -52,6 +52,7 @@ from shared.models.promo import PromoCode, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
+from shared.models.broadcast_mailing import BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
 from shared.services.billing_calculator import (
     estimate_pay_per_use_30d_rub,
@@ -75,6 +76,7 @@ from shared.services.billing_v2.detail_service import (
     summarize_month_total,
     usage_package_breakdown,
 )
+from shared.services.broadcast_service import apply_simple_formatting_for_broadcast, broadcast_html_preview_fragment
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
@@ -99,6 +101,7 @@ router = APIRouter(tags=["web-admin"])
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
 _WEB_ADMIN_SESSION_TTL = timedelta(hours=24)
+_LOGIN_NOTIFY_LAST: dict[int, float] = {}
 
 
 def _add_calendar_months(dt: datetime, months: int) -> datetime:
@@ -1408,6 +1411,16 @@ def _admin_profile_link_for_notify(settings: Settings, user: User) -> str:
 
 
 async def _notify_admin_login(settings: Settings, *, user: User, method_kind: str, used_totp: bool) -> None:
+    now_m = time.monotonic()
+    uid_i = int(user.id)
+    prev = _LOGIN_NOTIFY_LAST.get(uid_i)
+    if prev is not None and (now_m - prev) < 55.0:
+        return
+    _LOGIN_NOTIFY_LAST[uid_i] = now_m
+    if len(_LOGIN_NOTIFY_LAST) > 512:
+        stale = [k for k, t in _LOGIN_NOTIFY_LAST.items() if (now_m - t) > 600]
+        for k in stale:
+            _LOGIN_NOTIFY_LAST.pop(k, None)
     chat_id = settings.admin_log_chat_id
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
         return
@@ -2513,6 +2526,11 @@ async def _admin_broadcast_job(text: str) -> None:
         log.exception("фоновая рассылка: необработанная ошибка")
 
 
+def _broadcast_tpl_meta_b64(*, tpl_id: int, title: str, body: str) -> str:
+    payload = json.dumps({"id": tpl_id, "title": title, "body": body}, ensure_ascii=False)
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
 @router.get("/broadcast")
 async def admin_broadcast_page(request: Request) -> HTMLResponse:
     denied = _require_login(request)
@@ -2530,65 +2548,349 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         alert = "<div class='alert alert-warning mb-4'><span>Введите текст сообщения.</span></div>"
     elif err == "no_bot_token":
         alert = "<div class='alert alert-error mb-4'><span>BOT_TOKEN не задан — рассылка невозможна.</span></div>"
-    body = f"""
-    <div class="mx-auto flex w-full max-w-5xl justify-center">
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-3xl">
-      <div class="card-body gap-4">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
-        <p class="text-sm opacity-70">Сообщение уходит всем пользователям из БД (как «Рассылка всем» в боте). В Telegram используется <strong>HTML</strong>, не Markdown: жирный — <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;текст&lt;/b&gt;</code> (закрывающий тег со слэшем: <code class="bg-base-300 px-1 rounded text-xs">&lt;/b&gt;</code>, не второй <code class="bg-base-300 px-1 rounded text-xs">&lt;b&gt;</code>). Упрощённо: <code class="bg-base-300 px-1 rounded text-xs">**текст**</code> автоматически превращается в жирный; <code class="bg-base-300 px-1 rounded text-xs">__текст__</code> — в подчёркнутый. Также: <code class="bg-base-300 px-1 rounded text-xs">&lt;i&gt;</code>, <code class="bg-base-300 px-1 rounded text-xs">&lt;a href=&quot;…&quot;&gt;</code>.</p>
-        <p class="text-xs opacity-60">Шаблоны: клик — вставить; <b>ПКМ</b> по кнопке — сохранить текущий текст в шаблон (хранится в браузере).</p>
-        {alert}
-        <div class="grid gap-2 md:grid-cols-3">
-          <button type="button" class="btn btn-outline btn-sm" id="bc-s1">Шаблон 1</button>
-          <button type="button" class="btn btn-outline btn-sm" id="bc-s2">Шаблон 2</button>
-          <button type="button" class="btn btn-outline btn-sm" id="bc-s3">Шаблон 3</button>
+    elif err == "test_no_tg":
+        alert = "<div class='alert alert-warning mb-4'><span>Нет Telegram ID в сессии: войдите через Telegram или провьте профиль.</span></div>"
+    elif err == "schedule_bad_time":
+        alert = "<div class='alert alert-error mb-4'><span>Неверная дата или время отложенной отправки.</span></div>"
+    elif err == "template_bad":
+        alert = "<div class='alert alert-error mb-4'><span>Заполните название и текст шаблона.</span></div>"
+    if sp.get("n") == "tpl_ok":
+        alert = "<div class='alert alert-success mb-4'><span>Шаблон сохранён.</span></div>" + alert
+    if sp.get("n") == "tpl_del":
+        alert = "<div class='alert alert-success mb-4'><span>Шаблон удалён.</span></div>" + alert
+    if sp.get("n") == "test_sent":
+        alert = "<div class='alert alert-success mb-4'><span>Тестовое сообщение отправлено вам в Telegram.</span></div>" + alert
+    if sp.get("n") == "scheduled":
+        alert = "<div class='alert alert-success mb-4'><span>Отложенная рассылка добавлена в очередь.</span></div>" + alert
+
+    tpl_cards: list[str] = []
+    pending_lines: list[str] = []
+    async with await _session() as session:
+        tpl_rows = (
+            await session.execute(
+                select(BroadcastTemplate).order_by(BroadcastTemplate.sort_order.asc(), BroadcastTemplate.id.asc())
+            )
+        ).scalars().all()
+        pend_rows = (
+            await session.execute(
+                select(ScheduledBroadcast)
+                .where(ScheduledBroadcast.status == "pending")
+                .order_by(ScheduledBroadcast.scheduled_at.asc())
+                .limit(25)
+            )
+        ).scalars().all()
+
+    for t in tpl_rows:
+        meta_b64 = _broadcast_tpl_meta_b64(tpl_id=int(t.id), title=t.title, body=t.body)
+        prev_html = broadcast_html_preview_fragment(t.body)
+        tpl_cards.append(
+            f"""
+      <div class="card bg-base-200/80 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
+        <div class="flex items-start justify-between gap-2">
+          <span class="font-semibold text-sm">{_esc(t.title)}</span>
+          <span class="text-[10px] opacity-50">#{int(t.id)}</span>
         </div>
-        <form method="post" action="/admin/broadcast" class="flex flex-col gap-3">
-          <textarea name="text" id="bc-text" class="textarea textarea-bordered min-h-[200px]" placeholder="Текст рассылки..." required></textarea>
-          <div class="flex flex-wrap gap-2">
-            <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить в фоне</button>
-            <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-preview">Предпросмотр (экранированный)</button>
+        <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_html}</div>
+        <div class="flex flex-wrap gap-1 pt-1">
+          <button type="button" class="btn btn-primary btn-xs bc-tpl-use" data-b64tpl="{_esc(meta_b64)}">В поле ввода</button>
+          <button type="button" class="btn btn-ghost btn-xs bc-tpl-edit" data-b64tpl="{_esc(meta_b64)}">Правка</button>
+          <form method="post" action="/admin/broadcast/template/{int(t.id)}/delete" class="inline" onsubmit="return confirm('Удалить шаблон?');">
+            <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
+          </form>
+        </div>
+      </div>"""
+        )
+    for j in pend_rows:
+        when = j.scheduled_at
+        if when is not None:
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            when_s = _fmt_dt_msk(when)
+        else:
+            when_s = "—"
+        snippet = _esc((j.body_text or "")[:80].replace("\n", " "))
+        pending_lines.append(
+            f"<li><span class='opacity-70'>{_esc(when_s)}</span> — {snippet}{'…' if len(j.body_text or '') > 80 else ''}</li>"
+        )
+
+    tpl_block = "".join(tpl_cards) or "<p class='text-sm opacity-50'>Шаблонов пока нет — создайте первый ниже.</p>"
+    pend_block = (
+        "<ul class='list-disc pl-4 text-sm space-y-1'>"
+        + "".join(pending_lines)
+        + "</ul>"
+        if pending_lines
+        else "<p class='text-sm opacity-50'>Нет запланированных отправок.</p>"
+    )
+
+    body = f"""
+    <div class="mx-auto w-full max-w-6xl px-2">
+      <div class="grid gap-6 lg:grid-cols-2 items-start">
+        <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+          <div class="card-body gap-4">
+            <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
+            <p class="text-sm opacity-80 leading-relaxed">Отправка всем пользователям из БД (как «Рассылка всем» в боте). Разметка как в Telegram HTML: <code class="bg-base-300 px-1 rounded text-xs">**жирный**</code>, <code class="bg-base-300 px-1 rounded text-xs">__подчёркнутый__</code>, также допустимы теги HTML для ссылок.</p>
+            <p class="text-xs opacity-70">Подсказка: в предпросмотре справа от поля текст отображается так же, как уйдёт в Telegram (в т.ч. жирный через **).</p>
+            {alert}
+            <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="Текст рассылки..." required></textarea>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-fmt-bold" title="Вставить ** для жирного"><b>**</b></button>
+              <button type="button" class="btn btn-ghost btn-sm h-9 min-h-9" id="bc-fmt-under" title="Вставить __ для подчёркивания"><u>__</u></button>
+            </div>
+            <div id="bc-live-prev" class="rounded-xl border border-base-content/10 bg-base-200/50 p-3 text-sm">
+              <div class="text-xs opacity-60 mb-2">Предпросмотр</div>
+              <div class="rounded-2xl border border-base-content/20 inline-block max-w-full bg-[#2b5278] px-3 py-2 text-white shadow" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <form id="bc-send" method="post" action="/admin/broadcast" class="inline">
+                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить всем (в фоне)</button>
+              </form>
+              <form method="post" action="/admin/broadcast/test" id="bc-test-f" class="inline">
+                <input type="hidden" name="text" id="bc-test-hidden" value="" />
+                <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-vial" aria-hidden="true"></i>Тест себе</button>
+              </form>
+            </div>
+            <form method="post" action="/admin/broadcast/schedule" id="bc-sched-f" class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
+              <span class="text-sm font-medium">Отправка по времени</span>
+              <input type="hidden" name="text" id="bc-sched-body" value="" />
+              <input type="hidden" name="scheduled_at_utc" id="bc-sched-utc" value="" />
+              <input type="datetime-local" name="scheduled_at_local" id="bc-sched-local" class="input input-bordered input-sm w-full max-w-xs" required />
+              <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 w-fit gap-1.5"><i class="fa-solid fa-clock" aria-hidden="true"></i>Запланировать</button>
+              <span class="text-xs opacity-60">Время берётся из календаря браузера и переводится в UTC автоматически.</span>
+            </form>
           </div>
-        </form>
-        <div id="bc-prev" class="hidden rounded-xl border border-base-content/10 bg-base-200/50 p-4 text-sm"></div>
+        </div>
+        <div class="flex flex-col gap-4">
+          <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+            <div class="card-body gap-3">
+              <h3 class="font-semibold text-lg">Шаблоны на сервере</h3>
+              <p class="text-xs opacity-70">Единые для всех браузеров и устройств. «В поле ввода» подставляет текст слева.</p>
+              <div class="grid gap-3 max-h-[480px] overflow-y-auto pr-1">{tpl_block}</div>
+              <form method="post" action="/admin/broadcast/template" class="flex flex-col gap-2 border-t border-base-content/10 pt-3">
+                <span class="text-sm font-medium">Новый шаблон</span>
+                <input name="title" class="input input-bordered input-sm" placeholder="Название" maxlength="160" />
+                <textarea name="tpl_body" class="textarea textarea-bordered textarea-sm min-h-[90px]" placeholder="Текст шаблона"></textarea>
+                <button type="submit" class="btn btn-primary btn-sm w-fit gap-1.5"><i class="fa-solid fa-plus" aria-hidden="true"></i>Сохранить шаблон</button>
+              </form>
+            </div>
+          </div>
+          <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+            <div class="card-body gap-2">
+              <h3 class="font-semibold">Очередь отложенных</h3>
+              {pend_block}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-    </div>
+    <dialog id="bc-tpl-modal" class="modal">
+      <div class="modal-box max-w-lg">
+        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
+        <h3 class="font-bold text-lg mb-2">Редактирование шаблона</h3>
+        <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="flex flex-col gap-2">
+          <input type="hidden" name="tpl_id" id="bc-tpl-edit-id" value="0" />
+          <label class="form-control"><span class="label-text text-xs">Название</span>
+            <input name="title" id="bc-tpl-edit-title" class="input input-bordered input-sm" maxlength="160" /></label>
+          <label class="form-control"><span class="label-text text-xs">Текст</span>
+            <textarea name="tpl_body" id="bc-tpl-edit-body" class="textarea textarea-bordered min-h-[140px]"></textarea></label>
+          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+        </form>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
     <script>
     (function(){{
-      var key='remna_broadcast_tpls';
       var ta=document.getElementById('bc-text');
-      var prev=document.getElementById('bc-prev');
-      function load(){{
-        try{{ return JSON.parse(localStorage.getItem(key)||'[]'); }}catch(e){{ return []; }}
+      var live=document.getElementById('bc-live-prev-inner');
+      var previewEndpoint='/admin/broadcast/preview-html';
+      var deb=null;
+      function esc(s){{return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
+      async function renderLive(){{
+        var v=(ta&&ta.value)||'';
+        if(!live)return;
+        if(!v.trim()){{ live.innerHTML='<span class="opacity-70">Начните ввод…</span>'; return; }}
+        try{{
+          var fd=new FormData(); fd.append('text', v);
+          var r=await fetch(previewEndpoint,{{method:'POST', body:fd, credentials:'same-origin'}});
+          var j=await r.json();
+          if(j&&j.html) live.innerHTML=j.html; else live.innerHTML='<span class="whitespace-pre-wrap">'+esc(v)+'</span>';
+        }}catch(e){{
+          live.innerHTML='<span class="whitespace-pre-wrap">'+esc(v)+'</span>';
+        }}
       }}
-      function save(arr){{ localStorage.setItem(key, JSON.stringify(arr)); }}
-      var arr=load();
-      while(arr.length<3) arr.push('');
-      for(var i=1;i<=3;i++){{
-        (function(n){{
-          var b=document.getElementById('bc-s'+n);
-          if(!b) return;
-          b.addEventListener('click', function(){{
-            var a=load(); ta.value=a[n-1]||''; ta.focus();
-          }});
-          b.addEventListener('contextmenu', function(e){{
-            e.preventDefault();
-            var a=load(); a[n-1]=ta.value||''; save(a); if(window.remnaToast)window.remnaToast('success','Шаблон '+n+' сохранён');
-          }});
-        }})(i);
+      function queueLive(){{
+        if(deb)clearTimeout(deb);
+        deb=setTimeout(renderLive, 120);
       }}
-      var pv=document.getElementById('bc-preview');
-      if(pv) pv.addEventListener('click', function(){{
-        var v=(ta.value||'').trim();
-        if(!v){{ prev.classList.add('hidden'); return; }}
-        prev.innerHTML='<div class="font-semibold mb-2 opacity-70\">Предпросмотр (как текст, теги экранированы)</div><div class="whitespace-pre-wrap break-words">'+v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div>';
-        prev.classList.remove('hidden');
+      if(ta){{ ta.addEventListener('input', queueLive); queueLive(); }}
+      function ins(w){{
+        if(!ta)return;
+        var s=ta.selectionStart||0,e=ta.selectionEnd||0,x=ta.value||'';
+        ta.value=x.slice(0,s)+w+x.slice(e);
+        ta.focus(); ta.selectionStart=ta.selectionEnd=s+w.length; queueLive();
+      }}
+      var fb=document.getElementById('bc-fmt-bold');
+      var fu=document.getElementById('bc-fmt-under');
+      if(fb)fb.addEventListener('click',function(){{ ins('**'); }});
+      if(fu)fu.addEventListener('click',function(){{ ins('__'); }});
+      document.querySelectorAll('.bc-tpl-use').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          var m=btn.getAttribute('data-b64tpl'); if(!m||!ta)return;
+          try{{ var o=JSON.parse(atob(m)); ta.value=o.body||''; ta.focus(); queueLive(); if(window.remnaToast)window.remnaToast('success','Шаблон подставлен'); }}catch(e){{}}
+        }});
+      }});
+      document.querySelectorAll('.bc-tpl-edit').forEach(function(btn){{
+        btn.addEventListener('click',function(){{
+          var m=btn.getAttribute('data-b64tpl'); if(!m)return;
+          try{{
+            var o=JSON.parse(atob(m));
+            document.getElementById('bc-tpl-edit-id').value=o.id||'0';
+            document.getElementById('bc-tpl-edit-title').value=o.title||'';
+            document.getElementById('bc-tpl-edit-body').value=o.body||'';
+            var f=document.getElementById('bc-tpl-edit-form');
+            if(f) f.action='/admin/broadcast/template/'+encodeURIComponent(o.id)+'/edit';
+            document.getElementById('bc-tpl-modal').showModal();
+          }}catch(e){{}}
+        }});
+      }});
+      var tf=document.getElementById('bc-test-f');
+      if(tf) tf.addEventListener('submit',function(){{
+        var h=document.getElementById('bc-test-hidden');
+        if(h&&ta) h.value=ta.value||'';
+      }});
+      var sf=document.getElementById('bc-sched-f');
+      if(sf) sf.addEventListener('submit',function(){{
+        var h=document.getElementById('bc-sched-body');
+        if(h&&ta) h.value=ta.value||'';
+        var loc=document.getElementById('bc-sched-local');
+        var utc=document.getElementById('bc-sched-utc');
+        if(loc&&utc&&loc.value){{
+          var d=new Date(loc.value);
+          if(!isNaN(d.getTime())) utc.value=d.toISOString();
+        }}
       }});
     }})();
     </script>
     """
     return _layout("Рассылка", body, request=request)
+
+
+@router.post("/broadcast/preview-html")
+async def admin_broadcast_preview_html(request: Request, text: str = Form("")) -> JSONResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"html": "", "denied": True}, status_code=401)
+    frag = broadcast_html_preview_fragment(text)
+    return JSONResponse({"html": frag})
+
+
+@router.post("/broadcast/test")
+async def admin_broadcast_test(request: Request, text: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = (text or "").strip()
+    if not body:
+        return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
+    settings = get_settings()
+    if not (settings.bot_token or "").strip():
+        return RedirectResponse("/admin/broadcast?err=no_bot_token", status_code=303)
+    auth = _auth_data(request)
+    raw_tid = auth.get("telegram_id") or auth.get("id")
+    try:
+        tid = int(raw_tid) if raw_tid is not None else 0
+    except (TypeError, ValueError):
+        tid = 0
+    if tid <= 0:
+        return RedirectResponse("/admin/broadcast?err=test_no_tg", status_code=303)
+    html_body = apply_simple_formatting_for_broadcast(body)
+    await send_telegram_message(tid, html_body, parse_mode="HTML", settings=settings)
+    return RedirectResponse("/admin/broadcast?n=test_sent", status_code=303)
+
+
+@router.post("/broadcast/schedule")
+async def admin_broadcast_schedule(
+    request: Request, text: str = Form(""), scheduled_at_utc: str = Form("")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    body = (text or "").strip()
+    if not body:
+        return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
+    raw_iso = (scheduled_at_utc or "").strip().replace("Z", "+00:00")
+    if not raw_iso:
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    try:
+        scheduled_utc = datetime.fromisoformat(raw_iso)
+    except ValueError:
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    if scheduled_utc.tzinfo is None:
+        scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+    else:
+        scheduled_utc = scheduled_utc.astimezone(timezone.utc)
+    if scheduled_utc <= datetime.now(timezone.utc):
+        return RedirectResponse("/admin/broadcast?err=schedule_bad_time", status_code=303)
+    async with await _session() as session:
+        session.add(
+            ScheduledBroadcast(
+                body_text=body,
+                scheduled_at=scheduled_utc,
+                status="pending",
+            )
+        )
+        await session.commit()
+    return RedirectResponse("/admin/broadcast?n=scheduled", status_code=303)
+
+
+@router.post("/broadcast/template")
+async def admin_broadcast_template_create(
+    request: Request, title: str = Form(""), tpl_body: str = Form("")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    title = (title or "").strip()
+    tpl_body = (tpl_body or "").strip()
+    if not title or not tpl_body:
+        return RedirectResponse("/admin/broadcast?err=template_bad", status_code=303)
+    async with await _session() as session:
+        session.add(BroadcastTemplate(title=title[:160], body=tpl_body, sort_order=0))
+        await session.commit()
+    return RedirectResponse("/admin/broadcast?n=tpl_ok", status_code=303)
+
+
+@router.post("/broadcast/template/{tpl_id}/edit")
+async def admin_broadcast_template_edit(
+    request: Request, tpl_id: int, title: str = Form(""), tpl_body: str = Form("")
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    title = (title or "").strip()
+    tpl_body = (tpl_body or "").strip()
+    if not title or not tpl_body:
+        return RedirectResponse("/admin/broadcast?err=template_bad", status_code=303)
+    async with await _session() as session:
+        row = await session.get(BroadcastTemplate, tpl_id)
+        if row is None:
+            return RedirectResponse("/admin/broadcast", status_code=303)
+        row.title = title[:160]
+        row.body = tpl_body
+        await session.commit()
+    return RedirectResponse("/admin/broadcast?n=tpl_ok", status_code=303)
+
+
+@router.post("/broadcast/template/{tpl_id}/delete")
+async def admin_broadcast_template_delete(request: Request, tpl_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        row = await session.get(BroadcastTemplate, tpl_id)
+        if row is not None:
+            await session.delete(row)
+            await session.commit()
+    return RedirectResponse("/admin/broadcast?n=tpl_del", status_code=303)
 
 
 @router.post("/broadcast")
@@ -3778,7 +4080,15 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
 
 @router.get("/users")
 async def admin_users(
-    request: Request, q: str = "", page: int = 1, sub: str = "", blocked: str = "", risk: str = ""
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    sub: str = "",
+    blocked: str = "",
+    risk: str = "",
+    bill: str = "",
+    gh: str = "",
+    sort: str = "",
 ) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -3787,8 +4097,11 @@ async def admin_users(
     sub_f = (sub or "").strip().lower()
     blk_f = (blocked or "").strip()
     risk_f = (risk or "").strip().lower()
+    bill_f = (bill or "").strip().lower()
+    gh_f = (gh or "").strip().lower()
+    sort_f = (sort or "").strip().lower()
     page = max(1, page)
-    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f)
+    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, sort_f)
     now_m = time.monotonic()
     cached_users = _USERS_HTML_CACHE.get(cache_key)
     if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
@@ -3812,7 +4125,7 @@ async def admin_users(
             (User.risk_notified_24h_at.is_not(None), 1),
             else_=0,
         )
-        query = select(User).order_by(desc(risk_priority), desc(User.id))
+        query = select(User)
         count_query = select(func.count()).select_from(User)
         if needle:
             if needle.isdigit():
@@ -3859,6 +4172,25 @@ async def admin_users(
         elif risk_f == "1h":
             query = query.where(User.risk_notified_1h_at.is_not(None))
             count_query = count_query.where(User.risk_notified_1h_at.is_not(None))
+        if bill_f in {"legacy", "hybrid"}:
+            query = query.where(User.billing_mode == bill_f)
+            count_query = count_query.where(User.billing_mode == bill_f)
+        if gh_f == "1":
+            query = query.where(User.github_username.is_not(None))
+            count_query = count_query.where(User.github_username.is_not(None))
+        elif gh_f == "0":
+            query = query.where(User.github_username.is_(None))
+            count_query = count_query.where(User.github_username.is_(None))
+        if sort_f == "bal_desc":
+            query = query.order_by(desc(User.balance), desc(User.id))
+        elif sort_f == "bal_asc":
+            query = query.order_by(User.balance.asc(), User.id.asc())
+        elif sort_f == "id_asc":
+            query = query.order_by(User.id.asc())
+        elif sort_f == "id_desc":
+            query = query.order_by(desc(User.id))
+        else:
+            query = query.order_by(desc(risk_priority), desc(User.id))
         total_users = int((await session.execute(count_query)).scalar_one() or 0)
         total_pages = max(1, (total_users + per_page - 1) // per_page)
         if page > total_pages:
@@ -3901,7 +4233,15 @@ async def admin_users(
         page=page,
         total_pages=total_pages,
         base_path="/admin/users",
-        query_extra={"q": needle, "sub": sub_f, "blocked": blk_f, "risk": risk_f},
+        query_extra={
+            "q": needle,
+            "sub": sub_f,
+            "blocked": blk_f,
+            "risk": risk_f,
+            "bill": bill_f,
+            "gh": gh_f,
+            "sort": sort_f,
+        },
     )
     sub_opts = (
         '<option value=""'
@@ -3936,6 +4276,45 @@ async def admin_users(
         + (" selected" if risk_f == "1h" else "")
         + '>Риск 1ч</option>'
     )
+    bill_opts = (
+        '<option value=""'
+        + (" selected" if not bill_f else "")
+        + '>Все</option>'
+        + '<option value="legacy"'
+        + (" selected" if bill_f == "legacy" else "")
+        + '>Legacy</option>'
+        + '<option value="hybrid"'
+        + (" selected" if bill_f == "hybrid" else "")
+        + '>Hybrid</option>'
+    )
+    gh_opts = (
+        '<option value=""'
+        + (" selected" if not gh_f else "")
+        + '>Все</option>'
+        + '<option value="1"'
+        + (" selected" if gh_f == "1" else "")
+        + '>GitHub есть</option>'
+        + '<option value="0"'
+        + (" selected" if gh_f == "0" else "")
+        + '>Без GitHub</option>'
+    )
+    sort_opts = (
+        '<option value=""'
+        + (" selected" if not sort_f else "")
+        + '>Риск → ID</option>'
+        + '<option value="id_desc"'
+        + (" selected" if sort_f == "id_desc" else "")
+        + '>ID убыв.</option>'
+        + '<option value="id_asc"'
+        + (" selected" if sort_f == "id_asc" else "")
+        + '>ID возр.</option>'
+        + '<option value="bal_desc"'
+        + (" selected" if sort_f == "bal_desc" else "")
+        + '>Баланс ↓</option>'
+        + '<option value="bal_asc"'
+        + (" selected" if sort_f == "bal_asc" else "")
+        + '>Баланс ↑</option>'
+    )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
@@ -3947,6 +4326,12 @@ async def admin_users(
         f"<select id='us-blocked' name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Риск минуса</span>"
         f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Биллинг</span>"
+        f"<select id='us-bill' name='bill' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{bill_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>GitHub</span>"
+        f"<select id='us-gh' name='gh' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{gh_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Сортировка</span>"
+        f"<select id='us-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
@@ -3955,12 +4340,16 @@ async def admin_users(
         "<script>(function(){"
         "var form=document.getElementById('us-form'); if(!form)return;"
         "var q=document.getElementById('us-q'); var sub=document.getElementById('us-sub'); var blk=document.getElementById('us-blocked'); var risk=document.getElementById('us-risk');"
+        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var sort=document.getElementById('us-sort');"
         "var timer=null;"
         "function submitLater(ms){ if(timer)clearTimeout(timer); timer=setTimeout(function(){ form.submit(); }, ms); }"
         "if(q){ q.addEventListener('input', function(){ submitLater(320); }); q.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); form.submit(); } }); }"
         "if(sub)sub.addEventListener('change', function(){ form.submit(); });"
         "if(blk)blk.addEventListener('change', function(){ form.submit(); });"
         "if(risk)risk.addEventListener('change', function(){ form.submit(); });"
+        "if(bill)bill.addEventListener('change', function(){ form.submit(); });"
+        "if(gh)gh.addEventListener('change', function(){ form.submit(); });"
+        "if(sort)sort.addEventListener('change', function(){ form.submit(); });"
         "})();</script>"
     )
     _USERS_HTML_CACHE[cache_key] = (time.monotonic(), body)
@@ -5641,8 +6030,8 @@ async def admin_settings(request: Request) -> HTMLResponse:
       <div class="card-body gap-4">
         <style>
           .tabs-env {{
-            border-color: color-mix(in oklab, var(--bc) 8%, transparent);
-            background: color-mix(in oklab, var(--b1) 92%, #0b1229 8%);
+            border-color: color-mix(in oklab, var(--bc) 10%, transparent);
+            box-shadow: 0 18px 42px -26px rgba(15, 23, 42, 0.55);
           }}
           .tabs-env .card-body {{
             gap: 1rem;
@@ -5662,7 +6051,8 @@ async def admin_settings(request: Request) -> HTMLResponse:
           }}
           .tabs-env .env-soft-card {{
             border-color: color-mix(in oklab, var(--bc) 8%, transparent);
-            background: color-mix(in oklab, var(--b2) 22%, transparent);
+            background-color: hsl(var(--b2) / 1);
+            background: color-mix(in oklab, var(--b2) 88%, transparent);
           }}
           .remna-env-toggle {{
             position: relative;
