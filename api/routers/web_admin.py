@@ -2720,7 +2720,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
               <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="||спойлер||">||спойлер||</button>
               <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="`код`">`код`</button>
               <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-pre" title="Блок кода">```блок```</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="[подпись](https://)">ссылка</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="[подпись](https://example.com)">ссылка</button>
               <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="&#10;&gt; цитата">цитата</button>
               <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-date">дата/время</button>
             </div>

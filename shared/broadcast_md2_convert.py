@@ -15,7 +15,8 @@ def draft_to_markdown_v2(text: str) -> str:
     """
     Превращает черновик админки в валидный MarkdownV2 для Bot API.
     ```блок```, `инлайн`, [текст](url), ||спойлер||, **жирный**, *жирный*, __подчёркнутый__,
-    ~~зачёркнутый~~, ~зачёркнутый~, _курсив_. Остальное — plain().
+    ~~зачёркнутый~~, ~зачёркнутый~, _курсив_. Строки с префиксом «>» — цитата (рекурсивно).
+    Остальное — plain().
     """
     raw = (text or "").replace("\r\n", "\n").strip()
     if not raw:
@@ -26,12 +27,35 @@ def draft_to_markdown_v2(text: str) -> str:
         vault.append(content)
         return _PH.format(len(vault) - 1)
 
-    s = raw
+    def stash_blockquotes(s: str) -> str:
+        lines = s.split("\n")
+        out_lines: list[str] = []
+        i = 0
+        while i < len(lines):
+            if re.match(r"^\s*>", lines[i]):
+                inner_lines: list[str] = []
+                while i < len(lines) and re.match(r"^\s*>", lines[i]):
+                    inner_lines.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                    i += 1
+                inner_raw = "\n".join(inner_lines)
+                md_inner = draft_to_markdown_v2(inner_raw)
+                prefixed = (
+                    "\n".join((">" + line if line else ">") for line in md_inner.split("\n"))
+                    if md_inner
+                    else ">"
+                )
+                out_lines.append(stash(prefixed))
+            else:
+                out_lines.append(lines[i])
+                i += 1
+        return "\n".join(out_lines)
+
+    s = stash_blockquotes(raw)
 
     s = re.sub(r"```([\s\S]*?)```", lambda m: stash(pre(m.group(1))), s)
     s = re.sub(r"`([^`\n]+)`", lambda m: stash(code(m.group(1))), s)
     s = re.sub(
-        r"\[([^\]]+)\]\(([^)]+)\)",
+        r"\[([^\]]+)\]\s*\(([^)]+)\)",
         lambda m: stash(link(m.group(1).strip(), m.group(2).strip())),
         s,
     )
@@ -62,22 +86,25 @@ def draft_to_markdown_v2(text: str) -> str:
     return "".join(parts)
 
 
-def draft_to_preview_html(text: str) -> str:
-    """
-    HTML для пузырька предпросмотра; переносы строк — через класс whitespace-pre-wrap на контейнере.
-    """
-    raw = (text or "").replace("\r\n", "\n")
-    if not raw.strip():
-        return '<span class="opacity-70">Пусто</span>'
+def _preview_format_chunk(chunk: str) -> str:
+    """Разметка превью для одного фрагмента без stash-плейсхолдеров."""
 
     def esc(s: str) -> str:
         return html_lib.escape(s)
 
-    out = esc(raw)
-    out = re.sub(r"```([\s\S]*?)```", lambda m: "<pre class=\"bc-prev-pre text-xs\">{}</pre>".format(esc(m.group(1))), out)
-    out = re.sub(r"`([^`\n]+)`", lambda m: "<code class=\"bc-prev-code text-xs\">{}</code>".format(esc(m.group(1))), out)
+    out = esc(chunk)
     out = re.sub(
-        r"\[([^\]]+)\]\(([^)]+)\)",
+        r"```([\s\S]*?)```",
+        lambda m: "<pre class=\"bc-prev-pre text-xs\">{}</pre>".format(esc(m.group(1))),
+        out,
+    )
+    out = re.sub(
+        r"`([^`\n]+)`",
+        lambda m: "<code class=\"bc-prev-code text-xs\">{}</code>".format(esc(m.group(1))),
+        out,
+    )
+    out = re.sub(
+        r"\[([^\]]+)\]\s*\(([^)]+)\)",
         lambda m: '<a class="underline text-sky-200 break-all" href="{}">{}</a>'.format(
             esc(m.group(2).strip()),
             esc(m.group(1).strip()),
@@ -101,5 +128,59 @@ def draft_to_preview_html(text: str) -> str:
     out = re.sub(r"~~(.+?)~~", lambda m: "<s>{}</s>".format(esc(m.group(1))), out, flags=re.DOTALL)
     out = re.sub(r"(?<![~])~([^~\n]+)~(?![~])", lambda m: "<s>{}</s>".format(esc(m.group(1))), out)
     out = re.sub(r"(?<![_])_([^_\n]+)_(?!_)", lambda m: "<i>{}</i>".format(esc(m.group(1))), out)
+    return out
 
-    return f'<div class="bc-prev-bubble-inner whitespace-pre-wrap break-words text-left">{out}</div>'
+
+def draft_to_preview_html(text: str, *, wrap: bool = True) -> str:
+    """
+    HTML для пузырька предпросмотра; переносы строк — через класс whitespace-pre-wrap на контейнере.
+    """
+    raw = (text or "").replace("\r\n", "\n")
+    if not raw.strip():
+        return '<span class="opacity-70">Пусто</span>' if wrap else ""
+
+    vault: list[str] = []
+
+    def stash(html: str) -> str:
+        vault.append(html)
+        return _PH.format(len(vault) - 1)
+
+    def stash_blockquotes_preview(s: str) -> str:
+        lines = s.split("\n")
+        out_lines: list[str] = []
+        i = 0
+        while i < len(lines):
+            if re.match(r"^\s*>", lines[i]):
+                inner_lines: list[str] = []
+                while i < len(lines) and re.match(r"^\s*>", lines[i]):
+                    inner_lines.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                    i += 1
+                inner_raw = "\n".join(inner_lines)
+                inner_html = draft_to_preview_html(inner_raw, wrap=False)
+                out_lines.append(
+                    stash(
+                        '<blockquote class="border-l-4 border-white/40 pl-2 my-1 opacity-95">'
+                        f"{inner_html}</blockquote>"
+                    )
+                )
+            else:
+                out_lines.append(lines[i])
+                i += 1
+        return "\n".join(out_lines)
+
+    s = stash_blockquotes_preview(raw)
+
+    parts: list[str] = []
+    for chunk in re.split(r"(<<<PH\d+>>>)", s):
+        mm = re.fullmatch(r"<<<PH(\d+)>>>", chunk)
+        if mm:
+            parts.append(vault[int(mm.group(1))])
+        else:
+            parts.append(_preview_format_chunk(chunk))
+
+    inner_result = "".join(parts)
+    if wrap:
+        return (
+            f'<div class="bc-prev-bubble-inner whitespace-pre-wrap break-words text-left">{inner_result}</div>'
+        )
+    return inner_result

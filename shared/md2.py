@@ -64,8 +64,8 @@ def join_lines(*parts: str) -> str:
 
 
 def link(text: str, url: str) -> str:
-    """Инлайн-ссылка MarkdownV2: в URL экранируются \\ и )."""
-    u = url.replace("\\", r"\\").replace(")", r"\)")
+    """Инлайн-ссылка MarkdownV2: в URL нужно экранировать те же спецсимволы, что и в тексте (в т.ч. «.»)."""
+    u = esc((url or "").strip())
     return f"[{esc(text)}]({u})"
 
 
