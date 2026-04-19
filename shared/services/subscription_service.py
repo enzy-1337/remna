@@ -29,6 +29,7 @@ from shared.services.promo_service import get_pending_purchase_discount_percent
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
+from shared.services.feature_flags import tariff_purchases_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,9 @@ async def purchase_plan_with_balance(
         if existing_txn is not None:
             return True, plain("Покупка уже была подтверждена ранее."), "success"
 
+    if not await tariff_purchases_enabled(settings):
+        return False, plain("Покупка тарифов временно отключена."), "error"
+
     plan = await session.get(Plan, plan_id)
     if not plan or plan.price_rub <= 0 or not plan.is_active:
         return False, plain("Тариф не найден или недоступен."), "error"
@@ -273,6 +277,12 @@ async def purchase_plan_with_balance(
         long_horizon = (active.expires_at - now).total_seconds() >= 86400 * 400
         base = now if long_horizon else active.expires_at
     new_expires = base + timedelta(days=purchased_plan.duration_days)
+
+    rb_was_active = active is not None
+    rb_expires = active.expires_at if active else None
+    rb_plan_id = active.plan_id if active else None
+    rb_dc = active.devices_count if active else None
+    rb_active_id = active.id if active else None
 
     traffic_bytes = 0
     if purchased_plan.traffic_limit_gb is not None and purchased_plan.traffic_limit_gb > 0:
@@ -377,6 +387,20 @@ async def purchase_plan_with_balance(
     await ensure_placeholder_devices(session, sub)
     if discount_usage is not None:
         discount_usage.topup_bonus_applied_at = datetime.now(timezone.utc)
+    await session.flush()
+
+    merge_meta: dict = {
+        **(purchase_txn.meta or {}),
+        "purchase_kind": "extend" if rb_was_active else "new",
+        "duration_days": purchased_plan.duration_days,
+        "subscription_db_id_after": sub.id,
+    }
+    if rb_was_active and rb_expires is not None:
+        merge_meta["expires_at_before"] = rb_expires.isoformat()
+        merge_meta["plan_id_before"] = rb_plan_id
+        merge_meta["devices_count_before"] = rb_dc
+        merge_meta["subscription_db_id"] = rb_active_id
+    purchase_txn.meta = merge_meta
     await session.flush()
 
     sub_url = ""
@@ -509,13 +533,12 @@ async def add_paid_device_slot(
     new_idx = await count_devices(session, sub.id) + 1
     sub.devices_count = new_limit
     user.balance -= price
-    session.add(
-        Device(
-            subscription_id=sub.id,
-            user_id=user.id,
-            name=f"Устройство {new_idx}",
-        )
+    dev = Device(
+        subscription_id=sub.id,
+        user_id=user.id,
+        name=f"Устройство {new_idx}",
     )
+    session.add(dev)
     slot_txn = Transaction(
         user_id=user.id,
         type="manual_add",
@@ -528,6 +551,8 @@ async def add_paid_device_slot(
         meta={"subscription_id": sub.id},
     )
     session.add(slot_txn)
+    await session.flush()
+    slot_txn.meta = {**(slot_txn.meta or {}), "device_id": dev.id}
     await session.flush()
     if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
         from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state

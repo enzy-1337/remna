@@ -29,6 +29,7 @@ from bot.states.admin import (
     AdminSubscriptionStates,
 )
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
+from shared.admin_dotenv import patch_dotenv
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.md2 import bold, code, esc, italic, join_lines, link, plain, strip_for_popup_alert
@@ -53,6 +54,7 @@ from shared.database import get_session_factory
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.referral_service import count_invited_users
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.feature_flags import set_tariff_purchases_enabled_redis, tariff_purchases_enabled
 from shared.services.subscription_service import (
     admin_convert_monthly_subscriptions_to_payg_balance,
     get_base_subscription_plan,
@@ -88,6 +90,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"),
     )
     b.row(InlineKeyboardButton(text="👨‍💼 Админ-профиль", callback_data="admin:section:profile"))
+    b.row(InlineKeyboardButton(text="📋 Продажа тарифов в боте", callback_data="admin:tariffs_shop"))
     b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
     return b.as_markup()
@@ -880,6 +883,61 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
         reply_markup=admin_panel_keyboard(),
         settings=settings,
     )
+
+
+async def _render_admin_tariffs_shop_screen(cq: CallbackQuery, db_user: User) -> None:
+    settings = get_settings()
+    en = await tariff_purchases_enabled(settings)
+    cap = join_lines(
+        "📋 " + bold("Продажа тарифов в боте"),
+        "",
+        plain("Сейчас: ")
+        + bold("включена — кнопки «Тарифы» и покупка с баланса доступны.")
+        if en
+        else plain("Сейчас: ")
+        + bold("выключена — кнопки тарифов скрыты, покупка недоступна."),
+        "",
+        plain("Также можно переключить на странице «Тарифы» в web-admin."),
+    )
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(
+            text=("⏸ Выключить продажу тарифов" if en else "▶️ Включить продажу тарифов"),
+            callback_data="admin:tariffs_toggle_do",
+        )
+    )
+    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)
+
+
+@router.callback_query(F.data == "admin:tariffs_shop")
+async def cb_admin_tariffs_shop(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    await _render_admin_tariffs_shop_screen(cq, db_user)
+
+
+@router.callback_query(F.data == "admin:tariffs_toggle_do")
+async def cb_admin_tariffs_toggle_do(cq: CallbackQuery, db_user: User | None) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    settings = get_settings()
+    cur = await tariff_purchases_enabled(settings)
+    new_val = not cur
+    patch_dotenv({"BOT_TARIFF_PURCHASES_ENABLED": "true" if new_val else "false"})
+    await set_tariff_purchases_enabled_redis(settings, new_val)
+    get_settings.cache_clear()
+    await cq.answer("Готово")
+    assert db_user is not None
+    await _render_admin_tariffs_shop_screen(cq, db_user)
 
 
 @router.callback_query(F.data == "admin:transition_calc")

@@ -59,6 +59,8 @@ from shared.services.billing_v2.detail_service import (
     user_has_tariff_subscription_charges,
 )
 from shared.services.promo_service import get_pending_purchase_discount_info
+from shared.services.feature_flags import tariff_purchases_enabled
+
 router = Router(name="subscription")
 
 
@@ -70,6 +72,7 @@ def _sub_main_keyboard(
     show_optimized_toggle: bool = False,
     optimized_on: bool = False,
     show_reissue_subscription: bool = False,
+    show_tariffs: bool = True,
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
@@ -82,13 +85,16 @@ def _sub_main_keyboard(
             InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
             InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
-        if show_billing_detail:
-            b.row(
-                InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
-                InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"),
-            )
-        else:
-            b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
+        if show_tariffs:
+            if show_billing_detail:
+                b.row(
+                    InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
+                    InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"),
+                )
+            else:
+                b.row(InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"))
+        elif show_billing_detail:
+            b.row(InlineKeyboardButton(text="📊 Детализация", callback_data="sub:detail:menu"))
         if show_optimized_toggle:
             label = "🛰 Оптим. маршрут: вкл" if optimized_on else "🛰 Оптим. маршрут: выкл"
             b.row(InlineKeyboardButton(text=label[:64], callback_data="sub:opt_route:toggle"))
@@ -101,15 +107,18 @@ def _sub_main_keyboard(
             )
         b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
     else:
-        b.row(
-            InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
-            InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
-        )
+        if show_tariffs:
+            b.row(
+                InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
+                InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
+            )
+        else:
+            b.row(InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
     return b
 
 
-def _sub_main_markup(
+async def _sub_main_markup(
     settings: Settings,
     db_user: User,
     *,
@@ -124,6 +133,7 @@ def _sub_main_markup(
     )
     show_detail = settings.billing_v2_enabled and db_user.billing_mode == "hybrid" and has_active
     show_reissue = bool(has_active and db_user.remnawave_uuid is not None)
+    show_tariffs = await tariff_purchases_enabled(settings)
     return _sub_main_keyboard(
         has_active=has_active,
         subscription_url=subscription_url,
@@ -131,6 +141,7 @@ def _sub_main_markup(
         show_optimized_toggle=show,
         optimized_on=db_user.optimized_route_enabled,
         show_reissue_subscription=show_reissue,
+        show_tariffs=show_tariffs,
     ).as_markup()
 
 
@@ -172,6 +183,7 @@ def _txn_title_for_detail(txn: Transaction) -> str:
         "subscription_autorenew": "Тариф (автопродление)",
         "manual_add": "Дополнительное устройство",
         "billing_transition": "Переход на гибридный биллинг",
+        "purchase_refund": "Возврат за отменённую покупку (админ)",
     }
     base = labels.get(txn.type, txn.type)
     if txn.type == "usage_charge":
@@ -250,6 +262,10 @@ async def _render_tariff_list(
 ) -> None:
     """Список тарифов для покупки (кнопки всегда из актуального `list_paid_plans`)."""
     settings = get_settings()
+    if not await tariff_purchases_enabled(settings):
+        await cq.answer("Покупка тарифов временно отключена.", show_alert=True)
+        await _show_subscription_main(cq, session, db_user)
+        return
     plans = await list_paid_plans(session)
     if not plans:
         await safe_callback_answer(cq, "Нет доступных тарифов", show_alert=True)
@@ -312,7 +328,7 @@ async def _show_subscription_main(
         session, user=db_user, settings=settings, is_bot_admin=is_bot_admin
     )
     sub = await get_active_subscription(session, db_user.id)
-    kb = _sub_main_markup(
+    kb = await _sub_main_markup(
         settings,
         db_user,
         has_active=sub is not None,
@@ -498,6 +514,10 @@ async def cb_plans_or_extend(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    settings = get_settings()
+    if not await tariff_purchases_enabled(settings):
+        await cq.answer("Покупка тарифов временно отключена.", show_alert=True)
+        return
     is_extend = cq.data == "sub:extend"
     await state.update_data(sub_tariffs_extend=is_extend)
     await _render_tariff_list(cq, session, db_user, state, banner=None)
@@ -517,6 +537,11 @@ async def cb_buy_plan(
         pid = int(cq.data.split(":")[2])
     except (IndexError, ValueError):
         await cq.answer("Ошибка тарифа", show_alert=True)
+        return
+
+    settings = get_settings()
+    if not await tariff_purchases_enabled(settings):
+        await cq.answer("Покупка тарифов временно отключена.", show_alert=True)
         return
 
     plan = await session.get(Plan, pid)
@@ -601,6 +626,9 @@ async def cb_buy_plan_confirm(
             pass
     await state.update_data(sub_buy_confirm_token=None, sub_buy_confirm_plan_id=None, sub_buy_confirm_expires_at=None)
     settings = get_settings()
+    if not await tariff_purchases_enabled(settings):
+        await cq.answer("Покупка тарифов временно отключена.", show_alert=True)
+        return
     tid = cq.from_user.id if cq.from_user else db_user.telegram_id
     ok, msg, kind = await purchase_plan_with_balance(
         session,
@@ -619,7 +647,7 @@ async def cb_buy_plan_confirm(
         )
         full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
-        kb = _sub_main_markup(
+        kb = await _sub_main_markup(
             settings,
             db_user,
             has_active=sub is not None,
@@ -716,7 +744,9 @@ async def cb_renewal_menu(
         plain("Текущее автопродление: ") + bold(auto_text),
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="💳 Продлить подписку", callback_data="sub:extend"))
+    show_shop = await tariff_purchases_enabled(get_settings())
+    if show_shop:
+        b.row(InlineKeyboardButton(text="💳 Продлить подписку", callback_data="sub:extend"))
     toggle_text = "⏸ Выключить автопродление" if sub.auto_renew else "▶️ Включить автопродление"
     b.row(InlineKeyboardButton(text=toggle_text, callback_data="sub:renewal_toggle"))
     b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))

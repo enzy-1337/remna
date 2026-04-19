@@ -81,6 +81,8 @@ from shared.broadcast_md2_convert import draft_to_markdown_v2
 from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
+from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
+from shared.services.feature_flags import set_tariff_purchases_enabled_redis, tariff_purchases_enabled
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
@@ -114,7 +116,21 @@ _TRANSACTION_TYPE_HINTS_RU: dict[str, str] = {
     "referral_signup": "Приветственное начисление по реферальной ссылке при регистрации",
     "referral_signup_invited": "Приветственное начисление приглашённому по реферальной ссылке",
     "referral_payment_percent": "Процент на баланс пригласившему от платежа приглашённого",
+    "purchase_refund": "Возврат на баланс при отмене покупки тарифа или слота устройства администратором",
 }
+
+
+def _txn_history_action_cell(user_id: int, t: Transaction) -> str:
+    if t.status == "refunded":
+        return '<span class="text-xs opacity-60">отменено</span>'
+    if txn_row_refund_eligible(t):
+        msg = _esc_attr("Вернуть сумму на баланс и отменить эффект покупки (тариф или слот)?")
+        return (
+            f'<form method="post" action="/admin/users/{user_id}/transactions/{int(t.id)}/refund" class="inline" '
+            f'data-remna-confirm-msg="{msg}">'
+            '<button type="submit" class="btn btn-ghost btn-xs text-warning">Возврат</button></form>'
+        )
+    return '<span class="text-xs opacity-40">—</span>'
 
 
 def _txn_type_hint_html(txn_type: str) -> str:
@@ -1258,6 +1274,7 @@ def _layout(
       }
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       remnaPendingForm=f;
       remnaPendingResolve=null;
       var msgEl=document.getElementById('remna-confirm-msg');
@@ -1412,7 +1429,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -4988,6 +5005,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     billing_detail_block = ""
     hwid_devices: list[dict] = []
     hwid_err: str | None = None
+    tx_rows_pref = ""
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
@@ -5155,6 +5173,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         txs_tuples = [
             (t.id, t.type, t.amount, t.status, t.payment_provider, t.created_at) for t in txs
         ]
+        tx_rows_pref = "".join(
+            f"<tr><td>{int(t.id)}</td><td>{_txn_type_hint_html(t.type)}</td><td>{_esc(t.amount)}</td>"
+            f"<td>{_esc(t.status)}</td><td>{_esc(t.payment_provider or '-')}</td>"
+            f"<td>{_fmt_dt_msk(t.created_at)}</td><td>{_txn_history_action_cell(user_id, t)}</td></tr>"
+            for t in txs
+        )
         tix_tuples = [
             (int(r[0]), str(r[1]), r[2], r[3], r[4]) for r in tix_rows
         ]
@@ -5279,11 +5303,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         f"<td>{_fmt_dt_msk(se)}</td><td>{dc}</td></tr>"
         for sid, st, sa, se, dc in subs_tuples
     )
-    tx_rows = "".join(
-        f"<tr><td>{tid}</td><td>{_txn_type_hint_html(tt)}</td><td>{_esc(ta)}</td><td>{_esc(ts)}</td>"
-        f"<td>{_esc(tp or '-')}</td><td>{_fmt_dt_msk(tc)}</td></tr>"
-        for tid, tt, ta, ts, tp, tc in txs_tuples
-    )
+    tx_rows = tx_rows_pref
     tix_total = len(tix_tuples)
     tix_open = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st in ("open", "in_progress"))
     tix_closed = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st == "closed")
@@ -5584,14 +5604,48 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
       <div class="card bg-base-100 border border-base-content/10 shadow-lg">
         <div class="card-body gap-3">
           <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>История транзакций ({len(txs_tuples)})</h3>
-          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th></tr></thead>
-          <tbody>{tx_rows or '<tr><td colspan="6" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
+          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th><th class="whitespace-nowrap">Действие</th></tr></thead>
+          <tbody>{tx_rows or '<tr><td colspan="7" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
+          <p class="text-xs opacity-70">Возврат доступен только для покупки тарифа или слота устройства с баланса (не для PAYG и пополнений).</p>
         </div>
       </div>
     </div>
     {tickets_block}
     """
     return _layout(f"User {user_id}", body, request=request, back_href="/admin/users")
+
+
+@router.post("/users/{user_id}/transactions/{txn_id}/refund")
+async def admin_user_transaction_refund(request: Request, user_id: int, txn_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        ok, msg = await admin_refund_purchase_transaction(
+            session,
+            user_id=user_id,
+            txn_id=txn_id,
+            settings=settings,
+        )
+        if ok:
+            await session.commit()
+            _USERS_HTML_CACHE.clear()
+            return RedirectResponse(f"/admin/users/{user_id}?n=purchase_refund_ok", status_code=303)
+        await session.rollback()
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(str(msg)[:800])}", status_code=303)
+
+
+@router.post("/tariffs/toggle-shop")
+async def admin_tariffs_toggle_shop_post(request: Request, enabled: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    on = enabled.strip().lower() in ("1", "true", "yes", "on")
+    patch_dotenv({"BOT_TARIFF_PURCHASES_ENABLED": "true" if on else "false"})
+    await set_tariff_purchases_enabled_redis(settings, on)
+    return RedirectResponse("/admin/tariffs?n=tariffs_shop", status_code=303)
 
 
 @router.get("/users/{user_id}/subscription-qr.png")
@@ -7327,6 +7381,24 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
     if denied is not None:
         return denied
     settings = get_settings()
+    shop_on = await tariff_purchases_enabled(settings)
+    badge_cls = "badge-success" if shop_on else "badge-warning"
+    badge_txt = "да" if shop_on else "нет"
+    toggle_val = "0" if shop_on else "1"
+    toggle_btn = "Выключить продажу тарифов в боте" if shop_on else "Включить продажу тарифов в боте"
+    shop_toggle_card = (
+        "<div class='card bg-base-100 border border-base-content/15 shadow-lg'>"
+        "<div class='card-body gap-3'>"
+        "<h3 class='text-lg font-semibold'><i class='fa-solid fa-robot mr-2' aria-hidden='true'></i>Продажа тарифов в Telegram-боте</h3>"
+        "<p class='text-sm opacity-80'>При выключении пользователи не видят кнопки «Тарифы» и не могут списать баланс за пакет. PAYG без изменений.</p>"
+        f"<p class='text-sm'>Сейчас: <span class='badge badge-sm {badge_cls}'>{badge_txt}</span>"
+        " (совпадает с <code class='text-xs bg-base-300 px-1 rounded'>BOT_TARIFF_PURCHASES_ENABLED</code> и Redis).</p>"
+        '<form method="post" action="/admin/tariffs/toggle-shop" class="flex flex-wrap gap-2 mt-2">'
+        f'<input type="hidden" name="enabled" value="{toggle_val}" />'
+        f'<button type="submit" class="btn btn-sm btn-outline">{_esc(toggle_btn)}</button>'
+        "</form>"
+        "</div></div>"
+    )
     async with await _session() as session:
         plans = list(
             (await session.execute(select(Plan).order_by(Plan.sort_order.asc(), Plan.id.asc()))).scalars().all()
@@ -7356,6 +7428,7 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
     )
     body = (
         "<div class='flex flex-col gap-4'>"
+        f"{shop_toggle_card}"
         f"{trans}"
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>Тарифы</h2>"

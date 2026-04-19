@@ -253,6 +253,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Отрицательный chat_id; 0 или пусто — только пользователям при отметке «канал».",
             ),
             (
+                "BOT_TARIFF_PURCHASES_ENABLED",
+                "Продажа тарифов в боте",
+                lambda s: "true" if getattr(s, "bot_tariff_purchases_enabled", True) else "false",
+                "Если false — скрыты кнопки «Тарифы» и покупка пакетов с баланса недоступна (ключ Redis может переопределить без перезапуска).",
+            ),
+            (
                 "BILLING_DEVICE_DAILY_JOB_INTERVAL_SEC",
                 "Интервал догонки device_daily (сек)",
                 lambda s: str(s.billing_device_daily_job_interval_sec),

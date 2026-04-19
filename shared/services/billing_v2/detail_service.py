@@ -162,6 +162,7 @@ _TXN_CREDIT_TYPES = frozenset(
         "referral_signup",
         "referral_signup_invited",
         "referral_payment_percent",
+        "purchase_refund",
     }
 )
 

@@ -228,6 +228,11 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="REMNAWAVE_WEBHOOK_BACKGROUND_PROCESS",
     )
+    bot_tariff_purchases_enabled: bool = Field(
+        default=True,
+        validation_alias="BOT_TARIFF_PURCHASES_ENABLED",
+        description="Если false — в боте скрыты кнопки покупки тарифов и списание с баланса за тариф недоступно.",
+    )
     billing_v2_enabled: bool = Field(default=False, validation_alias="BILLING_V2_ENABLED")
     billing_v2_for_new_users_only: bool = Field(
         default=False,
