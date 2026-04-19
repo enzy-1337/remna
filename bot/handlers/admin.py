@@ -41,6 +41,7 @@ from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
+from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
 from shared.services.admin_log_topics import AdminLogTopic
@@ -1779,6 +1780,13 @@ async def cb_admin_reset_balance(
             meta={"admin_id": db_user.id, "balance_before": str(before), "balance_after": "0"},
         )
     )
+    await session.flush()
+    settings = get_settings()
+    if settings.billing_v2_enabled and u.billing_mode == "hybrid":
+        try:
+            await baseline_meter_at_hybrid_transition(session, user=u, settings=settings)
+        except Exception:
+            logger.exception("baseline_meter after admin balance reset failed user_id=%s", u.id)
     await session.commit()
     await cq.answer("Баланс обнулён")
     await _render_user_card(cq, session, user_id=uid)

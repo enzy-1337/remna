@@ -5745,6 +5745,7 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
     denied = _require_login(request)
     if denied is not None:
         return denied
+    settings = get_settings()
     wauth = request.session.get("wauth") or {}
     admin_tg = int(wauth.get("telegram_id") or 0)
     async with await _session() as session:
@@ -5776,6 +5777,12 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
                 },
             )
         )
+        await session.flush()
+        if settings.billing_v2_enabled and u.billing_mode == "hybrid":
+            try:
+                await baseline_meter_at_hybrid_transition(session, user=u, settings=settings)
+            except Exception:
+                logger.exception("baseline_meter after admin balance reset failed user_id=%s", u.id)
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=bal_reset", status_code=303)

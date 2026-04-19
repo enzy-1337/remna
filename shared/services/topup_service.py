@@ -27,6 +27,21 @@ from shared.services.referral_service import grant_referrer_reward_from_topup
 logger = logging.getLogger(__name__)
 
 
+def _format_topup_invoice_description(*, provider_name: str, user: User) -> str:
+    """
+    Текст описания счёта у провайдера (Platega обрезает description до 512 символов на стороне API).
+    """
+    tag = (user.username or "").strip().lstrip("@")
+    if tag:
+        who = f"@{tag}"
+    else:
+        who = "TG без username"
+    text = (
+        f"Пополнение через {provider_name} · акк #{user.id} · {who} · tg {user.telegram_id}"
+    )
+    return text[:512]
+
+
 async def try_apply_smart_cart_after_topup(
     session: AsyncSession,
     telegram_id: int,
@@ -83,6 +98,7 @@ async def create_topup_payment(
     if amount_rub < settings.billing_min_topup_rub:
         raise ValueError(f"Минимальная сумма пополнения: {settings.billing_min_topup_rub} ₽")
     prov = get_payment_provider(provider_name, settings)
+    invoice_description = _format_topup_invoice_description(provider_name=provider_name, user=user)
     txn = Transaction(
         user_id=user.id,
         type="topup",
@@ -91,7 +107,7 @@ async def create_topup_payment(
         payment_provider=provider_name,
         payment_id=None,
         status="pending",
-        description=f"Пополнение баланса через {provider_name}",
+        description=invoice_description,
         meta={"telegram_id": telegram_id},
     )
     session.add(txn)
@@ -100,7 +116,7 @@ async def create_topup_payment(
     result = await prov.create_topup_invoice(
         amount_rub=amount_rub,
         internal_transaction_id=txn.id,
-        description=txn.description or "Пополнение VPN",
+        description=invoice_description,
     )
     txn.payment_id = result.external_payment_id
     meta = dict(txn.meta or {})

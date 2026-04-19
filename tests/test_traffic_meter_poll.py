@@ -133,8 +133,52 @@ class TrafficMeterPollIntegrationTests(IsolatedAsyncioTestCase):
 
             await session.commit()
 
+    async def test_first_meter_matches_panel_not_legacy_gap(self) -> None:
+        """Меньше записей traffic_gb_step, чем ceil(used_gb) на панели — без списаний за «старый» объём."""
+        settings = _meter_settings()
+        uinf_10gb = {"userTraffic": {"usedTrafficBytes": int(10 * 1024**3)}}
+
+        async with self.factory() as session:
+            code = secrets.token_hex(8)
+            u = User(
+                telegram_id=1_003_000_003,
+                referral_code=code,
+                balance=Decimal("100"),
+                billing_mode="hybrid",
+                remnawave_uuid=uuid.uuid4(),
+            )
+            session.add(u)
+            await session.flush()
+            session.add(
+                BillingUsageEvent(
+                    user_id=u.id,
+                    event_id="legacy-wh-one",
+                    event_type="traffic_gb_step",
+                    event_ts=datetime.now(timezone.utc),
+                    usage_gb_step=1,
+                    is_mobile_internet=False,
+                    meta={"package_covered": False},
+                )
+            )
+            await session.flush()
+
+            with patch(
+                "shared.services.billing_v2.traffic_meter_poll_service.RemnaWaveClient"
+            ) as mock_rw_cls:
+                mock_rw_cls.return_value.get_user = AsyncMock(return_value=uinf_10gb)
+                n = await sync_user_traffic_meter_from_panel(session, user=u, settings=settings)
+
+            self.assertEqual(n, 0)
+            meter = (
+                await session.execute(select(BillingTrafficMeter).where(BillingTrafficMeter.user_id == u.id))
+            ).scalar_one()
+            self.assertEqual(meter.charged_gb_steps, 10)
+            self.assertEqual(u.balance, Decimal("100"))
+
+            await session.commit()
+
     async def test_new_row_aligns_with_legacy_webhook_steps(self) -> None:
-        """Уже записанные traffic_gb_step (вебхук) — не дублируем при первом появлении счётчика."""
+        """Уже записанные traffic_gb_step (вебхук), панель в пределах того же шага — без лишних списаний."""
         settings = _meter_settings()
         uinf_500mb = {"userTraffic": {"usedTrafficBytes": int(0.5 * 1024**3)}}
 

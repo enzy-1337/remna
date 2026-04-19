@@ -6,14 +6,13 @@ import logging
 import math
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
 from shared.models.billing_traffic_meter import BillingTrafficMeter
-from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.user import User
 from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.rating_service import charge_gb_step
@@ -67,18 +66,6 @@ async def baseline_meter_at_hybrid_transition(
     await session.flush()
 
 
-async def _count_traffic_gb_step_events(session: AsyncSession, user_id: int) -> int:
-    r = await session.execute(
-        select(func.count())
-        .select_from(BillingUsageEvent)
-        .where(
-            BillingUsageEvent.user_id == user_id,
-            BillingUsageEvent.event_type == "traffic_gb_step",
-        )
-    )
-    return int(r.scalar_one() or 0)
-
-
 async def sync_user_traffic_meter_from_panel(
     session: AsyncSession,
     *,
@@ -89,8 +76,10 @@ async def sync_user_traffic_meter_from_panel(
     Сверяет used_gb из панели с BillingTrafficMeter.charged_gb_steps; при росте — вызывает charge_gb_step
     с event_id ``traffic_meter:{user_id}:{step}``. При падении usage в панели — уменьшает счётчик без возврата денег.
 
-    Для новой строки счётчика: charged_gb_steps = min(steps_due, число уже записанных traffic_gb_step),
-    чтобы не дублировать списания после миграции с вебхуков.
+    Новая строка счётчика создаётся с charged_gb_steps = steps_due (текущий ceil(used_gb) с панели),
+    без сравнения с числом записанных traffic_gb_step: иначе при legacy < steps_due происходил «догон»
+    списаниями за накопленный ранее трафик (в т.ч. до hybrid), что неверно для PAYG после выравнивания
+    через baseline_meter_at_hybrid_transition / обнуление баланса.
 
     Возвращает число успешных новых списаний за этот вызов.
     """
@@ -115,14 +104,7 @@ async def sync_user_traffic_meter_from_panel(
         await session.execute(select(BillingTrafficMeter).where(BillingTrafficMeter.user_id == user.id).limit(1))
     ).scalar_one_or_none()
     if meter is None:
-        legacy = await _count_traffic_gb_step_events(session, user.id)
-        if legacy > 0:
-            # Уже есть списания вебхуками — не дублируем при первом появлении счётчика.
-            initial = min(steps_due, legacy)
-        else:
-            # Нет записанных шагов — текущий объём по панели считаем базой (не списываем «старый»
-            # трафик до hybrid / до первого опроса счётчика).
-            initial = steps_due
+        initial = steps_due
         meter = BillingTrafficMeter(user_id=user.id, charged_gb_steps=initial)
         session.add(meter)
         await session.flush()
