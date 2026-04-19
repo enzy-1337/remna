@@ -3,21 +3,37 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.models.plan import Plan
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.device import Device
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.services.subscription_service import MIN_DEVICES, admin_disable_subscription_record
+from shared.services.subscription_service import (
+    MIN_DEVICES,
+    admin_disable_subscription_record,
+    get_active_subscription,
+)
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 
 logger = logging.getLogger(__name__)
+
+
+def _payment_is_balance(txn: Transaction) -> bool:
+    """Покупки тарифа/слота с баланса: payment_provider balance (без учёта регистра) или пусто в старых записях."""
+    if txn.type not in ("subscription", "manual_add"):
+        return False
+    pp = (txn.payment_provider or "").strip().lower()
+    if pp == "balance":
+        return True
+    # Старые строки могли не заполнять провайдер — для типов покупки из бота считаем балансом
+    return pp == ""
 
 
 def _parse_iso_utc(s: str) -> datetime:
@@ -28,6 +44,68 @@ def _parse_iso_utc(s: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+async def _subtract_pack_days_from_subscription(
+    session: AsyncSession,
+    *,
+    user: User,
+    sub: Subscription,
+    meta: dict,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Забирает добавленный тарифом период: новый expires = старый − duration_days плана."""
+    plan_ref = meta.get("purchased_plan_id") or meta.get("plan_id")
+    dur_raw = meta.get("duration_days")
+    plan: Plan | None = None
+    if plan_ref is not None:
+        try:
+            plan = await session.get(Plan, int(plan_ref))
+        except (TypeError, ValueError):
+            plan = None
+    dd: int | None = None
+    if dur_raw is not None:
+        try:
+            dd = int(dur_raw)
+        except (TypeError, ValueError):
+            dd = None
+    if dd is None and plan is not None:
+        dd = int(plan.duration_days)
+    if not dd or dd <= 0:
+        return False, "Нет duration_days / plan_id в метаданных — нельзя вычесть купленные дни."
+
+    now = datetime.now(timezone.utc)
+    exp = sub.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    new_exp = exp - timedelta(days=dd)
+    if sub.started_at:
+        st = sub.started_at if sub.started_at.tzinfo else sub.started_at.replace(tzinfo=timezone.utc)
+        if new_exp < st:
+            new_exp = st
+    sub.expires_at = new_exp
+    if new_exp <= now and sub.status in ("active", "trial"):
+        sub.status = "cancelled"
+        if user.remnawave_uuid is not None and not settings.remnawave_stub:
+            rw = RemnaWaveClient(settings)
+            try:
+                await rw.update_user(str(user.remnawave_uuid), status="DISABLED")
+            except RemnaWaveError as e:
+                logger.warning("subtract_pack_days RW disable: %s", e)
+    elif user.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(user.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
+        except RemnaWaveError as e:
+            logger.warning("subtract_pack_days RW: %s", e)
+            return False, f"Панель VPN: {e}"
+    return True, ""
 
 
 async def admin_refund_purchase_transaction(
@@ -50,8 +128,8 @@ async def admin_refund_purchase_transaction(
         return False, "Списания PAYG нельзя отменить через эту кнопку."
     if txn.type not in ("subscription", "manual_add"):
         return False, "Отмена доступна только для покупки тарифа или слота устройства с баланса."
-    if txn.payment_provider != "balance":
-        return False, "Доступен возврат только за списания с баланса."
+    if not _payment_is_balance(txn):
+        return False, "Доступен возврат только за списания с баланса (payment_provider balance)."
 
     user = await session.get(User, user_id)
     if user is None:
@@ -144,14 +222,13 @@ async def _refund_subscription(
     amount: Decimal,
 ) -> tuple[bool, str]:
     pk = meta.get("purchase_kind")
-    if pk not in ("new", "extend"):
-        return False, "Нет данных отката в метаданных (старая покупка) — автоматическая отмена невозможна."
-
     sub_db_id = meta.get("subscription_db_id_after")
-    if sub_db_id is None:
-        return False, "Нет subscription_db_id_after в метаданных."
 
-    sub = await session.get(Subscription, int(sub_db_id))
+    sub: Subscription | None = None
+    if sub_db_id is not None:
+        sub = await session.get(Subscription, int(sub_db_id))
+    if sub is None or sub.user_id != user.id:
+        sub = await get_active_subscription(session, user.id)
     if sub is None or sub.user_id != user.id:
         return False, "Подписка для этой покупки не найдена."
 
@@ -167,31 +244,46 @@ async def _refund_subscription(
 
     elif pk == "extend":
         exp_s = meta.get("expires_at_before")
-        if not exp_s:
-            return False, "Нет expires_at_before — нельзя вернуть срок."
-        try:
-            prev_exp = _parse_iso_utc(str(exp_s))
-        except ValueError:
-            return False, "Некорректная дата в метаданных."
-        sub.expires_at = prev_exp
-        if meta.get("devices_count_before") is not None:
+        if exp_s:
             try:
-                sub.devices_count = int(meta["devices_count_before"])
-            except (TypeError, ValueError):
-                pass
-        if user.remnawave_uuid is not None and not settings.remnawave_stub:
-            rw = RemnaWaveClient(settings)
-            try:
-                await update_rw_user_respecting_hwid_limit(
-                    rw,
-                    str(user.remnawave_uuid),
-                    devices_limit_for_panel=sub.devices_count,
-                    expire_at=sub.expires_at,
-                    status="ACTIVE",
-                )
-            except RemnaWaveError as e:
-                logger.warning("refund_subscription extend RW: %s", e)
-                return False, f"Панель VPN: {e}"
+                prev_exp = _parse_iso_utc(str(exp_s))
+            except ValueError:
+                return False, "Некорректная дата в метаданных."
+            sub.expires_at = prev_exp
+            if meta.get("devices_count_before") is not None:
+                try:
+                    sub.devices_count = int(meta["devices_count_before"])
+                except (TypeError, ValueError):
+                    pass
+            if user.remnawave_uuid is not None and not settings.remnawave_stub:
+                rw = RemnaWaveClient(settings)
+                try:
+                    await update_rw_user_respecting_hwid_limit(
+                        rw,
+                        str(user.remnawave_uuid),
+                        devices_limit_for_panel=sub.devices_count,
+                        expire_at=sub.expires_at,
+                        status="ACTIVE",
+                    )
+                except RemnaWaveError as e:
+                    logger.warning("refund_subscription extend RW: %s", e)
+                    return False, f"Панель VPN: {e}"
+        else:
+            ok_dd, err_dd = await _subtract_pack_days_from_subscription(
+                session, user=user, sub=sub, meta=meta, settings=settings
+            )
+            if not ok_dd:
+                return False, err_dd
+
+    elif pk in (None, "") and txn.type == "subscription":
+        ok_dd, err_dd = await _subtract_pack_days_from_subscription(
+            session, user=user, sub=sub, meta=meta, settings=settings
+        )
+        if not ok_dd:
+            return False, err_dd
+
+    else:
+        return False, "Нет данных отката в метаданных (нужны purchase_kind или plan_id/duration_days)."
 
     user.balance += amount
     refund = Transaction(
@@ -222,12 +314,15 @@ async def _refund_subscription(
 
 
 def txn_row_refund_eligible(txn: Transaction) -> bool:
-    if txn.status != "completed" or txn.payment_provider != "balance":
+    if txn.status != "completed" or not _payment_is_balance(txn):
         return False
     if txn.type == "manual_add":
         m = txn.meta or {}
         return bool(m.get("device_id") and m.get("subscription_id"))
     if txn.type == "subscription":
         m = txn.meta or {}
-        return m.get("purchase_kind") in ("new", "extend")
+        if m.get("purchase_kind") in ("new", "extend"):
+            return True
+        # Покупка с баланса: всегда есть plan_id в meta — откат по вычитанию дней
+        return bool(m.get("purchased_plan_id") or m.get("plan_id"))
     return False
