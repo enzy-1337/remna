@@ -29,7 +29,6 @@ from bot.states.admin import (
     AdminSubscriptionStates,
 )
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
-from shared.admin_dotenv import patch_dotenv
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.md2 import bold, code, esc, italic, join_lines, link, plain, strip_for_popup_alert
@@ -55,7 +54,7 @@ from shared.database import get_session_factory
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.referral_service import count_invited_users
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
-from shared.services.feature_flags import set_tariff_purchases_enabled_redis, tariff_purchases_enabled
+from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.subscription_service import (
     admin_convert_monthly_subscriptions_to_payg_balance,
     get_base_subscription_plan,
@@ -933,9 +932,7 @@ async def cb_admin_tariffs_toggle_do(cq: CallbackQuery, db_user: User | None) ->
     settings = get_settings()
     cur = await tariff_purchases_enabled(settings)
     new_val = not cur
-    patch_dotenv({"BOT_TARIFF_PURCHASES_ENABLED": "true" if new_val else "false"})
-    await set_tariff_purchases_enabled_redis(settings, new_val)
-    get_settings.cache_clear()
+    await set_tariff_purchases_enabled(settings, new_val)
     await cq.answer("Готово")
     assert db_user is not None
     await _render_admin_tariffs_shop_screen(cq, db_user)

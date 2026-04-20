@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import redis.asyncio as redis
 
+from shared.admin_dotenv import patch_dotenv
 from shared.config import Settings, get_settings
 
 _REDIS_KEY_TARIFF_PURCHASES = "remna:feature:bot_tariff_purchases_enabled"
@@ -35,3 +36,15 @@ async def set_tariff_purchases_enabled_redis(settings: Settings, enabled: bool) 
         await r.set(_REDIS_KEY_TARIFF_PURCHASES, "1" if enabled else "0")
     finally:
         await r.aclose()
+
+
+async def set_tariff_purchases_enabled(settings: Settings, enabled: bool) -> None:
+    """
+    Надежное переключение продажи тарифов:
+    - сохраняет флаг в .env (переживает рестарт контейнеров),
+    - пишет флаг в Redis (применяется сразу без перезапуска),
+    - сбрасывает cache get_settings() в текущем процессе.
+    """
+    patch_dotenv({"BOT_TARIFF_PURCHASES_ENABLED": "true" if enabled else "false"})
+    await set_tariff_purchases_enabled_redis(settings, enabled)
+    get_settings.cache_clear()

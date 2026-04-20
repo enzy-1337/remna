@@ -84,7 +84,7 @@ from shared.services.broadcast_service import broadcast_html_preview_fragment, s
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
-from shared.services.feature_flags import set_tariff_purchases_enabled_redis, tariff_purchases_enabled
+from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
@@ -3826,11 +3826,6 @@ async def admin_status_data(request: Request) -> JSONResponse:
         ip_pct = 100.0
     elif bool(ip_diag.get("proxy_set")) and not bool(ip_diag.get("proxy_ok")):
         ip_pct = 50.0 if bool(ip_diag.get("direct_ok")) else 0.0
-    machine_proxy_note = (
-        "Прокси: задан"
-        if bool(ip_diag.get("proxy_set"))
-        else "Прокси: не задан (используется прямой выход)"
-    )
     machine_ok = host_ok and ip_ok
     machine_badge = "badge-success" if machine_ok else "badge-warning"
     machine_state = "Норма" if machine_ok else "Частично"
@@ -3859,57 +3854,15 @@ async def admin_status_data(request: Request) -> JSONResponse:
             <p class="text-sm font-medium break-words">{_esc(host_cpu)}</p>
           </div>
           <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
-            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
-                 style="background: conic-gradient(color-mix(in oklab, var(--success) 76%, transparent) 0 {ip_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {ip_pct}% 100%);">
-              <span class="text-[11px] font-semibold">{ip_pct:.0f}%</span>
-            </div>
             <p class="text-xs opacity-60 uppercase tracking-wide">IP</p>
             <p class="text-sm font-medium break-words">{_esc(ip_detail)}</p>
-            <p class="text-xs opacity-60 mt-1">{_esc(machine_proxy_note)}</p>
             {"<p class='text-xs opacity-60 mt-1'>" + _esc(ip_lat) + "</p>" if ip_lat else ""}
           </div>
         </div>
       </div>
     </div>
     """
-
     nodes_table_html = ""
-    if nodes_list_err:
-        nodes_table_html = f"<div class='alert alert-warning text-sm mt-4'>{_esc(nodes_list_err)}</div>"
-    elif node_rows:
-        cat_note = f"загрузка списка: {nodes_catalog_ms} мс · " if nodes_catalog_ms is not None else ""
-        trs = []
-        for n in node_rows:
-            pms = n.get("ping_ms")
-            ms_s = f"{pms} мс" if pms is not None else "—"
-            st_raw = str(n.get("status") or "UNKNOWN").upper()
-            if st_raw == "ACTIVE":
-                st_badge = "<span class='badge badge-success badge-sm'>ACTIVE</span>"
-            elif st_raw == "DISABLED":
-                st_badge = "<span class='badge badge-warning badge-sm'>DISABLED</span>"
-            elif st_raw in ("ERROR", "OFFLINE", "DOWN"):
-                st_badge = "<span class='badge badge-error badge-sm'>ERROR</span>"
-            else:
-                st_badge = f"<span class='badge badge-ghost badge-sm'>{_esc(st_raw)}</span>"
-            trs.append(
-                f"<tr><td class='max-w-[14rem] truncate' title='{_esc_attr(n.get('name'))}'>{_esc(n.get('name'))}</td>"
-                f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(n.get('uuid'))}</code></td>"
-                f"<td>{st_badge}</td><td class='font-mono text-sm'>{_esc(ms_s)}</td></tr>"
-            )
-        nodes_table_html = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
-      <div class="card-body gap-3">
-        <h3 class="card-title text-lg"><i class="fa-solid fa-network-wired text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
-        <p class="text-sm opacity-60">{_esc(cat_note)}статус и UUID из списка нод панели; задержка — отдельный запрос к ноде через API.</p>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10">
-          <table class="table table-zebra table-sm">
-            <thead><tr><th>Имя</th><th>UUID</th><th>Статус (API)</th><th>Задержка</th></tr></thead>
-            <tbody>{''.join(trs)}</tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-    """
 
     services = [
         {
@@ -5831,8 +5784,7 @@ async def admin_tariffs_toggle_shop_post(request: Request, enabled: str = Form("
         return denied
     settings = get_settings()
     on = enabled.strip().lower() in ("1", "true", "yes", "on")
-    patch_dotenv({"BOT_TARIFF_PURCHASES_ENABLED": "true" if on else "false"})
-    await set_tariff_purchases_enabled_redis(settings, on)
+    await set_tariff_purchases_enabled(settings, on)
     return RedirectResponse("/admin/tariffs?n=tariffs_shop", status_code=303)
 
 
