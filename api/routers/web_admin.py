@@ -8,6 +8,8 @@ import hmac
 import html
 import json
 import logging
+import os
+import socket
 import time
 from calendar import monthrange
 from pathlib import Path
@@ -1789,6 +1791,91 @@ async def _telegram_bot_getme_status(
         return (False, f"HTTP {r.status_code}", latency)
     except Exception as e:
         return (False, str(e)[:220], None)
+
+
+def _read_machine_metrics() -> tuple[bool, str, str]:
+    total_mb = 0
+    avail_mb = 0
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            data = f.read()
+        m_total = re.search(r"^MemTotal:\s+(\d+)\s+kB$", data, flags=re.MULTILINE)
+        m_avail = re.search(r"^MemAvailable:\s+(\d+)\s+kB$", data, flags=re.MULTILINE)
+        if m_total:
+            total_mb = int(m_total.group(1)) // 1024
+        if m_avail:
+            avail_mb = int(m_avail.group(1)) // 1024
+    except Exception:
+        total_mb = 0
+        avail_mb = 0
+    used_mb = max(total_mb - avail_mb, 0) if total_mb else 0
+    ram_part = (
+        f"RAM: {used_mb} / {total_mb} MiB"
+        if total_mb
+        else "RAM: недоступно"
+    )
+
+    cpu_count = os.cpu_count() or 0
+    load_text = ""
+    try:
+        l1, l5, l15 = os.getloadavg()
+        load_text = f" · load: {l1:.2f} / {l5:.2f} / {l15:.2f}"
+    except Exception:
+        load_text = ""
+    cpu_part = f"CPU: логических ядер {cpu_count}" if cpu_count else "CPU: недоступно"
+    return True, ram_part, cpu_part + load_text
+
+
+async def _detect_server_ips(request: Request) -> tuple[bool, str, str | None]:
+    local_ip = "—"
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        pass
+
+    direct_ip = "недоступно"
+    direct_err: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=4.0, trust_env=False) as c:
+            r = await c.get("https://api.ipify.org")
+            if r.status_code == 200:
+                direct_ip = (r.text or "").strip() or "недоступно"
+            else:
+                direct_err = f"HTTP {r.status_code}"
+    except Exception as e:
+        direct_err = str(e)[:120]
+
+    has_proxy = bool(
+        os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+        or os.getenv("ALL_PROXY")
+        or os.getenv("all_proxy")
+    )
+    proxy_ip = "прокси не задан"
+    if has_proxy:
+        try:
+            async with httpx.AsyncClient(timeout=6.0, trust_env=True) as c:
+                r = await c.get("https://api.ipify.org")
+                if r.status_code == 200:
+                    proxy_ip = (r.text or "").strip() or "недоступно"
+                else:
+                    proxy_ip = f"ошибка HTTP {r.status_code}"
+        except Exception as e:
+            proxy_ip = f"ошибка: {str(e)[:120]}"
+
+    hdr_forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    hdr_real = (request.headers.get("x-real-ip") or "").strip()
+    client_host = request.client.host if request.client else ""
+    via_proxy_hint = ""
+    if hdr_forwarded or hdr_real:
+        via_proxy_hint = f" · ingress: {hdr_real or hdr_forwarded.split(',')[0].strip()}"
+    elif client_host:
+        via_proxy_hint = f" · ingress: {client_host}"
+
+    detail = f"Direct: {direct_ip} · Proxy: {proxy_ip} · Local: {local_ip}{via_proxy_hint}"
+    ok = direct_ip != "недоступно"
+    lat = f"Ошибка direct: {direct_err}" if direct_err else None
+    return ok, detail, lat
 
 
 def _parse_date_any(raw: str) -> datetime | None:
@@ -3685,6 +3772,9 @@ async def admin_status_data(request: Request) -> JSONResponse:
     except Exception as e:
         redis_msg = str(e)[:240]
 
+    host_ok, host_ram, host_cpu = _read_machine_metrics()
+    ip_ok, ip_detail, ip_lat = await _detect_server_ips(request)
+
     nodes_table_html = ""
     if nodes_list_err:
         nodes_table_html = f"<div class='alert alert-warning text-sm mt-4'>{_esc(nodes_list_err)}</div>"
@@ -3758,6 +3848,27 @@ async def admin_status_data(request: Request) -> JSONResponse:
             "ok": redis_ok,
             "detail": redis_msg,
             "latency": redis_lat,
+        },
+        {
+            "title": "Сервер: оперативная память",
+            "icon": "fa-solid fa-memory",
+            "ok": host_ok,
+            "detail": host_ram,
+            "latency": None,
+        },
+        {
+            "title": "Сервер: CPU и ядра",
+            "icon": "fa-solid fa-microchip",
+            "ok": host_ok,
+            "detail": host_cpu,
+            "latency": None,
+        },
+        {
+            "title": "Сервер: IP адреса",
+            "icon": "fa-solid fa-network-wired",
+            "ok": ip_ok,
+            "detail": ip_detail,
+            "latency": ip_lat,
         },
     ]
     return JSONResponse({"services": services, "nodes_html": nodes_table_html})
