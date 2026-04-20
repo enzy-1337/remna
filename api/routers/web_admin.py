@@ -1793,7 +1793,7 @@ async def _telegram_bot_getme_status(
         return (False, str(e)[:220], None)
 
 
-def _read_machine_metrics() -> tuple[bool, str, str]:
+def _read_machine_metrics() -> dict[str, object]:
     total_mb = 0
     avail_mb = 0
     try:
@@ -1814,19 +1814,29 @@ def _read_machine_metrics() -> tuple[bool, str, str]:
         if total_mb
         else "RAM: недоступно"
     )
+    ram_pct = round((used_mb / total_mb) * 100, 1) if total_mb > 0 else 0.0
 
     cpu_count = os.cpu_count() or 0
     load_text = ""
+    load1 = 0.0
     try:
         l1, l5, l15 = os.getloadavg()
+        load1 = float(l1)
         load_text = f" · load: {l1:.2f} / {l5:.2f} / {l15:.2f}"
     except Exception:
         load_text = ""
     cpu_part = f"CPU: логических ядер {cpu_count}" if cpu_count else "CPU: недоступно"
-    return True, ram_part, cpu_part + load_text
+    cpu_load_pct = round(min(max((load1 / cpu_count) * 100, 0.0), 100.0), 1) if cpu_count > 0 else 0.0
+    return {
+        "ok": True,
+        "ram_text": ram_part,
+        "cpu_text": cpu_part + load_text,
+        "ram_pct": ram_pct,
+        "cpu_pct": cpu_load_pct,
+    }
 
 
-async def _detect_server_ips(request: Request) -> tuple[bool, str, str | None]:
+async def _detect_server_ips(request: Request) -> dict[str, object]:
     local_ip = "—"
     try:
         local_ip = socket.gethostbyname(socket.gethostname())
@@ -1875,7 +1885,14 @@ async def _detect_server_ips(request: Request) -> tuple[bool, str, str | None]:
     detail = f"Direct: {direct_ip} · Proxy: {proxy_ip} · Local: {local_ip}{via_proxy_hint}"
     ok = direct_ip != "недоступно"
     lat = f"Ошибка direct: {direct_err}" if direct_err else None
-    return ok, detail, lat
+    return {
+        "ok": ok,
+        "detail": detail,
+        "latency": lat,
+        "direct_ok": direct_ip != "недоступно",
+        "proxy_set": has_proxy,
+        "proxy_ok": has_proxy and proxy_ip not in ("недоступно", "прокси не задан") and not proxy_ip.startswith("ошибка"),
+    }
 
 
 def _parse_date_any(raw: str) -> datetime | None:
@@ -3707,7 +3724,10 @@ async def admin_status(request: Request) -> HTMLResponse:
         var lat=it.latency?('<p class="text-xs opacity-60 mt-1">'+esc(it.latency)+'</p>'):'';
         return '<div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="'+esc(it.icon)+' text-primary mr-2" aria-hidden="true"></i>'+esc(it.title)+'</h3><span class="badge '+badge+' badge-sm">'+st+'</span></div><p class="text-sm opacity-90 break-words">'+esc(it.detail)+'</p>'+lat+'</div></div>';
       }
+      let loading=false;
       async function load(){
+        if(loading) return;
+        loading=true;
         try{
           const r=await fetch('/admin/status/data',{credentials:'same-origin'});
           const j=await r.json();
@@ -3723,9 +3743,12 @@ async def admin_status(request: Request) -> HTMLResponse:
           const grid=document.getElementById('status-grid');
           if(machine) machine.innerHTML='';
           grid.innerHTML='<div class="alert alert-error"><span>Не удалось загрузить статусы: '+esc(e&&e.message?e.message:e)+'</span></div>';
+        }finally{
+          loading=false;
         }
       }
       load();
+      setInterval(load, 10000);
     })();
     </script>
     """
@@ -3788,8 +3811,26 @@ async def admin_status_data(request: Request) -> JSONResponse:
     except Exception as e:
         redis_msg = str(e)[:240]
 
-    host_ok, host_ram, host_cpu = _read_machine_metrics()
-    ip_ok, ip_detail, ip_lat = await _detect_server_ips(request)
+    machine = _read_machine_metrics()
+    ip_diag = await _detect_server_ips(request)
+    host_ok = bool(machine.get("ok"))
+    ip_ok = bool(ip_diag.get("ok"))
+    host_ram = str(machine.get("ram_text") or "RAM: недоступно")
+    host_cpu = str(machine.get("cpu_text") or "CPU: недоступно")
+    ram_pct = float(machine.get("ram_pct") or 0.0)
+    cpu_pct = float(machine.get("cpu_pct") or 0.0)
+    ip_detail = str(ip_diag.get("detail") or "IP: недоступно")
+    ip_lat = ip_diag.get("latency")
+    ip_pct = 100.0 if bool(ip_diag.get("direct_ok")) else 0.0
+    if bool(ip_diag.get("proxy_set")) and bool(ip_diag.get("proxy_ok")):
+        ip_pct = 100.0
+    elif bool(ip_diag.get("proxy_set")) and not bool(ip_diag.get("proxy_ok")):
+        ip_pct = 50.0 if bool(ip_diag.get("direct_ok")) else 0.0
+    machine_proxy_note = (
+        "Прокси: задан"
+        if bool(ip_diag.get("proxy_set"))
+        else "Прокси: не задан (используется прямой выход)"
+    )
     machine_ok = host_ok and ip_ok
     machine_badge = "badge-success" if machine_ok else "badge-warning"
     machine_state = "Норма" if machine_ok else "Частично"
@@ -3802,16 +3843,29 @@ async def admin_status_data(request: Request) -> JSONResponse:
         </div>
         <div class="grid gap-2 sm:grid-cols-3">
           <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
+                 style="background: conic-gradient(color-mix(in oklab, var(--p) 78%, transparent) 0 {ram_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {ram_pct}% 100%);">
+              <span class="text-[11px] font-semibold">{ram_pct:.0f}%</span>
+            </div>
             <p class="text-xs opacity-60 uppercase tracking-wide">RAM</p>
             <p class="text-sm font-medium break-words">{_esc(host_ram)}</p>
           </div>
           <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
+                 style="background: conic-gradient(color-mix(in oklab, var(--info) 74%, transparent) 0 {cpu_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {cpu_pct}% 100%);">
+              <span class="text-[11px] font-semibold">{cpu_pct:.0f}%</span>
+            </div>
             <p class="text-xs opacity-60 uppercase tracking-wide">CPU</p>
             <p class="text-sm font-medium break-words">{_esc(host_cpu)}</p>
           </div>
           <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
+                 style="background: conic-gradient(color-mix(in oklab, var(--success) 76%, transparent) 0 {ip_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {ip_pct}% 100%);">
+              <span class="text-[11px] font-semibold">{ip_pct:.0f}%</span>
+            </div>
             <p class="text-xs opacity-60 uppercase tracking-wide">IP</p>
             <p class="text-sm font-medium break-words">{_esc(ip_detail)}</p>
+            <p class="text-xs opacity-60 mt-1">{_esc(machine_proxy_note)}</p>
             {"<p class='text-xs opacity-60 mt-1'>" + _esc(ip_lat) + "</p>" if ip_lat else ""}
           </div>
         </div>
