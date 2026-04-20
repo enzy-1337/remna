@@ -989,6 +989,7 @@ async def msg_promos_edit_value(
     message: Message,
     session: AsyncSession,
     state: FSMContext,
+    db_user: User | None,
 ) -> None:
     data = await state.get_data()
     promo_type = data.get("edit_type")
@@ -1032,6 +1033,8 @@ async def msg_promos_edit_value(
         await _send_and_track(state, message, "Промокод не найден.")
         return
 
+    prev_type = promo.type
+    prev_value = promo.value
     await state.update_data(edit_value=val)
     promo.type = promo_type if edit_mode == "type" else promo.type
     promo.value = val
@@ -1043,6 +1046,21 @@ async def msg_promos_edit_value(
         await _send_and_track(state, message, msg[:200])
         return
     await state.clear()
+    if db_user is not None:
+        await notify_admin(
+            get_settings(),
+            title="✏️ " + bold("Промокод изменён (бот)"),
+            lines=[
+                plain("Код: ") + code(promo.code),
+                plain("Тип: ") + code(prev_type) + plain(" → ") + code(promo.type),
+                plain("Награда: ") + bold(str(prev_value)) + plain(" → ") + bold(str(promo.value)),
+                plain("Кто: ") + bold(f"#{db_user.id}"),
+            ],
+            event_type="promo_edit_bot",
+            topic=AdminLogTopic.PROMO,
+            subject_user=db_user,
+            session=session,
+        )
     await message.answer(
         esc("Награда обновлена."),
         reply_markup=_promo_view_back_keyboard(promo_id),
@@ -1054,6 +1072,7 @@ async def msg_promos_edit_expires(
     message: Message,
     session: AsyncSession,
     state: FSMContext,
+    db_user: User | None,
 ) -> None:
     data = await state.get_data()
     raw = (message.text or "").strip()
@@ -1076,6 +1095,7 @@ async def msg_promos_edit_expires(
         await state.clear()
         await _send_and_track(state, message, "Промокод не найден.")
         return
+    prev_exp = promo.expires_at
     promo.expires_at = expires_at
     try:
         await session.flush()
@@ -1084,6 +1104,21 @@ async def msg_promos_edit_expires(
         await _send_and_track(state, message, msg[:200])
         return
     await state.clear()
+    if db_user is not None:
+        before_exp_text = "∞" if prev_exp is None else prev_exp.strftime("%d.%m.%Y")
+        await notify_admin(
+            get_settings(),
+            title="🗓 " + bold("Срок промокода изменён (бот)"),
+            lines=[
+                plain("Код: ") + code(promo.code),
+                plain("Срок: ") + bold(before_exp_text) + plain(" → ") + bold(_format_expires(promo)),
+                plain("Кто: ") + bold(f"#{db_user.id}"),
+            ],
+            event_type="promo_edit_bot",
+            topic=AdminLogTopic.PROMO,
+            subject_user=db_user,
+            session=session,
+        )
     await message.answer(
         esc("Срок действия обновлен."),
         reply_markup=_promo_view_back_keyboard(promo_id),
@@ -1095,6 +1130,7 @@ async def msg_promos_edit_max_uses(
     message: Message,
     session: AsyncSession,
     state: FSMContext,
+    db_user: User | None,
 ) -> None:
     data = await state.get_data()
     raw = (message.text or "").strip()
@@ -1121,6 +1157,7 @@ async def msg_promos_edit_max_uses(
         await state.clear()
         await _send_and_track(state, message, "Промокод не найден.")
         return
+    prev_max_uses = promo.max_uses
     promo.max_uses = max_uses
     try:
         await session.flush()
@@ -1129,6 +1166,20 @@ async def msg_promos_edit_max_uses(
         await _send_and_track(state, message, msg[:200])
         return
     await state.clear()
+    if db_user is not None:
+        await notify_admin(
+            get_settings(),
+            title="🧩 " + bold("Лимит промокода изменён (бот)"),
+            lines=[
+                plain("Код: ") + code(promo.code),
+                plain("Лимит: ") + bold("∞" if prev_max_uses is None else str(prev_max_uses)) + plain(" → ") + bold("∞" if promo.max_uses is None else str(promo.max_uses)),
+                plain("Кто: ") + bold(f"#{db_user.id}"),
+            ],
+            event_type="promo_edit_bot",
+            topic=AdminLogTopic.PROMO,
+            subject_user=db_user,
+            session=session,
+        )
     await message.answer(
         esc("Лимит обновлен."),
         reply_markup=_promo_view_back_keyboard(promo_id),

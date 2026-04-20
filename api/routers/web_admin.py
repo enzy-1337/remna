@@ -85,6 +85,8 @@ from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
+from shared.services.admin_notify import notify_admin
+from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
@@ -1737,6 +1739,33 @@ def _promo_reward_caption(promo: PromoCode) -> str:
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
     return f"+{v}"
+
+
+def _web_admin_actor_label(request: Request) -> str:
+    auth = request.session.get("wauth") or {}
+    kind = str(auth.get("kind") or "").strip()
+    if kind == "telegram":
+        un = str(auth.get("username") or "").strip()
+        if un:
+            return "@" + un
+        tid = auth.get("id") or auth.get("telegram_id")
+        return f"tg:{tid}" if tid else "web-admin"
+    if kind == "github":
+        login = str(auth.get("login") or auth.get("username") or "").strip()
+        return f"github:{login}" if login else "github"
+    return "web-admin"
+
+
+async def _web_admin_actor_user(session: AsyncSession, request: Request) -> User | None:
+    auth = request.session.get("wauth") or {}
+    raw_tg_id = auth.get("id") or auth.get("telegram_id")
+    try:
+        tg_id = int(raw_tg_id) if raw_tg_id is not None else 0
+    except (TypeError, ValueError):
+        tg_id = 0
+    if tg_id <= 0:
+        return None
+    return (await session.execute(select(User).where(User.telegram_id == tg_id).limit(1))).scalar_one_or_none()
 
 
 def _status_service_card(
@@ -7201,6 +7230,8 @@ async def admin_promos_new_post(
             ).scalar_one_or_none()
             if admin_user is not None:
                 admin_db_id = int(admin_user.id)
+        actor_user = await _web_admin_actor_user(session, request)
+        actor_label = _web_admin_actor_label(request)
         promo = PromoCode(
             code=c,
             type=promo_type,
@@ -7213,6 +7244,23 @@ async def admin_promos_new_post(
         )
         session.add(promo)
         await session.commit()
+        await notify_admin(
+            get_settings(),
+            title="🎁 Промокод создан (web-admin)",
+            lines=[
+                f"Код: {promo.code}",
+                f"Тип: {promo.type}",
+                f"Награда: {_promo_reward_caption(promo)}",
+                f"Срок (до): {_fmt_expires(promo.expires_at)}",
+                f"Лимит: {'∞' if promo.max_uses is None else promo.max_uses}",
+                f"Активен: {'да' if promo.is_active else 'нет'}",
+                f"Кто: {actor_label}",
+            ],
+            event_type="promo_create_web",
+            topic=AdminLogTopic.PROMO,
+            subject_user=actor_user,
+            session=session,
+        )
     return RedirectResponse("/admin/promos", status_code=303)
 
 
@@ -7339,6 +7387,13 @@ async def admin_promos_edit_post(
                 request=request,
                 back_href=f"/admin/promos/{promo_id}",
             )
+        actor_user = await _web_admin_actor_user(session, request)
+        actor_label = _web_admin_actor_label(request)
+        before_type = promo.type
+        before_value = promo.value
+        before_max_uses = promo.max_uses
+        before_expires_at = promo.expires_at
+        before_is_active = promo.is_active
         promo.type = promo_type
         promo.value = val
         promo.fallback_value_rub = None
@@ -7346,6 +7401,23 @@ async def admin_promos_edit_post(
         promo.expires_at = exp
         promo.is_active = active
         await session.commit()
+        await notify_admin(
+            get_settings(),
+            title="✏️ Промокод изменён (web-admin)",
+            lines=[
+                f"Код: {promo.code}",
+                f"Тип: {before_type} → {promo.type}",
+                f"Награда: {before_value} → {promo.value}",
+                f"Срок: {_fmt_expires(before_expires_at)} → {_fmt_expires(promo.expires_at)}",
+                f"Лимит: {'∞' if before_max_uses is None else before_max_uses} → {'∞' if promo.max_uses is None else promo.max_uses}",
+                f"Активен: {'да' if before_is_active else 'нет'} → {'да' if promo.is_active else 'нет'}",
+                f"Кто: {actor_label}",
+            ],
+            event_type="promo_edit_web",
+            topic=AdminLogTopic.PROMO,
+            subject_user=actor_user,
+            session=session,
+        )
     return RedirectResponse(f"/admin/promos/{promo_id}", status_code=303)
 
 
@@ -7355,10 +7427,25 @@ async def admin_promos_delete(request: Request, promo_id: int):
     if denied is not None:
         return denied
     async with await _session() as session:
+        actor_user = await _web_admin_actor_user(session, request)
+        actor_label = _web_admin_actor_label(request)
         promo = await session.get(PromoCode, promo_id)
         if promo is not None:
+            deleted_code = str(promo.code)
             await session.delete(promo)
             await session.commit()
+            await notify_admin(
+                get_settings(),
+                title="🗑 Промокод удалён (web-admin)",
+                lines=[
+                    f"Код: {deleted_code}",
+                    f"Кто: {actor_label}",
+                ],
+                event_type="promo_delete_web",
+                topic=AdminLogTopic.PROMO,
+                subject_user=actor_user,
+                session=session,
+            )
     return RedirectResponse("/admin/promos", status_code=303)
 
 
