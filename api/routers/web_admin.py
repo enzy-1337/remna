@@ -3677,6 +3677,18 @@ async def admin_status(request: Request) -> HTMLResponse:
       }
       @keyframes statusShimmer{100%{transform:translateX(100%);}}
     </style>
+    <div id="status-machine" class="mb-4">
+      <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+        <div class="card-body gap-3">
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
+          <div class="grid gap-2 sm:grid-cols-3">
+            <div class="rounded-lg border border-base-content/10 p-3"><span class="status-skel inline-block h-4 w-28 rounded"></span><div class="mt-2 status-skel h-5 w-40 rounded"></div></div>
+            <div class="rounded-lg border border-base-content/10 p-3"><span class="status-skel inline-block h-4 w-24 rounded"></span><div class="mt-2 status-skel h-5 w-44 rounded"></div></div>
+            <div class="rounded-lg border border-base-content/10 p-3"><span class="status-skel inline-block h-4 w-16 rounded"></span><div class="mt-2 status-skel h-5 w-full rounded"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="status-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Панель Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
       <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-бот</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
@@ -3699,13 +3711,17 @@ async def admin_status(request: Request) -> HTMLResponse:
         try{
           const r=await fetch('/admin/status/data',{credentials:'same-origin'});
           const j=await r.json();
+          const machine=document.getElementById('status-machine');
           const grid=document.getElementById('status-grid');
           const nodes=document.getElementById('status-nodes');
           if(!r.ok||!j||!Array.isArray(j.services)){throw new Error((j&&j.error)||('HTTP '+r.status));}
+          machine.innerHTML=j.machine_html||'';
           grid.innerHTML=j.services.map(card).join('');
           nodes.innerHTML=j.nodes_html||'';
         }catch(e){
+          const machine=document.getElementById('status-machine');
           const grid=document.getElementById('status-grid');
+          if(machine) machine.innerHTML='';
           grid.innerHTML='<div class="alert alert-error"><span>Не удалось загрузить статусы: '+esc(e&&e.message?e.message:e)+'</span></div>';
         }
       }
@@ -3774,6 +3790,34 @@ async def admin_status_data(request: Request) -> JSONResponse:
 
     host_ok, host_ram, host_cpu = _read_machine_metrics()
     ip_ok, ip_detail, ip_lat = await _detect_server_ips(request)
+    machine_ok = host_ok and ip_ok
+    machine_badge = "badge-success" if machine_ok else "badge-warning"
+    machine_state = "Норма" if machine_ok else "Частично"
+    machine_html = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
+          <span class="badge {machine_badge} badge-sm">{machine_state}</span>
+        </div>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <p class="text-xs opacity-60 uppercase tracking-wide">RAM</p>
+            <p class="text-sm font-medium break-words">{_esc(host_ram)}</p>
+          </div>
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <p class="text-xs opacity-60 uppercase tracking-wide">CPU</p>
+            <p class="text-sm font-medium break-words">{_esc(host_cpu)}</p>
+          </div>
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <p class="text-xs opacity-60 uppercase tracking-wide">IP</p>
+            <p class="text-sm font-medium break-words">{_esc(ip_detail)}</p>
+            {"<p class='text-xs opacity-60 mt-1'>" + _esc(ip_lat) + "</p>" if ip_lat else ""}
+          </div>
+        </div>
+      </div>
+    </div>
+    """
 
     nodes_table_html = ""
     if nodes_list_err:
@@ -3849,29 +3893,8 @@ async def admin_status_data(request: Request) -> JSONResponse:
             "detail": redis_msg,
             "latency": redis_lat,
         },
-        {
-            "title": "Сервер: оперативная память",
-            "icon": "fa-solid fa-memory",
-            "ok": host_ok,
-            "detail": host_ram,
-            "latency": None,
-        },
-        {
-            "title": "Сервер: CPU и ядра",
-            "icon": "fa-solid fa-microchip",
-            "ok": host_ok,
-            "detail": host_cpu,
-            "latency": None,
-        },
-        {
-            "title": "Сервер: IP адреса",
-            "icon": "fa-solid fa-network-wired",
-            "ok": ip_ok,
-            "detail": ip_detail,
-            "latency": ip_lat,
-        },
     ]
-    return JSONResponse({"services": services, "nodes_html": nodes_table_html})
+    return JSONResponse({"services": services, "nodes_html": nodes_table_html, "machine_html": machine_html})
 
 
 @router.get("/dashboard")
