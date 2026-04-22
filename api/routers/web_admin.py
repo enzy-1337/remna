@@ -80,6 +80,7 @@ from shared.services.billing_v2.detail_service import (
     usage_package_breakdown,
 )
 from shared.broadcast_md2_convert import draft_to_markdown_v2
+from shared.md2 import esc as md_esc
 from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
@@ -7448,13 +7449,13 @@ async def admin_promos_new_post(
             get_settings(),
             title="🎁 Промокод создан (web-admin)",
             lines=[
-                f"Код: {promo.code}",
-                f"Тип: {promo.type}",
-                f"Награда: {_promo_reward_caption(promo)}",
-                f"Срок (до): {_fmt_expires(promo.expires_at)}",
-                f"Лимит: {'∞' if promo.max_uses is None else promo.max_uses}",
-                f"Активен: {'да' if promo.is_active else 'нет'}",
-                f"Кто: {actor_label}",
+                f"Код: {md_esc(promo.code)}",
+                f"Тип: {md_esc(promo.type)}",
+                f"Награда: {md_esc(_promo_reward_caption(promo))}",
+                f"Срок (до): {md_esc(_fmt_expires(promo.expires_at))}",
+                f"Лимит: {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
+                f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
+                f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_create_web",
             topic=AdminLogTopic.PROMO,
@@ -7605,13 +7606,13 @@ async def admin_promos_edit_post(
             get_settings(),
             title="✏️ Промокод изменён (web-admin)",
             lines=[
-                f"Код: {promo.code}",
-                f"Тип: {before_type} → {promo.type}",
-                f"Награда: {before_value} → {promo.value}",
-                f"Срок: {_fmt_expires(before_expires_at)} → {_fmt_expires(promo.expires_at)}",
-                f"Лимит: {'∞' if before_max_uses is None else before_max_uses} → {'∞' if promo.max_uses is None else promo.max_uses}",
-                f"Активен: {'да' if before_is_active else 'нет'} → {'да' if promo.is_active else 'нет'}",
-                f"Кто: {actor_label}",
+                f"Код: {md_esc(promo.code)}",
+                f"Тип: {md_esc(before_type)} → {md_esc(promo.type)}",
+                f"Награда: {md_esc(before_value)} → {md_esc(promo.value)}",
+                f"Срок: {md_esc(_fmt_expires(before_expires_at))} → {md_esc(_fmt_expires(promo.expires_at))}",
+                f"Лимит: {md_esc('∞' if before_max_uses is None else before_max_uses)} → {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
+                f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
+                f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_edit_web",
             topic=AdminLogTopic.PROMO,
@@ -7638,8 +7639,8 @@ async def admin_promos_delete(request: Request, promo_id: int):
                 get_settings(),
                 title="🗑 Промокод удалён (web-admin)",
                 lines=[
-                    f"Код: {deleted_code}",
-                    f"Кто: {actor_label}",
+                    f"Код: {md_esc(deleted_code)}",
+                    f"Кто: {md_esc(actor_label)}",
                 ],
                 event_type="promo_delete_web",
                 topic=AdminLogTopic.PROMO,
