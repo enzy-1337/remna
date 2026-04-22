@@ -100,7 +100,7 @@ def _referrals_main_body(
         )
 
     # Делаем список условий цитатой: каждая строка начинается с `> `.
-    cond_block = "\n".join("> " + l for l in cond_lines)
+    cond_block = "\n".join("> " + txt for txt in cond_lines)
     return join_lines(
         "👥 " + bold("Рефералы"),
         "",

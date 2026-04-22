@@ -285,7 +285,7 @@ async def _render_admin_subs_screen(
     ar_label = {"all": "любой", "on": "вкл", "off": "выкл"}.get(ar, "любой")
     lines: list[str] = [
         "⏱ " + bold("Подписки"),
-        plain(f"Фильтр: ") + bold(scope_label) + plain(" · авто: ") + bold(ar_label),
+        plain("Фильтр: ") + bold(scope_label) + plain(" · авто: ") + bold(ar_label),
         plain(f"Стр. {int(page) + 1} · записей: ") + bold(str(total)),
         "",
         plain("Сортировка: ближайшее окончание сверху."),

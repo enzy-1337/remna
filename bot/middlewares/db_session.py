@@ -7,7 +7,6 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.database import get_session_factory
 

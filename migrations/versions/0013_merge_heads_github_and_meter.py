@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from alembic import op
 
 revision = "0013_merge_heads_github_and_meter"
 down_revision = ("0012_billing_traffic_meter", "0012_user_github_link")

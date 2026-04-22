@@ -31,7 +31,7 @@ import redis.asyncio as redis_async
 import segno
 from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import and_, desc, distinct, extract, exists, func, or_, select, text
+from sqlalchemy import and_, desc, distinct, exists, func, or_, select, text
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -87,7 +87,6 @@ from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.admin_notify import notify_admin
-from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,

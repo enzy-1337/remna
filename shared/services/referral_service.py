@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.md2 import bold, code, join_lines, plain
+from shared.md2 import bold, join_lines, plain
 from shared.models.referral_reward import ReferralReward
 from shared.models.transaction import Transaction
 from shared.models.user import User

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aiogram.types import User as TgUser
 
-from shared.md2 import bold, code, join_lines, plain, quote_block
+from shared.md2 import bold, code, join_lines, plain
 from shared.models.user import User
 
 

@@ -8,7 +8,6 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, User as TgUser
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
@@ -18,7 +17,6 @@ from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveError
-from shared.models.plan import Plan
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin

@@ -21,7 +21,7 @@ from bot.utils.screen_photo import (
     send_profile_screen,
 )
 from shared.config import get_settings
-from shared.md2 import bold, code, esc, join_lines, plain
+from shared.md2 import bold, code, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
