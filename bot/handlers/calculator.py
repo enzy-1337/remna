@@ -133,24 +133,6 @@ def _append_no_plans_note(cap: str, plans: list[Plan]) -> str:
     return cap + "\n\n" + plain("Активных платных тарифов в базе пока нет — сравнение недоступно.")
 
 
-@router.callback_query(F.data == "menu:calc")
-async def cb_calc_deprecated_user(cq: CallbackQuery) -> None:
-    await safe_callback_answer(
-        cq,
-        "Калькулятор перенесён в админ-панель бота → раздел «Аналитика».",
-        show_alert=True,
-    )
-
-
-@router.callback_query(F.data.startswith("calc:"))
-async def cb_calc_deprecated_old_prefix(cq: CallbackQuery) -> None:
-    await safe_callback_answer(
-        cq,
-        "Этот экран устарел. Откройте админ-панель → «Аналитика» → «Калькулятор PAYG».",
-        show_alert=True,
-    )
-
-
 @router.callback_query(F.data.in_((ADMIN_ENTRY, _MENU)))
 async def cb_calc_menu_admin(
     cq: CallbackQuery,
