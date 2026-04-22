@@ -98,18 +98,10 @@ def _subscription_page(
     expires_at: datetime | None,
     created_at: datetime | None,
     balance_rub: Decimal | int | float | None,
-    min_topup_rub: Decimal,
     topup_enabled: bool,
-    error_message: str | None = None,
 ) -> HTMLResponse:
-    form_action = f"/sub/{_esc(token)}/topup"
+    topup_href = f"/sub/{_esc(token)}/topup"
     topup_disabled = " opacity-60 pointer-events-none" if not topup_enabled else ""
-    submit_disabled = " disabled" if not topup_enabled else ""
-    error_html = (
-        f'<div class="error-box">{_esc(error_message or "")}</div>'
-        if error_message
-        else ""
-    )
     active_badge = "Активна"
     hint_html = f'<div class="subid">{_esc(headline_hint or "")}</div>' if headline_hint else ""
     page = f"""<!DOCTYPE html>
@@ -217,38 +209,6 @@ def _subscription_page(
       gap: 10px;
       margin-top: 14px;
     }}
-    .amounts {{
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-      margin-top: 10px;
-    }}
-    .amount-chip {{
-      appearance: none;
-      border: 1px solid var(--line);
-      background: #0c1730;
-      color: #d9e5ff;
-      border-radius: 10px;
-      padding: 10px 6px;
-      text-align: center;
-      font-size: 16px;
-      cursor: pointer;
-    }}
-    .amount-chip.active {{
-      border-color: #4e8bff;
-      background: #10244d;
-      color: #fff;
-    }}
-    .field {{
-      width: 100%;
-      border: 1px solid var(--line);
-      background: #0c1730;
-      color: #fff;
-      border-radius: 10px;
-      padding: 12px;
-      font-size: 18px;
-      margin-top: 10px;
-    }}
     .btn {{
       display: flex;
       justify-content: center;
@@ -268,15 +228,6 @@ def _subscription_page(
     .btn-outline {{
       background: transparent;
       color: #d8e3fa;
-    }}
-    .error-box {{
-      margin-bottom: 10px;
-      border: 1px solid rgba(239,68,68,.45);
-      background: rgba(239,68,68,.12);
-      color: #ffc5c5;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 14px;
     }}
   </style>
 </head>
@@ -299,9 +250,96 @@ def _subscription_page(
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
     <section class="actions" id="actions">
+      <a class="btn btn-primary{topup_disabled}" href="{topup_href}">Пополнить баланс</a>
+    </section>
+  </main>
+</body>
+</html>"""
+    return HTMLResponse(page)
+
+
+def _topup_page(
+    *,
+    token: str,
+    balance_rub: Decimal | int | float | None,
+    min_topup_rub: Decimal,
+    error_message: str | None = None,
+) -> HTMLResponse:
+    form_action = f"/sub/{_esc(token)}/topup"
+    error_html = (
+        f'<div class="error-box">{_esc(error_message or "")}</div>'
+        if error_message
+        else ""
+    )
+    page = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flux Network — пополнение</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #060a1b;
+      --card: #0b1328;
+      --line: rgba(148, 163, 184, 0.15);
+      --text: #e8edf6;
+      --muted: #95a3bf;
+      --blue: #2b78ff;
+      --blue2: #1f68e8;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+    .wrap {{ max-width: 430px; margin: 0 auto; padding: 20px 14px 24px; }}
+    .brand {{ font-size: 30px; font-weight: 700; margin: 4px 0 14px; }}
+    .brand span {{ color: #f4cc44; margin-right: 6px; }}
+    .card {{
+      background: linear-gradient(180deg, var(--card), #091021);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }}
+    .title {{ color: var(--muted); font-size: 14px; letter-spacing: 0.9px; text-transform: uppercase; margin-bottom: 8px; }}
+    .balance {{ font-size: 34px; font-weight: 700; }}
+    .amounts {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }}
+    .amount-chip {{
+      appearance: none; border: 1px solid var(--line); background: #0c1730; color: #d9e5ff;
+      border-radius: 10px; padding: 10px 6px; text-align: center; font-size: 16px; cursor: pointer;
+    }}
+    .amount-chip.active {{ border-color: #4e8bff; background: #10244d; color: #fff; }}
+    .field {{
+      width: 100%; border: 1px solid var(--line); background: #0c1730; color: #fff;
+      border-radius: 10px; padding: 12px; font-size: 18px; margin-top: 10px;
+    }}
+    .btn {{
+      display: flex; justify-content: center; align-items: center; min-height: 52px; border-radius: 12px;
+      text-decoration: none; font-size: 22px; font-weight: 600; border: 0; width: 100%; margin-top: 10px;
+      background: linear-gradient(180deg, var(--blue), var(--blue2)); color: #fff; cursor: pointer;
+    }}
+    .error-box {{
+      margin-bottom: 10px; border: 1px solid rgba(239,68,68,.45); background: rgba(239,68,68,.12);
+      color: #ffc5c5; border-radius: 10px; padding: 10px 12px; font-size: 14px;
+    }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="brand"><span>⚡</span>Flux Network</h1>
+    <section class="card">
+      <div class="title">Текущий баланс</div>
+      <div class="balance">{_esc(_format_rub(balance_rub))}</div>
+    </section>
+    <section class="card">
       {error_html}
       <form method="post" action="{form_action}">
-        <div class="title">Действия</div>
+        <div class="title">Выберите сумму</div>
         <input type="hidden" name="preset_amount" id="preset_amount" value="100">
         <div class="amounts">
           <button type="button" class="amount-chip active" data-amount="100">100 ₽</button>
@@ -309,7 +347,7 @@ def _subscription_page(
           <button type="button" class="amount-chip" data-amount="500">500 ₽</button>
         </div>
         <input class="field" type="number" min="{_esc(str(min_topup_rub))}" step="1" name="custom_amount" placeholder="Или введите сумму вручную">
-        <button type="submit" class="btn btn-primary{topup_disabled}{submit_disabled}" style="margin-top:10px;">Оплатить</button>
+        <button type="submit" class="btn">Оплатить</button>
       </form>
     </section>
   </main>
@@ -569,8 +607,23 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         expires_at=expires_at,
         created_at=created_at,
         balance_rub=db_user.balance if db_user is not None else Decimal("0"),
-        min_topup_rub=settings.billing_min_topup_rub,
         topup_enabled=topup_enabled,
+    )
+
+
+@router.get("/sub/{subscription_key}/topup")
+async def public_subscription_topup_page(subscription_key: str) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>")
+    settings = get_settings()
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None:
+        return render_not_found_page(f"/sub/{token}")
+    return _topup_page(
+        token=token,
+        balance_rub=db_user.balance if db_user is not None else Decimal("0"),
+        min_topup_rub=settings.billing_min_topup_rub,
     )
 
 
@@ -588,30 +641,20 @@ async def public_subscription_topup(
     if panel_user is None:
         return render_not_found_page(f"/sub/{token}")
     if db_user is None:
-        return _subscription_page(
+        return _topup_page(
             token=token,
-            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
-            headline_hint=None,
-            expires_at=sub.expires_at if sub else None,
-            created_at=sub.created_at if sub else None,
             balance_rub=Decimal("0"),
             min_topup_rub=settings.billing_min_topup_rub,
-            topup_enabled=False,
             error_message="Не удалось связать подписку с пользователем в БД.",
         )
     platega_ready = settings.platega_stub or bool(
         (settings.platega_merchant_id or "").strip() and (settings.platega_secret_key or "").strip()
     )
     if not platega_ready:
-        return _subscription_page(
+        return _topup_page(
             token=token,
-            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
-            headline_hint=None,
-            expires_at=sub.expires_at if sub else None,
-            created_at=sub.created_at if sub else None,
             balance_rub=db_user.balance,
             min_topup_rub=settings.billing_min_topup_rub,
-            topup_enabled=False,
             error_message="Platega не настроена на сервере.",
         )
 
@@ -621,15 +664,10 @@ async def public_subscription_topup(
     except Exception:
         amount = Decimal("0")
     if amount < settings.billing_min_topup_rub:
-        return _subscription_page(
+        return _topup_page(
             token=token,
-            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
-            headline_hint=None,
-            expires_at=sub.expires_at if sub else None,
-            created_at=sub.created_at if sub else None,
             balance_rub=db_user.balance,
             min_topup_rub=settings.billing_min_topup_rub,
-            topup_enabled=True,
             error_message=f"Минимальная сумма пополнения: {settings.billing_min_topup_rub} ₽",
         )
 
@@ -650,15 +688,10 @@ async def public_subscription_topup(
             await session.commit()
     except Exception as exc:
         logger.exception("public-sub: create topup failed token=%s", token)
-        return _subscription_page(
+        return _topup_page(
             token=token,
-            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
-            headline_hint=None,
-            expires_at=sub.expires_at if sub else None,
-            created_at=sub.created_at if sub else None,
             balance_rub=db_user.balance,
             min_topup_rub=settings.billing_min_topup_rub,
-            topup_enabled=True,
             error_message=f"Не удалось создать платеж: {str(exc)[:160]}",
         )
     return RedirectResponse(url=pay_url, status_code=status.HTTP_303_SEE_OTHER)
