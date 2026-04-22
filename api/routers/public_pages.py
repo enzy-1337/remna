@@ -347,6 +347,24 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
             if str(item.get("uuid") or "").strip() == token:
                 panel_user = item
                 break
+        # Медленный fallback: скан всей панели с более мягким таймаутом.
+        # Нужен, когда искомый пользователь не попал в первые N записей.
+        if panel_user is None:
+            users_all = await asyncio.wait_for(
+                rw.list_all_users(page_size=500, max_items=50000, max_pages=400),
+                timeout=25.0,
+            )
+            for item in users_all:
+                url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
+                if url_token and url_token == token:
+                    panel_user = item
+                    break
+                if str(item.get("shortUuid") or "").strip() == token:
+                    panel_user = item
+                    break
+                if str(item.get("uuid") or "").strip() == token:
+                    panel_user = item
+                    break
         # Для UUID-ключа пробуем точечный запрос к панели.
         if panel_user is None:
             try:
