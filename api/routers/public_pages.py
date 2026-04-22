@@ -336,11 +336,13 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     logger.info("public-sub: request token=%s", token)
     settings = get_settings()
     rw = RemnaWaveClient(settings)
+    fast_timeout = max(12.0, float(settings.remnawave_request_timeout) + 3.0)
+    deep_timeout = max(40.0, fast_timeout * 3.0)
     panel_user: dict | None = None
     try:
         # Быстрый путь: берем ограниченный список пользователей панели.
         # Полный list_all_users на больших инсталляциях может упираться в timeout nginx (504).
-        users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=8.0)
+        users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=fast_timeout)
         logger.info("public-sub: fast scan users=%s token=%s", len(users), token)
         for item in users:
             url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
@@ -358,7 +360,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         if panel_user is None:
             users_all = await asyncio.wait_for(
                 rw.list_all_users(page_size=500, max_items=50000, max_pages=400),
-                timeout=25.0,
+                timeout=deep_timeout,
             )
             logger.info("public-sub: deep scan users=%s token=%s", len(users_all), token)
             for item in users_all:
