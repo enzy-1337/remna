@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -21,6 +22,7 @@ from shared.models.user import User
 from shared.services.subscription_service import get_active_subscription
 
 router = APIRouter(tags=["public-pages"])
+logger = logging.getLogger(__name__)
 
 
 def _esc(s: str) -> str:
@@ -287,13 +289,15 @@ def render_public_stub_page() -> HTMLResponse:
 
 def render_not_found_page(path: str) -> HTMLResponse:
     shown = path if path.startswith("/") else f"/{path}"
-    return _page(
+    page = _page(
         "Страница не найдена",
         f"Адрес {shown} не существует или был перемещен. Проверьте путь и попробуйте снова.",
         variant="error",
         badge="404",
         footer="По этому адресу ничего нет.",
     )
+    page.status_code = 404
+    return page
 
 
 @router.get("/")
@@ -329,6 +333,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     token = (subscription_key or "").strip()
     if not token:
         return render_not_found_page("/sub/<empty>")
+    logger.info("public-sub: request token=%s", token)
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_user: dict | None = None
@@ -336,6 +341,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         # Быстрый путь: берем ограниченный список пользователей панели.
         # Полный list_all_users на больших инсталляциях может упираться в timeout nginx (504).
         users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=8.0)
+        logger.info("public-sub: fast scan users=%s token=%s", len(users), token)
         for item in users:
             url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
             if url_token and url_token == token:
@@ -354,6 +360,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
                 rw.list_all_users(page_size=500, max_items=50000, max_pages=400),
                 timeout=25.0,
             )
+            logger.info("public-sub: deep scan users=%s token=%s", len(users_all), token)
             for item in users_all:
                 url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
                 if url_token and url_token == token:
@@ -372,14 +379,18 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
                 one = await asyncio.wait_for(rw.get_user(token), timeout=4.0)
                 if isinstance(one, dict) and one:
                     panel_user = one
+                    logger.info("public-sub: direct get_user hit token=%s", token)
             except Exception:
                 pass
     except RemnaWaveError:
+        logger.exception("public-sub: remnawave error token=%s", token)
         panel_user = None
     except asyncio.TimeoutError:
+        logger.warning("public-sub: timeout token=%s", token)
         panel_user = None
 
     if panel_user is None:
+        logger.info("public-sub: not found token=%s", token)
         return render_not_found_page(f"/sub/{token}")
 
     db_user: User | None = None
