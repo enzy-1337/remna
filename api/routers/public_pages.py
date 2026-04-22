@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import uuid
 from datetime import datetime, timezone
@@ -323,6 +324,7 @@ async def payment_fail() -> HTMLResponse:
 
 
 @router.get("/sub/{subscription_key}")
+@router.head("/sub/{subscription_key}")
 async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     token = (subscription_key or "").strip()
     if not token:
@@ -331,7 +333,9 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     rw = RemnaWaveClient(settings)
     panel_user: dict | None = None
     try:
-        users = await rw.list_all_users(page_size=200, max_items=15000)
+        # Быстрый путь: берем ограниченный список пользователей панели.
+        # Полный list_all_users на больших инсталляциях может упираться в timeout nginx (504).
+        users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=8.0)
         for item in users:
             url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
             if url_token and url_token == token:
@@ -343,7 +347,18 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
             if str(item.get("uuid") or "").strip() == token:
                 panel_user = item
                 break
+        # Для UUID-ключа пробуем точечный запрос к панели.
+        if panel_user is None:
+            try:
+                uuid.UUID(token)
+                one = await asyncio.wait_for(rw.get_user(token), timeout=4.0)
+                if isinstance(one, dict) and one:
+                    panel_user = one
+            except Exception:
+                pass
     except RemnaWaveError:
+        panel_user = None
+    except asyncio.TimeoutError:
         panel_user = None
 
     if panel_user is None:
