@@ -11,7 +11,7 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Form, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from shared.config import get_settings
@@ -579,7 +579,7 @@ async def public_subscription_topup(
     subscription_key: str,
     preset_amount: str = Form("100"),
     custom_amount: str = Form(""),
-) -> HTMLResponse | RedirectResponse:
+) -> Response:
     token = (subscription_key or "").strip()
     if not token:
         return render_not_found_page("/sub/<empty>")

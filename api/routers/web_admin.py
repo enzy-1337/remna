@@ -3736,11 +3736,11 @@ async def admin_status(request: Request) -> HTMLResponse:
       </div>
     </div>
     <div id="status-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Панель Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-бот</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Бот тикетов</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>База данных</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-bolt text-primary mr-2" aria-hidden="true"></i>Redis</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-panel" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Панель Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-бот</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-tickets_bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Бот тикетов</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-db" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>База данных</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-redis" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-bolt text-primary mr-2" aria-hidden="true"></i>Redis</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
     </div>
     <div id="status-nodes" class="mt-4"></div>
     <script>
@@ -3753,28 +3753,55 @@ async def admin_status(request: Request) -> HTMLResponse:
         var lat=it.latency?('<p class="text-xs opacity-60 mt-1">'+esc(it.latency)+'</p>'):'';
         return '<div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="'+esc(it.icon)+' text-primary mr-2" aria-hidden="true"></i>'+esc(it.title)+'</h3><span class="badge '+badge+' badge-sm">'+st+'</span></div><p class="text-sm opacity-90 break-words">'+esc(it.detail)+'</p>'+lat+'</div></div>';
       }
-      let loading=false;
-      async function load(){
-        if(loading) return;
-        loading=true;
+      function timeoutNodesHtml(){
+        return '<div class="card bg-base-100 border border-error/40 shadow-lg"><div class="card-body"><h3 class="card-title text-lg text-error"><i class="fa-solid fa-server text-error mr-2" aria-hidden="true"></i>Ноды Remnawave</h3><div class="overflow-x-auto rounded-lg border border-error/30"><table class="table table-sm"><thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead><tbody><tr class="bg-error/10"><td>—</td><td><span class="badge badge-error badge-sm">TIMEOUT</span></td><td>—</td><td>Проверка узлов не успела завершиться</td></tr></tbody></table></div></div></div>';
+      }
+      function fetchTimeout(url, ms){
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort('timeout'), ms);
+        return fetch(url,{credentials:'same-origin', signal: ctrl.signal})
+          .finally(()=>clearTimeout(t));
+      }
+      async function loadOneService(key){
+        const el = document.getElementById('status-card-'+key);
+        if(!el) return;
         try{
-          const r=await fetch('/admin/status/data',{credentials:'same-origin'});
-          const j=await r.json();
-          const machine=document.getElementById('status-machine');
-          const grid=document.getElementById('status-grid');
-          const nodes=document.getElementById('status-nodes');
-          if(!r.ok||!j||!Array.isArray(j.services)){throw new Error((j&&j.error)||('HTTP '+r.status));}
-          machine.innerHTML=j.machine_html||'';
-          grid.innerHTML=j.services.map(card).join('');
-          nodes.innerHTML=j.nodes_html||'';
+          const r = await fetchTimeout('/admin/status/service/'+key, 15000);
+          const j = await r.json();
+          if(!r.ok || !j || !j.service){ throw new Error((j&&j.error)||('HTTP '+r.status)); }
+          el.outerHTML = card(j.service);
         }catch(e){
-          const machine=document.getElementById('status-machine');
-          const grid=document.getElementById('status-grid');
-          if(machine) machine.innerHTML='';
-          grid.innerHTML='<div class="alert alert-error"><span>Не удалось загрузить статусы: '+esc(e&&e.message?e.message:e)+'</span></div>';
-        }finally{
-          loading=false;
+          el.outerHTML = card({title:key, icon:'fa-solid fa-triangle-exclamation', ok:false, detail:'timeout', latency:null});
         }
+      }
+      async function loadMachine(){
+        const machine=document.getElementById('status-machine');
+        if(!machine) return;
+        try{
+          const r = await fetchTimeout('/admin/status/machine', 15000);
+          const j = await r.json();
+          if(!r.ok || !j){ throw new Error((j&&j.error)||('HTTP '+r.status)); }
+          machine.innerHTML = j.machine_html || '';
+        }catch(_e){
+          machine.innerHTML = '<div class="alert alert-error"><span>Отчет о машине: timeout</span></div>';
+        }
+      }
+      async function loadNodes(){
+        const nodes=document.getElementById('status-nodes');
+        if(!nodes) return;
+        try{
+          const r = await fetchTimeout('/admin/status/nodes', 20000);
+          const j = await r.json();
+          if(!r.ok || !j){ throw new Error((j&&j.error)||('HTTP '+r.status)); }
+          nodes.innerHTML = j.nodes_html || timeoutNodesHtml();
+        }catch(_e){
+          nodes.innerHTML = timeoutNodesHtml();
+        }
+      }
+      function load(){
+        loadMachine();
+        ['panel','bot','tickets_bot','db','redis'].forEach(loadOneService);
+        loadNodes();
       }
       load();
       setInterval(load, 10000);
@@ -3782,6 +3809,179 @@ async def admin_status(request: Request) -> HTMLResponse:
     </script>
     """
     return _layout("Статус сервисов", placeholder, request=request)
+
+
+@router.get("/status/service/{service_key}")
+async def admin_status_service(request: Request, service_key: str) -> JSONResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    settings = get_settings()
+    key = (service_key or "").strip().lower()
+    if key == "panel":
+        rw = RemnaWaveClient(settings)
+        try:
+            ok, msg, ms = await rw.ping_api()
+            lat = f"Задержка API: {ms} мс" if ms is not None else None
+            return JSONResponse({"service": {"title": "Панель Remnawave (API)", "icon": "fa-solid fa-server", "ok": ok, "detail": msg, "latency": lat}})
+        except Exception:
+            return JSONResponse({"service": {"title": "Панель Remnawave (API)", "icon": "fa-solid fa-server", "ok": False, "detail": "timeout", "latency": None}})
+    if key in ("bot", "tickets_bot"):
+        token = settings.bot_token if key == "bot" else tickets_config.bot_token
+        title = "Telegram-бот" if key == "bot" else "Бот тикетов"
+        icon = "fa-brands fa-telegram" if key == "bot" else "fa-solid fa-headset"
+        missing = "BOT_TOKEN не задан в окружении" if key == "bot" else "TICKETS_BOT_TOKEN не задан в окружении"
+        fallback = "бот отвечает (getMe OK)" if key == "bot" else "бот тикетов отвечает (getMe OK)"
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as tg_client:
+                ok, msg, lat = await _telegram_bot_getme_status(
+                    tg_client,
+                    token=token,
+                    missing_token_msg=missing,
+                    ok_fallback_msg=fallback,
+                )
+            return JSONResponse({"service": {"title": title, "icon": icon, "ok": ok, "detail": msg, "latency": lat}})
+        except Exception:
+            return JSONResponse({"service": {"title": title, "icon": icon, "ok": False, "detail": "timeout", "latency": None}})
+    if key == "db":
+        t0 = time.perf_counter()
+        try:
+            async with await _session() as session:
+                await session.execute(text("SELECT 1"))
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            return JSONResponse({"service": {"title": "База данных", "icon": "fa-solid fa-database", "ok": True, "detail": "PostgreSQL отвечает", "latency": f"Задержка: {ms} мс"}})
+        except Exception as e:
+            return JSONResponse({"service": {"title": "База данных", "icon": "fa-solid fa-database", "ok": False, "detail": str(e)[:240], "latency": None}})
+    if key == "redis":
+        try:
+            rcli = redis_async.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+            try:
+                t0 = time.perf_counter()
+                await rcli.ping()
+                ms = round((time.perf_counter() - t0) * 1000, 1)
+                return JSONResponse({"service": {"title": "Redis", "icon": "fa-solid fa-bolt", "ok": True, "detail": "PONG", "latency": f"Задержка: {ms} мс"}})
+            finally:
+                await rcli.aclose()
+        except Exception as e:
+            return JSONResponse({"service": {"title": "Redis", "icon": "fa-solid fa-bolt", "ok": False, "detail": str(e)[:240], "latency": None}})
+    return JSONResponse({"error": "unknown service"}, status_code=404)
+
+
+@router.get("/status/machine")
+async def admin_status_machine(request: Request) -> JSONResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    machine = _read_machine_metrics()
+    ip_diag = await _detect_server_ips(request)
+    host_ok = bool(machine.get("ok"))
+    ip_ok = bool(ip_diag.get("ok"))
+    host_ram = str(machine.get("ram_text") or "RAM: недоступно")
+    host_cpu = str(machine.get("cpu_text") or "CPU: недоступно")
+    ram_pct = float(machine.get("ram_pct") or 0.0)
+    cpu_pct = float(machine.get("cpu_pct") or 0.0)
+    ip_detail = str(ip_diag.get("detail") or "IP: недоступно")
+    ip_lat = ip_diag.get("latency")
+    machine_ok = host_ok and ip_ok
+    machine_badge = "badge-success" if machine_ok else "badge-warning"
+    machine_state = "Норма" if machine_ok else "Частично"
+    machine_html = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
+          <span class="badge {machine_badge} badge-sm">{machine_state}</span>
+        </div>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
+                 style="background: conic-gradient(color-mix(in oklab, var(--p) 78%, transparent) 0 {ram_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {ram_pct}% 100%);">
+              <span class="text-[11px] font-semibold">{ram_pct:.0f}%</span>
+            </div>
+            <p class="text-xs opacity-60 uppercase tracking-wide">RAM</p>
+            <p class="text-sm font-medium break-words">{_esc(host_ram)}</p>
+          </div>
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <div class="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-base-content/10"
+                 style="background: conic-gradient(color-mix(in oklab, var(--info) 74%, transparent) 0 {cpu_pct}%, color-mix(in oklab, var(--bc) 10%, transparent) {cpu_pct}% 100%);">
+              <span class="text-[11px] font-semibold">{cpu_pct:.0f}%</span>
+            </div>
+            <p class="text-xs opacity-60 uppercase tracking-wide">CPU</p>
+            <p class="text-sm font-medium break-words">{_esc(host_cpu)}</p>
+          </div>
+          <div class="rounded-lg border border-base-content/10 bg-base-200/25 p-3">
+            <p class="text-xs opacity-60 uppercase tracking-wide">IP</p>
+            <p class="text-sm font-medium break-words">{_esc(ip_detail)}</p>
+            {"<p class='text-xs opacity-60 mt-1'>" + _esc(ip_lat) + "</p>" if ip_lat else ""}
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+    return JSONResponse({"machine_html": machine_html})
+
+
+@router.get("/status/nodes")
+async def admin_status_nodes(request: Request) -> JSONResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    settings = get_settings()
+    rw = RemnaWaveClient(settings)
+    try:
+        rows, catalog_ms, list_err = await rw.list_nodes_with_latency(ping_each=True)
+    except Exception:
+        rows, catalog_ms, list_err = [], None, "timeout"
+    if not rows:
+        nodes_html = f"""
+        <div class="card bg-base-100 border border-error/40 shadow-lg">
+          <div class="card-body">
+            <h3 class="card-title text-lg text-error"><i class="fa-solid fa-server text-error mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
+            <div class="overflow-x-auto rounded-lg border border-error/30">
+              <table class="table table-sm">
+                <thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead>
+                <tbody><tr class="bg-error/10"><td>—</td><td><span class="badge badge-error badge-sm">TIMEOUT</span></td><td>—</td><td>{_esc(str(list_err or "timeout"))}</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        """
+        return JSONResponse({"nodes_html": nodes_html})
+    body_rows: list[str] = []
+    for n in rows:
+        st = str(n.get("status") or "UNKNOWN").upper()
+        pms = n.get("ping_ms")
+        timeout_node = pms is None
+        row_cls = "bg-error/10" if timeout_node else ""
+        badge = "badge-error" if timeout_node else ("badge-success" if st in {"ACTIVE", "ONLINE"} else "badge-warning")
+        ping_text = "timeout" if timeout_node else f"{pms} мс"
+        note = str(n.get("ping_note") or ("timeout" if timeout_node else "ok"))
+        body_rows.append(
+            "<tr class='" + row_cls + "'>"
+            + f"<td>{_esc(str(n.get('name') or '—'))}</td>"
+            + f"<td><span class='badge {badge} badge-sm'>{_esc(st if not timeout_node else 'TIMEOUT')}</span></td>"
+            + f"<td>{_esc(ping_text)}</td>"
+            + f"<td>{_esc(note[:160])}</td>"
+            + "</tr>"
+        )
+    subtitle = f"Каталог нод: {catalog_ms} мс" if catalog_ms is not None else "Каталог нод: —"
+    nodes_html = f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="card-title text-lg"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
+          <span class="text-xs opacity-60">{_esc(subtitle)}</span>
+        </div>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10">
+          <table class="table table-sm">
+            <thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead>
+            <tbody>{''.join(body_rows)}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    """
+    return JSONResponse({"nodes_html": nodes_html})
 
 
 @router.get("/status/data")
