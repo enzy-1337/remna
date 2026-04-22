@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
 from shared.config import get_settings
@@ -19,6 +19,9 @@ from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.services.billing_v2.balance_runway_service import compute_balance_runway
+from shared.services.billing_v2.detail_service import user_has_tariff_subscription_charges
+from shared.services.topup_service import create_topup_payment
 from shared.services.subscription_service import get_active_subscription
 
 router = APIRouter(tags=["public-pages"])
@@ -79,19 +82,36 @@ def _balance_status(balance: Decimal | int | float | None) -> tuple[str, str]:
     return "EMPTY", "Низкий"
 
 
+def _format_rub(balance: Decimal | int | float | None) -> str:
+    try:
+        b = Decimal(str(balance or "0")).quantize(Decimal("0.01"))
+    except Exception:
+        b = Decimal("0.00")
+    return f"{b} ₽"
+
+
 def _subscription_page(
     *,
-    days_left: int,
+    token: str,
+    headline_value: str,
+    headline_hint: str | None,
     expires_at: datetime | None,
     created_at: datetime | None,
-    panel_status: str,
-    balance_status_panel: str,
-    balance_status_human: str,
-    topup_url: str | None,
+    balance_rub: Decimal | int | float | None,
+    min_topup_rub: Decimal,
+    topup_enabled: bool,
+    error_message: str | None = None,
 ) -> HTMLResponse:
-    topup_href = _esc(topup_url or "#")
-    topup_disabled = " opacity-60 pointer-events-none" if not topup_url else ""
-    active_badge = "Активна" if days_left > 0 else "Неактивна"
+    form_action = f"/sub/{_esc(token)}/topup"
+    topup_disabled = " opacity-60 pointer-events-none" if not topup_enabled else ""
+    submit_disabled = " disabled" if not topup_enabled else ""
+    error_html = (
+        f'<div class="error-box">{_esc(error_message or "")}</div>'
+        if error_message
+        else ""
+    )
+    active_badge = "Активна"
+    hint_html = f'<div class="subid">{_esc(headline_hint or "")}</div>' if headline_hint else ""
     page = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -162,6 +182,25 @@ def _subscription_page(
       text-transform: uppercase;
       margin-bottom: 8px;
     }}
+    .tabs {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-bottom: 1px solid var(--line);
+      margin: 2px 0 12px;
+    }}
+    .tab {{
+      text-align: center;
+      color: #9bb0d7;
+      text-decoration: none;
+      font-size: 20px;
+      padding: 10px 4px 12px;
+      border-bottom: 2px solid transparent;
+    }}
+    .tab.active {{
+      color: #d9e7ff;
+      border-bottom-color: #4e8bff;
+      font-weight: 600;
+    }}
     .row {{
       display: flex;
       justify-content: space-between;
@@ -177,6 +216,38 @@ def _subscription_page(
       display: grid;
       gap: 10px;
       margin-top: 14px;
+    }}
+    .amounts {{
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }}
+    .amount-chip {{
+      appearance: none;
+      border: 1px solid var(--line);
+      background: #0c1730;
+      color: #d9e5ff;
+      border-radius: 10px;
+      padding: 10px 6px;
+      text-align: center;
+      font-size: 16px;
+      cursor: pointer;
+    }}
+    .amount-chip.active {{
+      border-color: #4e8bff;
+      background: #10244d;
+      color: #fff;
+    }}
+    .field {{
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #0c1730;
+      color: #fff;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 18px;
+      margin-top: 10px;
     }}
     .btn {{
       display: flex;
@@ -198,6 +269,15 @@ def _subscription_page(
       background: transparent;
       color: #d8e3fa;
     }}
+    .error-box {{
+      margin-bottom: 10px;
+      border: 1px solid rgba(239,68,68,.45);
+      background: rgba(239,68,68,.12);
+      color: #ffc5c5;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }}
   </style>
 </head>
 <body>
@@ -205,24 +285,143 @@ def _subscription_page(
     <h1 class="brand"><span>⚡</span>Flux Network</h1>
     <section class="card">
       <div class="badge">{_esc(active_badge)}</div>
-      <div class="days">{_esc(_ru_days_phrase(days_left))}</div>
-      <div class="subid">Подписка #1</div>
+      <div class="days">{_esc(headline_value)}</div>
+      {hint_html}
     </section>
-    <section class="card">
-      <div class="title">Детали подписки</div>
+    <nav class="tabs" aria-label="Разделы">
+      <a class="tab active" href="#actions">Действия</a>
+      <a class="tab" href="#details">Детализация</a>
+    </nav>
+    <section class="card" id="details">
+      <div class="title">Детализация</div>
       <div class="row"><div class="label">Действует до</div><div class="value">{_esc(_fmt_dt(expires_at))}</div></div>
       <div class="row"><div class="label">Создана</div><div class="value">{_esc(_fmt_dt(created_at))}</div></div>
-      <div class="row"><div class="label">Статус баланса</div><div class="value">{_esc(balance_status_human)} ({_esc(balance_status_panel)})</div></div>
-      <div class="row"><div class="label">Статус в панели</div><div class="value">{_esc(panel_status)}</div></div>
+      <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
-    <section class="actions">
-      <a class="btn btn-primary{topup_disabled}" href="{topup_href}">Пополнить баланс</a>
-      <a class="btn btn-outline" href="{topup_href}">Продлить за другого</a>
+    <section class="actions" id="actions">
+      {error_html}
+      <form method="post" action="{form_action}">
+        <div class="title">Действия</div>
+        <input type="hidden" name="preset_amount" id="preset_amount" value="100">
+        <div class="amounts">
+          <button type="button" class="amount-chip active" data-amount="100">100 ₽</button>
+          <button type="button" class="amount-chip" data-amount="300">300 ₽</button>
+          <button type="button" class="amount-chip" data-amount="500">500 ₽</button>
+        </div>
+        <input class="field" type="number" min="{_esc(str(min_topup_rub))}" step="1" name="custom_amount" placeholder="Или введите сумму вручную">
+        <button type="submit" class="btn btn-primary{topup_disabled}{submit_disabled}" style="margin-top:10px;">Оплатить</button>
+      </form>
     </section>
   </main>
+  <script>
+    const chips = document.querySelectorAll('.amount-chip');
+    const preset = document.getElementById('preset_amount');
+    chips.forEach((chip) => {{
+      chip.addEventListener('click', () => {{
+        chips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        preset.value = chip.dataset.amount || '100';
+      }});
+    }});
+  </script>
 </body>
 </html>"""
     return HTMLResponse(page)
+
+
+async def _resolve_subscription_context(subscription_key: str) -> tuple[dict | None, User | None, Subscription | None]:
+    token = (subscription_key or "").strip()
+    if not token:
+        return None, None, None
+    settings = get_settings()
+    rw = RemnaWaveClient(settings)
+    fast_timeout = max(12.0, float(settings.remnawave_request_timeout) + 3.0)
+    deep_timeout = max(40.0, fast_timeout * 3.0)
+    panel_user: dict | None = None
+    try:
+        users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=fast_timeout)
+        logger.info("public-sub: fast scan users=%s token=%s", len(users), token)
+        for item in users:
+            url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
+            if url_token and url_token == token:
+                panel_user = item
+                break
+            if str(item.get("shortUuid") or "").strip() == token:
+                panel_user = item
+                break
+            if str(item.get("uuid") or "").strip() == token:
+                panel_user = item
+                break
+        if panel_user is None:
+            users_all = await asyncio.wait_for(
+                rw.list_all_users(page_size=500, max_items=50000, max_pages=400),
+                timeout=deep_timeout,
+            )
+            logger.info("public-sub: deep scan users=%s token=%s", len(users_all), token)
+            for item in users_all:
+                url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
+                if url_token and url_token == token:
+                    panel_user = item
+                    break
+                if str(item.get("shortUuid") or "").strip() == token:
+                    panel_user = item
+                    break
+                if str(item.get("uuid") or "").strip() == token:
+                    panel_user = item
+                    break
+        if panel_user is None:
+            try:
+                uuid.UUID(token)
+                one = await asyncio.wait_for(rw.get_user(token), timeout=4.0)
+                if isinstance(one, dict) and one:
+                    panel_user = one
+                    logger.info("public-sub: direct get_user hit token=%s", token)
+            except Exception:
+                pass
+    except RemnaWaveError:
+        logger.exception("public-sub: remnawave error token=%s", token)
+        panel_user = None
+    except asyncio.TimeoutError:
+        logger.warning("public-sub: timeout token=%s", token)
+        panel_user = None
+    if panel_user is None:
+        return None, None, None
+
+    db_user: User | None = None
+    sub: Subscription | None = None
+    raw_tg = panel_user.get("telegramId")
+    raw_uuid = str(panel_user.get("uuid") or "").strip()
+    factory = get_session_factory()
+    async with factory() as session:
+        if raw_tg not in (None, ""):
+            try:
+                tg_id = int(str(raw_tg))
+                db_user = (
+                    await session.execute(select(User).where(User.telegram_id == tg_id).limit(1))
+                ).scalar_one_or_none()
+            except Exception:
+                db_user = None
+        if db_user is None and raw_uuid:
+            try:
+                db_user = (
+                    await session.execute(
+                        select(User).where(User.remnawave_uuid == uuid.UUID(raw_uuid)).limit(1)
+                    )
+                ).scalar_one_or_none()
+            except Exception:
+                db_user = None
+        if db_user is not None:
+            sub = await get_active_subscription(session, db_user.id)
+            if sub is None:
+                sub = (
+                    await session.execute(
+                        select(Subscription)
+                        .where(Subscription.user_id == db_user.id)
+                        .order_by(Subscription.expires_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+    return panel_user, db_user, sub
 
 
 def _page(title: str, message: str, *, variant: str, badge: str, footer: str) -> HTMLResponse:
@@ -335,112 +534,131 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         return render_not_found_page("/sub/<empty>")
     logger.info("public-sub: request token=%s", token)
     settings = get_settings()
-    rw = RemnaWaveClient(settings)
-    fast_timeout = max(12.0, float(settings.remnawave_request_timeout) + 3.0)
-    deep_timeout = max(40.0, fast_timeout * 3.0)
-    panel_user: dict | None = None
-    try:
-        # Быстрый путь: берем ограниченный список пользователей панели.
-        # Полный list_all_users на больших инсталляциях может упираться в timeout nginx (504).
-        users = await asyncio.wait_for(rw.list_users(limit=1000), timeout=fast_timeout)
-        logger.info("public-sub: fast scan users=%s token=%s", len(users), token)
-        for item in users:
-            url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
-            if url_token and url_token == token:
-                panel_user = item
-                break
-            if str(item.get("shortUuid") or "").strip() == token:
-                panel_user = item
-                break
-            if str(item.get("uuid") or "").strip() == token:
-                panel_user = item
-                break
-        # Медленный fallback: скан всей панели с более мягким таймаутом.
-        # Нужен, когда искомый пользователь не попал в первые N записей.
-        if panel_user is None:
-            users_all = await asyncio.wait_for(
-                rw.list_all_users(page_size=500, max_items=50000, max_pages=400),
-                timeout=deep_timeout,
-            )
-            logger.info("public-sub: deep scan users=%s token=%s", len(users_all), token)
-            for item in users_all:
-                url_token = _token_from_subscription_url(str(item.get("subscriptionUrl") or ""))
-                if url_token and url_token == token:
-                    panel_user = item
-                    break
-                if str(item.get("shortUuid") or "").strip() == token:
-                    panel_user = item
-                    break
-                if str(item.get("uuid") or "").strip() == token:
-                    panel_user = item
-                    break
-        # Для UUID-ключа пробуем точечный запрос к панели.
-        if panel_user is None:
-            try:
-                uuid.UUID(token)
-                one = await asyncio.wait_for(rw.get_user(token), timeout=4.0)
-                if isinstance(one, dict) and one:
-                    panel_user = one
-                    logger.info("public-sub: direct get_user hit token=%s", token)
-            except Exception:
-                pass
-    except RemnaWaveError:
-        logger.exception("public-sub: remnawave error token=%s", token)
-        panel_user = None
-    except asyncio.TimeoutError:
-        logger.warning("public-sub: timeout token=%s", token)
-        panel_user = None
-
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
     if panel_user is None:
         logger.info("public-sub: not found token=%s", token)
         return render_not_found_page(f"/sub/{token}")
 
-    db_user: User | None = None
-    raw_tg = panel_user.get("telegramId")
-    raw_uuid = str(panel_user.get("uuid") or "").strip()
-    factory = get_session_factory()
-    async with factory() as session:
-        if raw_tg not in (None, ""):
-            try:
-                tg_id = int(str(raw_tg))
-                db_user = (
-                    await session.execute(select(User).where(User.telegram_id == tg_id).limit(1))
-                ).scalar_one_or_none()
-            except Exception:
-                db_user = None
-        if db_user is None and raw_uuid:
-            try:
-                db_user = (
-                    await session.execute(
-                        select(User).where(User.remnawave_uuid == uuid.UUID(raw_uuid)).limit(1)
-                    )
-                ).scalar_one_or_none()
-            except Exception:
-                db_user = None
-        sub: Subscription | None = None
-        if db_user is not None:
-            sub = await get_active_subscription(session, db_user.id)
-            if sub is None:
-                sub = (
-                    await session.execute(
-                        select(Subscription)
-                        .where(Subscription.user_id == db_user.id)
-                        .order_by(Subscription.expires_at.desc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-
     expires_at = sub.expires_at if sub is not None else None
     created_at = sub.created_at if sub is not None else None
-    panel_status = str(panel_user.get("status") or (sub.status if sub else "UNKNOWN")).upper()
-    balance_code, balance_human = _balance_status(db_user.balance if db_user is not None else 0)
-    topup_url = f"https://t.me/{settings.bot_username}?start=topup" if settings.bot_username else None
+    _balance_code, _balance_human = _balance_status(db_user.balance if db_user is not None else 0)
+    headline_value = _ru_days_phrase(_days_left(expires_at))
+    headline_hint: str | None = None
+    if db_user is not None and settings.billing_v2_enabled and db_user.billing_mode == "hybrid":
+        factory = get_session_factory()
+        async with factory() as session:
+            user_fresh = await session.get(User, db_user.id)
+            if user_fresh is not None:
+                has_tariff_charges = await user_has_tariff_subscription_charges(session, user_fresh.id)
+                if not has_tariff_charges:
+                    runway = await compute_balance_runway(session, user=user_fresh, settings=settings)
+                    if runway is not None:
+                        headline_value = f"~{runway.estimated_days_int} дн."
+                        headline_hint = "PAYG: ориентировочно по текущим списаниям"
+                    else:
+                        headline_value = "~н/д"
+                        headline_hint = "PAYG: прогноз появится после накопления статистики"
+    platega_ready = settings.platega_stub or bool(
+        (settings.platega_merchant_id or "").strip() and (settings.platega_secret_key or "").strip()
+    )
+    topup_enabled = db_user is not None and platega_ready
     return _subscription_page(
-        days_left=_days_left(expires_at),
+        token=token,
+        headline_value=headline_value,
+        headline_hint=headline_hint,
         expires_at=expires_at,
         created_at=created_at,
-        panel_status=panel_status,
-        balance_status_panel=balance_code,
-        balance_status_human=balance_human,
-        topup_url=topup_url,
+        balance_rub=db_user.balance if db_user is not None else Decimal("0"),
+        min_topup_rub=settings.billing_min_topup_rub,
+        topup_enabled=topup_enabled,
     )
+
+
+@router.post("/sub/{subscription_key}/topup")
+async def public_subscription_topup(
+    subscription_key: str,
+    preset_amount: str = Form("100"),
+    custom_amount: str = Form(""),
+) -> HTMLResponse | RedirectResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>")
+    settings = get_settings()
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
+    if panel_user is None:
+        return render_not_found_page(f"/sub/{token}")
+    if db_user is None:
+        return _subscription_page(
+            token=token,
+            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
+            headline_hint=None,
+            expires_at=sub.expires_at if sub else None,
+            created_at=sub.created_at if sub else None,
+            balance_rub=Decimal("0"),
+            min_topup_rub=settings.billing_min_topup_rub,
+            topup_enabled=False,
+            error_message="Не удалось связать подписку с пользователем в БД.",
+        )
+    platega_ready = settings.platega_stub or bool(
+        (settings.platega_merchant_id or "").strip() and (settings.platega_secret_key or "").strip()
+    )
+    if not platega_ready:
+        return _subscription_page(
+            token=token,
+            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
+            headline_hint=None,
+            expires_at=sub.expires_at if sub else None,
+            created_at=sub.created_at if sub else None,
+            balance_rub=db_user.balance,
+            min_topup_rub=settings.billing_min_topup_rub,
+            topup_enabled=False,
+            error_message="Platega не настроена на сервере.",
+        )
+
+    amount_raw = (custom_amount or "").strip() or (preset_amount or "").strip()
+    try:
+        amount = Decimal(amount_raw)
+    except Exception:
+        amount = Decimal("0")
+    if amount < settings.billing_min_topup_rub:
+        return _subscription_page(
+            token=token,
+            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
+            headline_hint=None,
+            expires_at=sub.expires_at if sub else None,
+            created_at=sub.created_at if sub else None,
+            balance_rub=db_user.balance,
+            min_topup_rub=settings.billing_min_topup_rub,
+            topup_enabled=True,
+            error_message=f"Минимальная сумма пополнения: {settings.billing_min_topup_rub} ₽",
+        )
+
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            user = await session.get(User, db_user.id)
+            if user is None:
+                raise ValueError("Пользователь не найден.")
+            _txn, pay_url = await create_topup_payment(
+                session,
+                user=user,
+                telegram_id=int(user.telegram_id),
+                amount_rub=amount,
+                provider_name="platega",
+                settings=settings,
+            )
+            await session.commit()
+    except Exception as exc:
+        logger.exception("public-sub: create topup failed token=%s", token)
+        return _subscription_page(
+            token=token,
+            headline_value=_ru_days_phrase(_days_left(sub.expires_at if sub else None)),
+            headline_hint=None,
+            expires_at=sub.expires_at if sub else None,
+            created_at=sub.created_at if sub else None,
+            balance_rub=db_user.balance,
+            min_topup_rub=settings.billing_min_topup_rub,
+            topup_enabled=True,
+            error_message=f"Не удалось создать платеж: {str(exc)[:160]}",
+        )
+    return RedirectResponse(url=pay_url, status_code=status.HTTP_303_SEE_OTHER)
