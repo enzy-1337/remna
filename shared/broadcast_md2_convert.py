@@ -71,7 +71,7 @@ def draft_to_markdown_v2(text: str) -> str:
     s = re.sub(r"~~(.+?)~~", lambda m: stash(strike(m.group(1))), s, flags=re.DOTALL)
     s = re.sub(r"(?<![~])~([^~\n]+)~(?![~])", lambda m: stash(strike(m.group(1))), s)
     s = re.sub(
-        r"(?<![_])_([^_\n]+)_(?!_)",
+        r"(?<!\\)(?<![_])_([^_\n]+)(?<!\\)_(?!_)",
         lambda m: stash(italic(m.group(1))),
         s,
     )
@@ -127,7 +127,11 @@ def _preview_format_chunk(chunk: str) -> str:
     out = re.sub(r"__(.+?)__", lambda m: "<u>{}</u>".format(esc(m.group(1))), out, flags=re.DOTALL)
     out = re.sub(r"~~(.+?)~~", lambda m: "<s>{}</s>".format(esc(m.group(1))), out, flags=re.DOTALL)
     out = re.sub(r"(?<![~])~([^~\n]+)~(?![~])", lambda m: "<s>{}</s>".format(esc(m.group(1))), out)
-    out = re.sub(r"(?<![_])_([^_\n]+)_(?!_)", lambda m: "<i>{}</i>".format(esc(m.group(1))), out)
+    out = re.sub(
+        r"(?<!\\)(?<![_])_([^_\n]+)(?<!\\)_(?!_)",
+        lambda m: "<i>{}</i>".format(esc(m.group(1))),
+        out,
+    )
     return out
 
 
