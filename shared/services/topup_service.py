@@ -36,9 +36,7 @@ def _format_topup_invoice_description(*, provider_name: str, user: User) -> str:
         who = f"@{tag}"
     else:
         who = "TG без username"
-    text = (
-        f"Пополнение через {provider_name} · акк #{user.id} · {who} · tg {user.telegram_id}"
-    )
+    text = f"акк #{user.id} · {who} · tg {user.telegram_id}"
     return text[:512]
 
 

@@ -174,25 +174,6 @@ def _subscription_page(
       text-transform: uppercase;
       margin-bottom: 8px;
     }}
-    .tabs {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      border-bottom: 1px solid var(--line);
-      margin: 2px 0 12px;
-    }}
-    .tab {{
-      text-align: center;
-      color: #9bb0d7;
-      text-decoration: none;
-      font-size: 20px;
-      padding: 10px 4px 12px;
-      border-bottom: 2px solid transparent;
-    }}
-    .tab.active {{
-      color: #d9e7ff;
-      border-bottom-color: #4e8bff;
-      font-weight: 600;
-    }}
     .row {{
       display: flex;
       justify-content: space-between;
@@ -239,17 +220,13 @@ def _subscription_page(
       <div class="days">{_esc(headline_value)}</div>
       {hint_html}
     </section>
-    <nav class="tabs" aria-label="Разделы">
-      <a class="tab active" href="#actions">Действия</a>
-      <a class="tab" href="#details">Детализация</a>
-    </nav>
-    <section class="card" id="details">
+    <section class="card">
       <div class="title">Детализация</div>
       <div class="row"><div class="label">Действует до</div><div class="value">{_esc(_fmt_dt(expires_at))}</div></div>
       <div class="row"><div class="label">Создана</div><div class="value">{_esc(_fmt_dt(created_at))}</div></div>
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
-    <section class="actions" id="actions">
+    <section class="actions">
       <a class="btn btn-primary{topup_disabled}" href="{topup_href}">Пополнить баланс</a>
     </section>
   </main>
@@ -266,6 +243,7 @@ def _topup_page(
     error_message: str | None = None,
 ) -> HTMLResponse:
     form_action = f"/sub/{_esc(token)}/topup"
+    back_href = f"/sub/{_esc(token)}"
     error_html = (
         f'<div class="error-box">{_esc(error_message or "")}</div>'
         if error_message
@@ -323,6 +301,11 @@ def _topup_page(
       text-decoration: none; font-size: 22px; font-weight: 600; border: 0; width: 100%; margin-top: 10px;
       background: linear-gradient(180deg, var(--blue), var(--blue2)); color: #fff; cursor: pointer;
     }}
+    .btn-back {{
+      display: flex; justify-content: center; align-items: center; min-height: 46px;
+      border-radius: 12px; text-decoration: none; font-size: 18px; font-weight: 600;
+      width: 100%; margin-top: 8px; border: 1px solid var(--line); color: #d8e3fa; background: #0c1730;
+    }}
     .error-box {{
       margin-bottom: 10px; border: 1px solid rgba(239,68,68,.45); background: rgba(239,68,68,.12);
       color: #ffc5c5; border-radius: 10px; padding: 10px 12px; font-size: 14px;
@@ -349,6 +332,7 @@ def _topup_page(
         <input class="field" type="number" min="{_esc(str(min_topup_rub))}" step="1" name="custom_amount" placeholder="Или введите сумму вручную">
         <button type="submit" class="btn">Оплатить</button>
       </form>
+      <a class="btn-back" href="{back_href}">Назад</a>
     </section>
   </main>
   <script>
