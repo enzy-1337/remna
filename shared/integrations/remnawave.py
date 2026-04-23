@@ -614,6 +614,21 @@ class RemnaWaveClient:
                 break
         return exact or partial
 
+    async def find_user_by_panel_id(self, panel_id: int) -> dict[str, Any] | None:
+        """Поиск пользователя панели по внутреннему числовому ID пользователя Remnawave."""
+        if self._s.remnawave_stub:
+            return None
+        if panel_id <= 0:
+            return None
+        users = await self.list_all_users(page_size=200, max_items=5000)
+        if not users:
+            users = await self.list_users(limit=500)
+        for it in users:
+            pid = self._coerce_int(it.get("id"))
+            if pid == panel_id:
+                return it
+        return None
+
     async def update_user(
         self,
         user_uuid: str,

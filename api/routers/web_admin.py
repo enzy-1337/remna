@@ -23,6 +23,7 @@ from secrets import token_urlsafe
 from types import SimpleNamespace
 from urllib.parse import quote as url_quote
 from urllib.parse import quote_plus
+from uuid import UUID
 
 import httpx
 import pyotp
@@ -1434,7 +1435,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Пользователь найден в панели Remnawave.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -5918,38 +5919,26 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3">
             <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Remnawave: проверка и ручная привязка</h4>
-            <div class="flex flex-wrap gap-3">
-              <form method="post" action="/admin/users/{user_id}/remnawave/check" class="flex flex-wrap items-end gap-2">
-                <label class="form-control">
-                  <span class="label-text text-xs opacity-70">Проверка по Telegram ID или @username</span>
-                  <input
-                    type="text"
-                    name="query"
-                    required
-                    autocomplete="off"
-                    placeholder="{_esc(str(ud.telegram_id))}"
-                    class="input input-bordered input-sm h-9 min-h-9 w-64"
-                  />
-                </label>
-                <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5">
+            <div class="flex flex-wrap items-end gap-3">
+              <form method="post" action="/admin/users/{user_id}/remnawave/check" class="flex items-end gap-2">
+                <button type="submit" class="btn btn-outline btn-sm h-10 min-h-10 gap-1.5">
                   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>Проверить в панели
                 </button>
               </form>
-              <form method="post" action="/admin/users/{user_id}/subscription/manual-bind" class="flex flex-wrap items-end gap-2"
+              <form method="post" action="/admin/users/{user_id}/subscription/manual-bind" class="flex items-end gap-2"
                 data-remna-confirm-msg="{_esc_attr(f'Привязать существующую подписку к пользователю #{user_id}?')}">
                 <label class="form-control">
-                  <span class="label-text text-xs opacity-70">Ручная привязка ID подписки</span>
+                  <span class="label-text text-xs opacity-70">Ручная привязка: ID подписки (локальный) или ID пользователя Remnawave</span>
                   <input
-                    type="number"
+                    type="text"
                     name="subscription_id"
-                    min="1"
                     required
                     inputmode="numeric"
-                    placeholder="104"
-                    class="input input-bordered input-sm h-9 min-h-9 w-32"
+                    placeholder="105"
+                    class="input input-bordered input-sm h-10 min-h-10 w-32"
                   />
                 </label>
-                <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5">
+                <button type="submit" class="btn btn-secondary btn-sm h-10 min-h-10 gap-1.5">
                   <i class="fa-solid fa-link" aria-hidden="true"></i>Привязать
                 </button>
               </form>
@@ -6271,36 +6260,62 @@ async def admin_user_toggle_billing_mode(request: Request, user_id: int) -> Redi
 async def admin_user_remnawave_check(
     request: Request,
     user_id: int,
-    query: str = Form(""),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    typed = (query or "").strip()
-    if not typed:
-        return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('Введите Telegram ID или @username')}",
-            status_code=303,
-        )
     settings = get_settings()
     if settings.remnawave_stub:
         return RedirectResponse(
             f"/admin/users/{user_id}?err={quote_plus('REMNAWAVE_STUB включен: проверка недоступна')}",
             status_code=303,
         )
-    rw = RemnaWaveClient(settings)
-    try:
-        hit, _mode = await _web_lookup_remnawave_by_tg_or_username(rw, typed)
-    except RemnaWaveError as e:
-        return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
-            status_code=303,
-        )
-    if hit is None:
-        return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('В панели Remnawave запись не найдена')}",
-            status_code=303,
-        )
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        rw = RemnaWaveClient(settings)
+        hit: dict | None = None
+        try:
+            hit, _ = await _web_lookup_remnawave_by_tg_or_username(rw, str(user.telegram_id))
+            if hit is None and (user.username or "").strip():
+                hit, _ = await _web_lookup_remnawave_by_tg_or_username(rw, str(user.username))
+        except RemnaWaveError as e:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
+                status_code=303,
+            )
+        if hit is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('В панели Remnawave запись не найдена по Telegram ID/username открытого пользователя')}",
+                status_code=303,
+            )
+        rw_uuid_raw = str(hit.get("uuid") or "").strip()
+        if not rw_uuid_raw:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Панель вернула запись без UUID')}",
+                status_code=303,
+            )
+        try:
+            rw_uuid = UUID(rw_uuid_raw)
+        except ValueError:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('UUID из панели имеет неверный формат')}",
+                status_code=303,
+            )
+        user.remnawave_uuid = rw_uuid
+        local_sub = (
+            await session.execute(
+                select(Subscription)
+                .where(Subscription.user_id == user.id)
+                .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if local_sub is not None:
+            local_sub.remnawave_sub_uuid = rw_uuid
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=rw_check_ok", status_code=303)
 
 
@@ -6308,12 +6323,19 @@ async def admin_user_remnawave_check(
 async def admin_user_manual_bind_subscription(
     request: Request,
     user_id: int,
-    subscription_id: int = Form(...),
+    subscription_id: str = Form(""),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    if subscription_id <= 0:
+    sid_raw = (subscription_id or "").strip()
+    if not sid_raw.isdigit():
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Неверный ID подписки')}",
+            status_code=303,
+        )
+    sid = int(sid_raw)
+    if sid <= 0:
         return RedirectResponse(
             f"/admin/users/{user_id}?err={quote_plus('Неверный ID подписки')}",
             status_code=303,
@@ -6322,12 +6344,55 @@ async def admin_user_manual_bind_subscription(
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
-        sub = await session.get(Subscription, subscription_id)
+        sub = await session.get(Subscription, sid)
+        panel_id_used = False
         if sub is None:
-            return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
-                status_code=303,
-            )
+            settings = get_settings()
+            if settings.remnawave_stub:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена локально: #' + str(sid))}",
+                    status_code=303,
+                )
+            rw = RemnaWaveClient(settings)
+            try:
+                rw_user = await rw.find_user_by_panel_id(sid)
+            except RemnaWaveError as e:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
+                    status_code=303,
+                )
+            if rw_user is None:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Не найдено: ни локальная подписка #' + str(sid) + ', ни пользователь Remnawave с id=' + str(sid))}",
+                    status_code=303,
+                )
+            rw_uuid_raw = str(rw_user.get("uuid") or "").strip()
+            if not rw_uuid_raw:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('У пользователя Remnawave нет UUID')}",
+                    status_code=303,
+                )
+            try:
+                rw_uuid = UUID(rw_uuid_raw)
+            except ValueError:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('UUID из Remnawave имеет неверный формат')}",
+                    status_code=303,
+                )
+            sub = (
+                await session.execute(
+                    select(Subscription)
+                    .where(Subscription.remnawave_sub_uuid == rw_uuid)
+                    .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if sub is None:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('В панели найден пользователь id=' + str(sid) + ', но локальная подписка с его UUID не найдена')}",
+                    status_code=303,
+                )
+            panel_id_used = True
         sub.user_id = user.id
         if sub.remnawave_sub_uuid is not None:
             user.remnawave_uuid = sub.remnawave_sub_uuid

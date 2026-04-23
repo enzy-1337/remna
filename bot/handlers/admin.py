@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import pyotp
+from uuid import UUID
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -1983,19 +1984,57 @@ async def msg_admin_manual_bind_subscription(
         if prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
     if not raw.isdigit():
-        await message.answer("Нужен числовой ID подписки (например 104).")
+        await message.answer("Нужен числовой ID: локальной подписки или пользователя Remnawave (например 105).")
         return
-    sub_id = int(raw)
+    typed_id = int(raw)
     target_user = await session.get(User, user_id)
     if target_user is None:
         await state.clear()
         await message.answer("Пользователь не найден.")
         return
-    sub = await session.get(Subscription, sub_id)
+    sub = await session.get(Subscription, typed_id)
+    used_panel_id = False
     if sub is None:
-        await state.clear()
-        await message.answer("Подписка не найдена.")
-        return
+        settings = get_settings()
+        if settings.remnawave_stub:
+            await state.clear()
+            await message.answer("Подписка не найдена в локальной БД.")
+            return
+        rw = RemnaWaveClient(settings)
+        try:
+            rw_user = await rw.find_user_by_panel_id(typed_id)
+        except RemnaWaveError as e:
+            await state.clear()
+            await message.answer(f"Ошибка Remnawave: {e}")
+            return
+        if rw_user is None:
+            await state.clear()
+            await message.answer("Не найдено: ни локальная подписка, ни пользователь Remnawave с таким ID.")
+            return
+        rw_uuid_raw = str(rw_user.get("uuid") or "").strip()
+        if not rw_uuid_raw:
+            await state.clear()
+            await message.answer("У пользователя Remnawave нет UUID.")
+            return
+        try:
+            rw_uuid = UUID(rw_uuid_raw)
+        except ValueError:
+            await state.clear()
+            await message.answer("UUID пользователя Remnawave некорректный.")
+            return
+        sub = (
+            await session.execute(
+                select(Subscription)
+                .where(Subscription.remnawave_sub_uuid == rw_uuid)
+                .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if sub is None:
+            await state.clear()
+            await message.answer("В панели пользователь найден, но локальная подписка с его UUID не найдена.")
+            return
+        used_panel_id = True
     prev_user_id = sub.user_id
     sub.user_id = target_user.id
     if sub.remnawave_sub_uuid is not None:
@@ -2010,6 +2049,8 @@ async def msg_admin_manual_bind_subscription(
             "✅ " + bold("Подписка привязана"),
             plain("Подписка #") + bold(str(sub.id)) + plain(" теперь у пользователя #") + bold(str(target_user.id)),
             plain("Ранее была у пользователя #") + bold(str(prev_user_id)),
+            plain("Введённый ID: ") + code(str(typed_id)),
+            plain("Режим: ") + bold("ID пользователя Remnawave" if used_panel_id else "локальный ID подписки"),
         )
     )
     if message.bot:
