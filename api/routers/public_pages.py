@@ -98,10 +98,10 @@ def _subscription_page(
     expires_at: datetime | None,
     created_at: datetime | None,
     balance_rub: Decimal | int | float | None,
-    topup_enabled: bool,
+    bot_open_url: str | None,
 ) -> HTMLResponse:
-    topup_href = f"/sub/{_esc(token)}/topup"
-    topup_disabled = " opacity-60 pointer-events-none" if not topup_enabled else ""
+    bot_href = _esc((bot_open_url or "").strip()) or "#"
+    bot_btn_disabled = " opacity-60 pointer-events-none" if not (bot_open_url or "").strip() else ""
     active_badge = "Активна"
     hint_html = f'<div class="subid">{_esc(headline_hint or "")}</div>' if headline_hint else ""
     page = f"""<!DOCTYPE html>
@@ -227,7 +227,7 @@ def _subscription_page(
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
     <section class="actions">
-      <a class="btn btn-primary{topup_disabled}" href="{topup_href}">Пополнить баланс</a>
+      <a class="btn btn-primary{bot_btn_disabled}" href="{bot_href}">Перейти в бота</a>
     </section>
   </main>
 </body>
@@ -580,10 +580,10 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
                     else:
                         headline_value = "~н/д"
                         headline_hint = "PAYG: прогноз появится после накопления статистики"
-    platega_ready = settings.platega_stub or bool(
-        (settings.platega_merchant_id or "").strip() and (settings.platega_secret_key or "").strip()
-    )
-    topup_enabled = db_user is not None and platega_ready
+    bot_open_url: str | None = None
+    bot_username = (settings.bot_username or "").strip().lstrip("@")
+    if bot_username:
+        bot_open_url = f"https://t.me/{bot_username}"
     return _subscription_page(
         token=token,
         headline_value=headline_value,
@@ -591,7 +591,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         expires_at=expires_at,
         created_at=created_at,
         balance_rub=db_user.balance if db_user is not None else Decimal("0"),
-        topup_enabled=topup_enabled,
+        bot_open_url=bot_open_url,
     )
 
 

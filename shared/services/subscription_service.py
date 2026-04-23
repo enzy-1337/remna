@@ -30,6 +30,7 @@ from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.feature_flags import tariff_purchases_enabled
+from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 
 logger = logging.getLogger(__name__)
 
@@ -1008,6 +1009,10 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
         sub.auto_renew = True
         sub.devices_count = int(settings.billing_hybrid_hwid_slots)
         await ensure_placeholder_devices(session, sub)
+        try:
+            await baseline_meter_at_hybrid_transition(session, user=user, settings=settings)
+        except Exception:
+            logger.exception("mass convert: baseline_meter failed user_id=%s", user.id)
 
         if user.remnawave_uuid is not None:
             try:

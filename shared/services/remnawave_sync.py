@@ -116,7 +116,12 @@ async def _upsert_subscription_from_rw_payload(
     info: dict,
     now: datetime,
 ) -> None:
-    exp = _parse_rw_dt(info.get("expireAt"))
+    exp = _parse_rw_dt(
+        info.get("expireAt")
+        or info.get("expiresAt")
+        or info.get("expire_at")
+        or info.get("expires_at")
+    )
     dlim = _int_or_none(info.get("hwidDeviceLimit"))
     if exp is None:
         return
