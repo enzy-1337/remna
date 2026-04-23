@@ -30,7 +30,6 @@ from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_
 from shared.services.referral_service import grant_referrer_percent_of_referred_payment
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.feature_flags import tariff_purchases_enabled
-from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 
 logger = logging.getLogger(__name__)
 
@@ -937,6 +936,9 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
     Exempt: lifetime (>= cutoff year) и админы/флаги exempt (через billing_mode/lifetime_exempt обработку на месте).
     """
     from shared.services.optimized_route_service import remnawave_squads_for_db_user
+    from shared.services.billing_v2.traffic_meter_poll_service import (
+        baseline_meter_at_hybrid_transition,
+    )
 
     now = datetime.now(timezone.utc)
     cutoff = datetime(settings.billing_legacy_lifetime_cutoff_year, 1, 1, tzinfo=timezone.utc)
