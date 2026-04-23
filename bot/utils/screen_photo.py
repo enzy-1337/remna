@@ -70,6 +70,7 @@ def _photo_name_for_key(photo_key: str) -> str | None:
         "admin:find": "search.png",
         "admin:web": "web_admin.png",
         "admin:broadcast": "spam.png",
+        "admin:metrics": "metrics.png",
     }
     if key in exact_map:
         return exact_map[key]
