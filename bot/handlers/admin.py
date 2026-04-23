@@ -37,6 +37,7 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
+from shared.models.device import Device
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
@@ -815,6 +816,16 @@ async def _build_user_card(
             callback_data=f"admin:ab:{u.id}",
         )
     )
+    b.row(
+        InlineKeyboardButton(
+            text="🔎 Проверить подписку в Remnawave",
+            callback_data=f"admin:rwcheck:{u.id}",
+        ),
+        InlineKeyboardButton(
+            text="🧷 Привязать подписку вручную",
+            callback_data=f"admin:mlink:{u.id}",
+        ),
+    )
     next_mode = "hybrid" if u.billing_mode == "legacy" else "legacy"
     b.row(
         InlineKeyboardButton(
@@ -1402,6 +1413,31 @@ def _parse_user_sub(callback_data: str) -> tuple[int, int] | None:
         return None
 
 
+def _parse_admin_user_id(callback_data: str) -> int | None:
+    parts = callback_data.split(":")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[2])
+    except ValueError:
+        return None
+
+
+async def _find_rw_user_by_tg_or_username(
+    rw: RemnaWaveClient,
+    *,
+    query: str,
+) -> tuple[dict | None, str]:
+    typed = (query or "").strip()
+    if not typed:
+        return None, "Пустой запрос."
+    if typed.isdigit():
+        hit = await rw.find_user_by_telegram_id(int(typed))
+        return hit, "telegram_id"
+    hit = await rw.find_user_by_username(typed)
+    return hit, "username"
+
+
 def _admin_months_quick_markup(user_id: int, sub_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -1787,6 +1823,207 @@ async def cb_admin_reset_balance(
     await session.commit()
     await cq.answer("Баланс обнулён")
     await _render_user_card(cq, session, user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:rwcheck:"))
+async def cb_admin_rwcheck_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    uid = _parse_admin_user_id(cq.data or "")
+    if uid is None:
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_rw_lookup_query)
+    await state.update_data(admin_rw_lookup_user_id=uid)
+    await cq.answer()
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc("Введите Telegram ID или @username для поиска подписки в Remnawave."),
+        )
+        await state.update_data(admin_rw_lookup_prompt_mid=sent.message_id)
+
+
+@router.callback_query(F.data.startswith("admin:mlink:"))
+async def cb_admin_manual_link_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    uid = _parse_admin_user_id(cq.data or "")
+    if uid is None:
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_manual_bind_subscription_id)
+    await state.update_data(admin_manual_bind_user_id=uid)
+    await cq.answer()
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc("Введите ID подписки в базе (например 104), чтобы привязать её к этому пользователю."),
+        )
+        await state.update_data(admin_manual_bind_prompt_mid=sent.message_id)
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_rw_lookup_query), F.text)
+async def msg_admin_rw_lookup(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+    data = await state.get_data()
+    user_id = data.get("admin_rw_lookup_user_id")
+    prompt_mid = data.get("admin_rw_lookup_prompt_mid")
+    if not isinstance(user_id, int):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if message.bot:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        if prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    if not raw:
+        await message.answer("Введите Telegram ID или @username.")
+        return
+    settings = get_settings()
+    if settings.remnawave_stub:
+        await state.clear()
+        await message.answer("REMNAWAVE_STUB включён: проверка в реальной панели недоступна.")
+        return
+    rw = RemnaWaveClient(settings)
+    try:
+        hit, mode = await _find_rw_user_by_tg_or_username(rw, query=raw)
+    except RemnaWaveError as e:
+        await state.clear()
+        await message.answer(f"Ошибка обращения к Remnawave: {e}")
+        return
+    await state.clear()
+    if hit is None:
+        await message.answer("В панели Remnawave ничего не найдено.")
+        return
+    rw_uuid = str(hit.get("uuid") or "—")
+    rw_un = str(hit.get("username") or hit.get("tag") or "—")
+    rw_tid = str(hit.get("telegramId") or hit.get("telegram_id") or "—")
+    rw_status = str(hit.get("status") or "—")
+    rw_exp = str(hit.get("expireAt") or "—")
+    await message.answer(
+        join_lines(
+            "✅ " + bold("Найдена запись в Remnawave"),
+            plain("Поиск: ") + bold("Telegram ID") if mode == "telegram_id" else plain("Поиск: ") + bold("Username"),
+            plain("UUID: ") + code(rw_uuid),
+            plain("Username/tag: ") + code(rw_un),
+            plain("Telegram ID: ") + code(rw_tid),
+            plain("Статус: ") + bold(rw_status),
+            plain("Истекает: ") + code(rw_exp),
+            "",
+            plain("Открываю карточку пользователя…"),
+        )
+    )
+    if message.bot:
+        cap_kb = await _build_user_card(session, user_id=user_id, viewer_telegram_id=message.from_user.id)
+        if cap_kb is not None:
+            cap, kb = cap_kb
+            await send_profile_screen(
+                message.bot,
+                chat_id=message.chat.id,
+                caption=cap,
+                reply_markup=kb,
+                settings=settings,
+                delete_message=None,
+            )
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_manual_bind_subscription_id), F.text)
+async def msg_admin_manual_bind_subscription(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+    data = await state.get_data()
+    user_id = data.get("admin_manual_bind_user_id")
+    prompt_mid = data.get("admin_manual_bind_prompt_mid")
+    if not isinstance(user_id, int):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if message.bot:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        if prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    if not raw.isdigit():
+        await message.answer("Нужен числовой ID подписки (например 104).")
+        return
+    sub_id = int(raw)
+    target_user = await session.get(User, user_id)
+    if target_user is None:
+        await state.clear()
+        await message.answer("Пользователь не найден.")
+        return
+    sub = await session.get(Subscription, sub_id)
+    if sub is None:
+        await state.clear()
+        await message.answer("Подписка не найдена.")
+        return
+    prev_user_id = sub.user_id
+    sub.user_id = target_user.id
+    if sub.remnawave_sub_uuid is not None:
+        target_user.remnawave_uuid = sub.remnawave_sub_uuid
+    dev_rows = await session.execute(select(Device).where(Device.subscription_id == sub.id))
+    for d in dev_rows.scalars().all():
+        d.user_id = target_user.id
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        join_lines(
+            "✅ " + bold("Подписка привязана"),
+            plain("Подписка #") + bold(str(sub.id)) + plain(" теперь у пользователя #") + bold(str(target_user.id)),
+            plain("Ранее была у пользователя #") + bold(str(prev_user_id)),
+        )
+    )
+    if message.bot:
+        cap_kb = await _build_user_card(session, user_id=target_user.id, viewer_telegram_id=message.from_user.id)
+        if cap_kb is not None:
+            cap, kb = cap_kb
+            await send_profile_screen(
+                message.bot,
+                chat_id=message.chat.id,
+                caption=cap,
+                reply_markup=kb,
+                settings=get_settings(),
+                delete_message=None,
+            )
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_add_balance), F.text)

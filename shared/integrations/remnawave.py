@@ -528,6 +528,13 @@ class RemnaWaveClient:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _normalize_username_like(val: Any) -> str:
+        s = str(val or "").strip()
+        if s.startswith("@"):
+            s = s[1:]
+        return s.casefold()
+
     async def find_user_by_telegram_id(self, telegram_id: int) -> dict[str, Any] | None:
         if self._s.remnawave_stub:
             return None
@@ -572,6 +579,40 @@ class RemnaWaveClient:
             if id_in_desc.search(desc) or id_in_desc.search(tag):
                 return it
         return None
+
+    async def find_user_by_username(self, username: str) -> dict[str, Any] | None:
+        """Поиск пользователя панели по username/tag (без учёта @ и регистра)."""
+        if self._s.remnawave_stub:
+            return None
+        wanted = self._normalize_username_like(username)
+        if not wanted:
+            return None
+        users = await self.list_all_users(page_size=200, max_items=5000)
+        if not users:
+            users = await self.list_users(limit=500)
+        exact: dict[str, Any] | None = None
+        partial: dict[str, Any] | None = None
+        for it in users:
+            candidates = (
+                it.get("username"),
+                it.get("tag"),
+                it.get("telegramUsername"),
+                it.get("telegram_username"),
+            )
+            matched_exact = False
+            for cand in candidates:
+                norm = self._normalize_username_like(cand)
+                if not norm:
+                    continue
+                if norm == wanted:
+                    matched_exact = True
+                    break
+                if partial is None and wanted in norm:
+                    partial = it
+            if matched_exact:
+                exact = it
+                break
+        return exact or partial
 
     async def update_user(
         self,

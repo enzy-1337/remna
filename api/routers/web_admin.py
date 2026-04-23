@@ -50,6 +50,7 @@ from shared.integrations.rw_hwid_devices import format_rw_device_datetime_local,
 from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
+from shared.models.device import Device
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
@@ -1433,7 +1434,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Пользователь найден в панели Remnawave.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -4956,6 +4957,18 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     return _layout(f"Ticket {ticket_id}", body, request=request, back_href="/admin/tickets")
 
 
+async def _web_lookup_remnawave_by_tg_or_username(
+    rw: RemnaWaveClient,
+    query: str,
+) -> tuple[dict | None, str]:
+    typed = (query or "").strip()
+    if not typed:
+        return None, "empty"
+    if typed.isdigit():
+        return await rw.find_user_by_telegram_id(int(typed)), "telegram_id"
+    return await rw.find_user_by_username(typed), "username"
+
+
 @router.get("/users")
 async def admin_users(
     request: Request,
@@ -5903,6 +5916,45 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
+          <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3">
+            <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Remnawave: проверка и ручная привязка</h4>
+            <div class="flex flex-wrap gap-3">
+              <form method="post" action="/admin/users/{user_id}/remnawave/check" class="flex flex-wrap items-end gap-2">
+                <label class="form-control">
+                  <span class="label-text text-xs opacity-70">Проверка по Telegram ID или @username</span>
+                  <input
+                    type="text"
+                    name="query"
+                    required
+                    autocomplete="off"
+                    placeholder="{_esc(str(ud.telegram_id))}"
+                    class="input input-bordered input-sm h-9 min-h-9 w-64"
+                  />
+                </label>
+                <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5">
+                  <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>Проверить в панели
+                </button>
+              </form>
+              <form method="post" action="/admin/users/{user_id}/subscription/manual-bind" class="flex flex-wrap items-end gap-2"
+                data-remna-confirm-msg="{_esc_attr(f'Привязать существующую подписку к пользователю #{user_id}?')}">
+                <label class="form-control">
+                  <span class="label-text text-xs opacity-70">Ручная привязка ID подписки</span>
+                  <input
+                    type="number"
+                    name="subscription_id"
+                    min="1"
+                    required
+                    inputmode="numeric"
+                    placeholder="104"
+                    class="input input-bordered input-sm h-9 min-h-9 w-32"
+                  />
+                </label>
+                <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5">
+                  <i class="fa-solid fa-link" aria-hidden="true"></i>Привязать
+                </button>
+              </form>
+            </div>
+          </div>
           <div class="flex flex-wrap items-end gap-2">
             <p class="m-0">Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
             <p class="m-0">Billing mode: <b>{_esc(ud.billing_mode)}</b></p>
@@ -6213,6 +6265,78 @@ async def admin_user_toggle_billing_mode(request: Request, user_id: int) -> Redi
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=billing_mode_toggled", status_code=303)
+
+
+@router.post("/users/{user_id}/remnawave/check")
+async def admin_user_remnawave_check(
+    request: Request,
+    user_id: int,
+    query: str = Form(""),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    typed = (query or "").strip()
+    if not typed:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Введите Telegram ID или @username')}",
+            status_code=303,
+        )
+    settings = get_settings()
+    if settings.remnawave_stub:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('REMNAWAVE_STUB включен: проверка недоступна')}",
+            status_code=303,
+        )
+    rw = RemnaWaveClient(settings)
+    try:
+        hit, _mode = await _web_lookup_remnawave_by_tg_or_username(rw, typed)
+    except RemnaWaveError as e:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
+            status_code=303,
+        )
+    if hit is None:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('В панели Remnawave запись не найдена')}",
+            status_code=303,
+        )
+    return RedirectResponse(f"/admin/users/{user_id}?n=rw_check_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/manual-bind")
+async def admin_user_manual_bind_subscription(
+    request: Request,
+    user_id: int,
+    subscription_id: int = Form(...),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    if subscription_id <= 0:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Неверный ID подписки')}",
+            status_code=303,
+        )
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        sub = await session.get(Subscription, subscription_id)
+        if sub is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
+                status_code=303,
+            )
+        sub.user_id = user.id
+        if sub.remnawave_sub_uuid is not None:
+            user.remnawave_uuid = sub.remnawave_sub_uuid
+        dev_rows = await session.execute(select(Device).where(Device.subscription_id == sub.id))
+        for d in dev_rows.scalars().all():
+            d.user_id = user.id
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=manual_bind_ok", status_code=303)
 
 
 @router.post("/users/{user_id}/risk-notify/reset")
