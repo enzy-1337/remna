@@ -103,7 +103,13 @@ async def cb_promo_cancel(
         is_admin=is_bot_admin,
     )
     await cq.answer()
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=kb,
+        settings=settings,
+        photo_key="menu:main",
+    )
 
 
 @router.message(PromoStates.waiting_code, F.text)

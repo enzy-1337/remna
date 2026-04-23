@@ -565,6 +565,18 @@ class Settings(BaseSettings):
         validation_alias="BACKUP_PROJECT_NAME",
         description="Имя проекта для названий архивов (если пусто — берётся имя папки BACKUP_PROJECT_DIR)",
     )
+    backup_local_dir: str = Field(
+        default="/opt/remna-bot/backups",
+        validation_alias="BACKUP_LOCAL_DIR",
+        description="Папка для локального хранения архивов бэкапа на сервере",
+    )
+    backup_local_retention_days: int = Field(
+        default=7,
+        ge=1,
+        le=365,
+        validation_alias="BACKUP_LOCAL_RETENTION_DAYS",
+        description="Сколько дней хранить локальные бэкапы",
+    )
 
     # CryptoBot (@CryptoBot / Crypto Pay API)
     cryptobot_token: str = Field(default="", validation_alias="CRYPTOBOT_TOKEN")

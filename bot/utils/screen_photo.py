@@ -72,6 +72,20 @@ def _photo_name_for_key(photo_key: str) -> str | None:
         return exact_map[key]
     if key.startswith("admin:promos"):
         return "promocodes.png"
+    if key.startswith("dev:"):
+        return "devices.png"
+    if key.startswith("sub:devices"):
+        return "devices.png"
+    if key.startswith("sub:instr"):
+        return "instruction.png"
+    if key.startswith("sub:reissue"):
+        return "restore_key.png"
+    if key.startswith("sub:renewal"):
+        return "extension_sub.png"
+    if key.startswith("sub:extend"):
+        return "extension_sub.png"
+    if key.startswith("sub:plans"):
+        return "extension_sub.png"
     if key.startswith("menu:sub:extend"):
         return "extension_sub.png"
     return None

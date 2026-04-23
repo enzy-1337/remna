@@ -9,7 +9,7 @@ import os
 import shutil
 import tarfile
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from zoneinfo import ZoneInfo
@@ -80,6 +80,38 @@ def _project_dir_and_name(settings: Settings) -> tuple[Path, str]:
     project_dir = Path((settings.backup_project_dir or "/app").strip() or "/app").resolve()
     project_name = (settings.backup_project_name or "").strip() or project_dir.name or "project"
     return project_dir, project_name
+
+
+def _persist_backup_copy(settings: Settings, archive_path: Path, now_local: datetime) -> tuple[bool, str]:
+    local_dir = Path((settings.backup_local_dir or "/opt/remna-bot/backups").strip() or "/opt/remna-bot/backups")
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        dst = local_dir / archive_path.name
+        shutil.copy2(archive_path, dst)
+        ts = now_local.timestamp()
+        os.utime(dst, (ts, ts))
+        return True, str(dst)
+    except Exception as e:
+        return False, str(e)
+
+
+def _cleanup_local_backups(settings: Settings, now_local: datetime) -> int:
+    local_dir = Path((settings.backup_local_dir or "/opt/remna-bot/backups").strip() or "/opt/remna-bot/backups")
+    if not local_dir.exists() or not local_dir.is_dir():
+        return 0
+    cutoff = now_local - timedelta(days=int(settings.backup_local_retention_days))
+    removed = 0
+    for p in local_dir.iterdir():
+        if not p.is_file():
+            continue
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=now_local.tzinfo)
+            if mtime < cutoff:
+                p.unlink(missing_ok=True)
+                removed += 1
+        except Exception:
+            logger.debug("backup retention skip: %s", p, exc_info=True)
+    return removed
 
 
 async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[bool, str]:
@@ -227,6 +259,13 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
     max_bytes = int(settings.backup_max_telegram_mb * 1024 * 1024)
     mb = size / (1024 * 1024)
     fname = final_archive.name
+    saved_ok, saved_msg = _persist_backup_copy(settings, final_archive, now_local)
+    removed_old = _cleanup_local_backups(settings, now_local)
+    local_info = (
+        f" Локально: {saved_msg}. Удалено старых: {removed_old}."
+        if saved_ok
+        else f" Локально: ошибка сохранения ({saved_msg})."
+    )
 
     if size > max_bytes:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -238,11 +277,11 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
         if notify:
             await notify_admin_plain(
                 settings,
-                text=f"💾 {msg}",
+                text=f"💾 {msg}{local_info}",
                 topic=AdminLogTopic.BACKUPS,
                 event_type="backup_too_large",
             )
-        return False, msg
+        return False, msg + local_info
 
     ok = await notify_admin_document(
         settings,
@@ -254,8 +293,8 @@ async def run_backup_once(settings: Settings, *, notify: bool = True) -> tuple[b
     shutil.rmtree(tmp_dir, ignore_errors=True)
     if not ok:
         logger.warning("backup: отправка файла в Telegram не удалась")
-        return False, "Файл бэкапа создан, но отправка в Telegram не удалась."
-    return True, f"Бэкап отправлен: {fname} ({mb:.2f} МБ)."
+        return False, "Файл бэкапа создан, но отправка в Telegram не удалась." + local_info
+    return True, f"Бэкап отправлен: {fname} ({mb:.2f} МБ)." + local_info
 
 
 async def run_daily_backup(settings: Settings) -> None:

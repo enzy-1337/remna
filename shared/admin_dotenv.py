@@ -517,6 +517,18 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Имя для итоговых архивов. Если пусто — берётся имя папки BACKUP_PROJECT_DIR.",
             ),
             (
+                "BACKUP_LOCAL_DIR",
+                "Локальная папка бэкапов",
+                lambda s: s.backup_local_dir,
+                "Куда сохранять копии архивов на сервере (кроме отправки в Telegram).",
+            ),
+            (
+                "BACKUP_LOCAL_RETENTION_DAYS",
+                "Хранить локальные бэкапы (дней)",
+                lambda s: str(s.backup_local_retention_days),
+                "Автоочистка локальной папки: удалять файлы старше указанного числа дней.",
+            ),
+            (
                 "CHANNEL_SUB_CACHE_TTL",
                 "TTL кэша подписки на канал (сек)",
                 lambda s: str(s.channel_sub_cache_ttl),
