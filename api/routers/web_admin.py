@@ -1418,6 +1418,7 @@ def _layout(
     document.addEventListener('submit',function(e){
       var f=e.target;
       if(!f || !(f instanceof HTMLFormElement))return;
+      if((f.getAttribute('method')||'').toLowerCase()==='dialog')return;
       if(f.hasAttribute('data-no-loading'))return;
       window.remnaShowLoading&&window.remnaShowLoading();
     },true);
@@ -2889,21 +2890,9 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     elif err == "no_channel":
         alert = "<div class='alert alert-error mb-4'><span>В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).</span></div>"
     elif err == "template_bad":
-        alert = "<div class='alert alert-error mb-4'><span>Заполните название и текст шаблона.</span></div>"
+        alert = ""
     elif err == "test_fail":
-        alert = "<div class='alert alert-error mb-4'><span>Не удалось отправить тест. Проверьте разметку/доступ к Telegram и повторите.</span></div>"
-    if sp.get("n") == "tpl_ok":
-        alert = "<div class='alert alert-success mb-4'><span>Шаблон сохранён.</span></div>" + alert
-    if sp.get("n") == "tpl_del":
-        alert = "<div class='alert alert-success mb-4'><span>Шаблон удалён.</span></div>" + alert
-    if sp.get("n") == "test_sent":
-        alert = "<div class='alert alert-success mb-4'><span>Тестовое сообщение отправлено вам в Telegram.</span></div>" + alert
-    if sp.get("n") == "scheduled":
-        alert = "<div class='alert alert-success mb-4'><span>Отложенная рассылка добавлена в очередь.</span></div>" + alert
-    if sp.get("n") == "sched_ok":
-        alert = "<div class='alert alert-success mb-4'><span>Отложенная отправка обновлена.</span></div>" + alert
-    if sp.get("n") == "sched_del":
-        alert = "<div class='alert alert-success mb-4'><span>Отложенная отправка удалена.</span></div>" + alert
+        alert = ""
 
     tpl_cards: list[str] = []
     pending_cards: list[str] = []
@@ -3020,7 +3009,6 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <p class="text-sm opacity-80 leading-relaxed">Отправка всем из БД. Формат: <strong>MarkdownV2</strong> (как в Telegram Bot API): жирный <code class="bg-base-300 px-1 rounded text-xs">**</code> или <code class="bg-base-300 px-1 rounded text-xs">*текст*</code>, курсив <code class="bg-base-300 px-1 rounded text-xs">_курсив_</code>, подчёркнутый <code class="bg-base-300 px-1 rounded text-xs">__текст__</code>, зачёркнутый <code class="bg-base-300 px-1 rounded text-xs">~~</code>/<code class="bg-base-300 px-1 rounded text-xs">~</code>, моно <code class="bg-base-300 px-1 rounded text-xs">`код`</code>, блок <code class="bg-base-300 px-1 rounded text-xs">```</code>, ссылка <code class="bg-base-300 px-1 rounded text-xs">[текст](url)</code>, спойлер <code class="bg-base-300 px-1 rounded text-xs">||текст||</code>, цитата строкой с <code class="bg-base-300 px-1 rounded text-xs">&gt;</code>.</p>
             <p class="text-xs opacity-70">Предпросмотр ниже повторяет переносы строк и разметку; в Telegram уйдёт сконвертированный MarkdownV2.</p>
             {bc_ch_hint}
-            {alert}
             <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="Текст рассылки..." required></textarea>
             <div class="flex flex-wrap gap-1 items-center">
               <span class="text-xs opacity-60 w-full">Вставки:</span>
@@ -3108,7 +3096,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       <div class="modal-box w-[min(96vw,1100px)] max-w-[1100px] max-h-[86vh] overflow-y-auto">
         <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
         <h3 class="font-bold text-lg mb-2">Редактирование шаблона</h3>
-        <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]" data-no-loading>
           <input type="hidden" name="tpl_id" id="bc-tpl-edit-id" value="0" />
           <div class="flex min-h-[520px] flex-col gap-2">
             <label class="form-control"><span class="label-text text-xs">Название</span>
@@ -3194,6 +3182,41 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         deb=setTimeout(renderLive, 120);
       }}
       if(ta){{ ta.addEventListener('input', queueLive); queueLive(); }}
+      (function consumeBroadcastNotify(){{
+        try{{
+          var u=new URL(window.location.href);
+          var n=u.searchParams.get('n');
+          var err=u.searchParams.get('err');
+          var started=u.searchParams.get('started');
+          var mapN={{
+            test_sent:'Тестовое сообщение отправлено вам в Telegram.',
+            tpl_ok:'Шаблон сохранён.',
+            tpl_del:'Шаблон удалён.',
+            scheduled:'Отложенная рассылка добавлена в очередь.',
+            sched_ok:'Отложенная отправка обновлена.',
+            sched_del:'Отложенная отправка удалена.'
+          }};
+          var mapErr={{
+            empty:'Введите текст сообщения.',
+            no_bot_token:'BOT_TOKEN не задан — рассылка невозможна.',
+            test_no_tg:'Нет Telegram ID в сессии: войдите через Telegram или откройте профиль.',
+            schedule_bad_time:'Неверная дата или время отложенной отправки.',
+            no_targets:'Выберите хотя бы одну цель: пользователям из БД или канал.',
+            no_channel:'В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).',
+            template_bad:'Заполните название и текст шаблона.',
+            test_fail:'Не удалось отправить тест: проверьте разметку MarkdownV2 и доступ к Telegram.'
+          }};
+          if(started==='1'&&window.remnaToast)window.remnaToast('success','Рассылка поставлена в очередь на фоновую отправку.');
+          if(n&&mapN[n]&&window.remnaToast)window.remnaToast('success',mapN[n]);
+          if(err&&mapErr[err]&&window.remnaToast)window.remnaToast('error',mapErr[err]);
+          if(n||err||started){{
+            u.searchParams.delete('n');
+            u.searchParams.delete('err');
+            u.searchParams.delete('started');
+            history.replaceState({{}},'',u.toString());
+          }}
+        }}catch(_e){{}}
+      }})();
       async function renderTplPreview(){{
         var v=(tplEditBody&&tplEditBody.value)||'';
         if(!tplEditPreview)return;
@@ -3370,8 +3393,6 @@ async def admin_broadcast_test(request: Request, text: str = Form("")) -> Redire
         return RedirectResponse("/admin/broadcast?err=test_no_tg", status_code=303)
     md_body = draft_to_markdown_v2(body)
     sent_mid = await send_telegram_message(tid, md_body, parse_mode="MarkdownV2", settings=settings)
-    if sent_mid is None:
-        sent_mid = await send_telegram_message(tid, body, parse_mode=None, settings=settings)
     if sent_mid is None:
         return RedirectResponse("/admin/broadcast?err=test_fail", status_code=303)
     return RedirectResponse("/admin/broadcast?n=test_sent", status_code=303)
