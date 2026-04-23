@@ -50,6 +50,7 @@ async def cmd_promo(
         reply_markup=cancel_kb.as_markup(),
         settings=settings,
         delete_message=None,
+        photo_key="menu:promo",
     )
     await state.update_data(promo_prompt_message_id=sent.message_id)
 
@@ -175,6 +176,7 @@ async def msg_promo_code(
             reply_markup=submenu_back_keyboard(),
             settings=settings,
             delete_message=None,
+            photo_key="menu:promo",
         )
     else:
         await send_profile_screen(
@@ -184,4 +186,5 @@ async def msg_promo_code(
             reply_markup=submenu_back_keyboard(),
             settings=settings,
             delete_message=None,
+            photo_key="menu:promo",
         )

@@ -1740,6 +1740,7 @@ async def msg_admin_add_months(
         reply_markup=kb,
         settings=settings,
         delete_message=None,
+        photo_key="admin:users:card",
     )
 
 
@@ -1956,6 +1957,7 @@ async def msg_admin_rw_lookup(
                 reply_markup=kb,
                 settings=settings,
                 delete_message=None,
+                photo_key="admin:find",
             )
 
 
@@ -2064,6 +2066,7 @@ async def msg_admin_manual_bind_subscription(
                 reply_markup=kb,
                 settings=get_settings(),
                 delete_message=None,
+                photo_key="admin:find",
             )
 
 
@@ -2166,6 +2169,7 @@ async def msg_admin_add_balance(
         reply_markup=kb,
         settings=settings,
         delete_message=None,
+        photo_key="admin:users:card",
     )
 
 
@@ -2347,6 +2351,7 @@ async def msg_admin_find_telegram_id(
             reply_markup=b.as_markup(),
             settings=settings,
             delete_message=None,
+            photo_key="admin:find",
         )
         await state.update_data(find_last_result_mid=sent.message_id, find_prompt_mid=None)
         await state.set_state(None)
@@ -2398,6 +2403,7 @@ async def msg_admin_find_telegram_id(
         reply_markup=adm.as_markup(),
         settings=settings,
         delete_message=None,
+        photo_key="admin:find",
     )
     await state.update_data(find_last_result_mid=sent2.message_id, find_prompt_mid=None)
     await state.set_state(None)
@@ -2428,6 +2434,7 @@ async def cmd_admin(
         reply_markup=admin_panel_keyboard(),
         settings=settings,
         delete_message=None,
+        photo_key="admin:panel",
     )
 
 

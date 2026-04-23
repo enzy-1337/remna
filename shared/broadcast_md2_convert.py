@@ -59,6 +59,12 @@ def draft_to_markdown_v2(text: str) -> str:
         lambda m: stash(link(m.group(1).strip(), m.group(2).strip())),
         s,
     )
+    # @username -> явная ссылка на t.me; делаем до курсива/подчёркивания, чтобы "_" не ломали ник
+    s = re.sub(
+        r"(?<![\w/])@([A-Za-z0-9_]{5,32})",
+        lambda m: stash(link("@" + m.group(1), f"https://t.me/{m.group(1)}")),
+        s,
+    )
     s = re.sub(r"\|\|(.+?)\|\|", lambda m: stash(spoiler(m.group(1))), s, flags=re.DOTALL)
     s = re.sub(r"\*\*(.+?)\*\*", lambda m: stash(bold(m.group(1))), s, flags=re.DOTALL)
     s = re.sub(
@@ -109,6 +115,11 @@ def _preview_format_chunk(chunk: str) -> str:
             esc(m.group(2).strip()),
             esc(m.group(1).strip()),
         ),
+        out,
+    )
+    out = re.sub(
+        r"(?<![\w/])@([A-Za-z0-9_]{5,32})",
+        lambda m: '<a class="underline text-sky-200" href="https://t.me/{u}">@{u}</a>'.format(u=esc(m.group(1))),
         out,
     )
     out = re.sub(

@@ -390,6 +390,7 @@ async def msg_topup_custom_amount(
             reply_markup=topup_providers_keyboard(amt),
             settings=settings,
             delete_message=None,
+            photo_key="menu:balance",
         )
 
 
