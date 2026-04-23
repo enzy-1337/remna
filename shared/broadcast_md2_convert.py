@@ -99,27 +99,35 @@ def _preview_format_chunk(chunk: str) -> str:
         return html_lib.escape(s)
 
     out = esc(chunk)
+    vault: list[str] = []
+
+    def stash(html: str) -> str:
+        vault.append(html)
+        return f"<<<PV{len(vault) - 1}>>>"
+
     out = re.sub(
         r"```([\s\S]*?)```",
-        lambda m: "<pre class=\"bc-prev-pre text-xs\">{}</pre>".format(esc(m.group(1))),
+        lambda m: stash("<pre class=\"bc-prev-pre text-xs\">{}</pre>".format(esc(m.group(1)))),
         out,
     )
     out = re.sub(
         r"`([^`\n]+)`",
-        lambda m: "<code class=\"bc-prev-code text-xs\">{}</code>".format(esc(m.group(1))),
+        lambda m: stash("<code class=\"bc-prev-code text-xs\">{}</code>".format(esc(m.group(1)))),
         out,
     )
     out = re.sub(
         r"\[([^\]]+)\]\s*\(([^)]+)\)",
-        lambda m: '<a class="underline text-sky-200 break-all" href="{}">{}</a>'.format(
-            esc(m.group(2).strip()),
-            esc(m.group(1).strip()),
+        lambda m: stash(
+            '<a class="underline text-sky-200 break-all" href="{}">{}</a>'.format(
+                esc(m.group(2).strip()),
+                esc(m.group(1).strip()),
+            )
         ),
         out,
     )
     out = re.sub(
         r"(?<![\w/])@([A-Za-z0-9_]{5,32})",
-        lambda m: '<a class="underline text-sky-200" href="https://t.me/{u}">@{u}</a>'.format(u=esc(m.group(1))),
+        lambda m: stash('<a class="underline text-sky-200" href="https://t.me/{u}">@{u}</a>'.format(u=esc(m.group(1)))),
         out,
     )
     out = re.sub(
@@ -143,6 +151,8 @@ def _preview_format_chunk(chunk: str) -> str:
         lambda m: "<i>{}</i>".format(esc(m.group(1))),
         out,
     )
+    for idx, html_chunk in enumerate(vault):
+        out = out.replace(f"<<<PV{idx}>>>", html_chunk)
     return out
 
 
