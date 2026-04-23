@@ -67,11 +67,24 @@ def _photo_name_for_key(photo_key: str) -> str | None:
         "admin:section:users": "chapter_users.png",
         "admin:section:analytics": "chapter_analytics.png",
         "admin:section:profile": "admin_profile.png",
+        "admin:find": "search.png",
+        "admin:web": "web_admin.png",
+        "admin:broadcast": "spam.png",
     }
     if key in exact_map:
         return exact_map[key]
     if key.startswith("admin:promos"):
         return "promocodes.png"
+    if key.startswith("admin:users:") or key.startswith("admin:u:") or key.startswith("admin:subs:"):
+        return "user.png"
+    if key.startswith("admin:find"):
+        return "search.png"
+    if key.startswith("admin:broadcast"):
+        return "spam.png"
+    if key.startswith("admin:metrics") or key.startswith("admin:calc_payg") or key.startswith("admin:transition_calc"):
+        return "chapter_analytics.png"
+    if key.startswith("admin:reset"):
+        return "admin_panel.png"
     if key.startswith("dev:"):
         return "devices.png"
     if key.startswith("sub:devices"):
@@ -86,6 +99,8 @@ def _photo_name_for_key(photo_key: str) -> str | None:
         return "extension_sub.png"
     if key.startswith("sub:plans"):
         return "extension_sub.png"
+    if key.startswith("sub:detail") or key.startswith("sub:qr"):
+        return "suber.png"
     if key.startswith("menu:sub:extend"):
         return "extension_sub.png"
     return None
