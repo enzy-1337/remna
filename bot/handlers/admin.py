@@ -2711,23 +2711,18 @@ async def cb_broadcast_start(
         caption=join_lines(
             "📢 " + bold("Рассылка всем пользователям"),
             "",
-            plain("Отправьте одним сообщением текст. Поддерживается форматирование "),
-            plain("как в Telegram "),
-            plain("(жирный, курсив, ссылки через меню сообщения) "),
-            plain("и HTML-теги вручную."),
+            plain("Отправьте одним сообщением текст черновика."),
+            plain("Поддерживается разметка формата Telegram MarkdownV2:"),
             "",
-            plain("Примеры HTML: ")
-            + code("<b>жирный</b>")
+            plain("Примеры: ")
+            + code("**жирный**")
             + plain(", ")
-            + code("<i>курсив</i>")
+            + code("_курсив_")
             + plain(", ")
-            + code("<u>подчёркнутый</u>")
+            + code("__подчёркнутый__")
             + plain(", "),
-            plain("ссылка: ")
-            + code('<a href="https://example.com">текст</a>')
-            + plain(", код: ")
-            + code("<code>фрагмент</code>")
-            + plain("."),
+            plain("ссылка: ") + code("[текст](https://example.com)"),
+            plain("код: ") + code("`фрагмент`") + plain(", блок: ") + code("```блок```"),
             "",
             plain("Смайлики можно вставлять как обычно. До ")
             + code(str(MAX_MESSAGE_LEN))

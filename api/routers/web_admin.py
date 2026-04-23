@@ -2890,6 +2890,8 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         alert = "<div class='alert alert-error mb-4'><span>В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).</span></div>"
     elif err == "template_bad":
         alert = "<div class='alert alert-error mb-4'><span>Заполните название и текст шаблона.</span></div>"
+    elif err == "test_fail":
+        alert = "<div class='alert alert-error mb-4'><span>Не удалось отправить тест. Проверьте разметку/доступ к Telegram и повторите.</span></div>"
     if sp.get("n") == "tpl_ok":
         alert = "<div class='alert alert-success mb-4'><span>Шаблон сохранён.</span></div>" + alert
     if sp.get("n") == "tpl_del":
@@ -3103,16 +3105,26 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       </div>
     </div>
     <dialog id="bc-tpl-modal" class="modal">
-      <div class="modal-box max-w-lg">
+      <div class="modal-box w-[min(96vw,1100px)] max-w-[1100px] max-h-[86vh] overflow-y-auto">
         <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
         <h3 class="font-bold text-lg mb-2">Редактирование шаблона</h3>
-        <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="flex flex-col gap-2">
+        <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <input type="hidden" name="tpl_id" id="bc-tpl-edit-id" value="0" />
-          <label class="form-control"><span class="label-text text-xs">Название</span>
-            <input name="title" id="bc-tpl-edit-title" class="input input-bordered input-sm" maxlength="160" /></label>
-          <label class="form-control"><span class="label-text text-xs">Текст</span>
-            <textarea name="tpl_body" id="bc-tpl-edit-body" class="textarea textarea-bordered min-h-[140px]"></textarea></label>
-          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+          <div class="flex min-h-[520px] flex-col gap-2">
+            <label class="form-control"><span class="label-text text-xs">Название</span>
+              <input name="title" id="bc-tpl-edit-title" class="input input-bordered input-sm" maxlength="160" /></label>
+            <label class="form-control flex-1"><span class="label-text text-xs">Текст</span>
+              <textarea name="tpl_body" id="bc-tpl-edit-body" class="textarea textarea-bordered min-h-[420px] flex-1 font-mono text-sm"></textarea></label>
+            <button type="submit" class="btn btn-primary btn-sm w-fit">Сохранить</button>
+          </div>
+          <div class="flex min-h-[520px] flex-col gap-2">
+            <span class="label-text text-xs opacity-80">Превью</span>
+            <div class="flex-1 rounded-xl border border-base-content/10 bg-base-200/40 p-3">
+              <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow">
+                <div id="bc-tpl-edit-preview" class="whitespace-pre-wrap break-words text-left"><span class="opacity-70">Начните ввод…</span></div>
+              </div>
+            </div>
+          </div>
         </form>
       </div>
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
@@ -3144,8 +3156,16 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     (function(){{
       var ta=document.getElementById('bc-text');
       var live=document.getElementById('bc-live-prev-inner');
+      var tplModal=document.getElementById('bc-tpl-modal');
+      var tplEditTitle=document.getElementById('bc-tpl-edit-title');
+      var tplEditBody=document.getElementById('bc-tpl-edit-body');
+      var tplEditForm=document.getElementById('bc-tpl-edit-form');
+      var tplEditPreview=document.getElementById('bc-tpl-edit-preview');
       var previewEndpoint='/admin/broadcast/preview-html';
       var deb=null;
+      var tplDeb=null;
+      var tplInitTitle='';
+      var tplInitBody='';
       function esc(s){{return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
       function jsonFromUtf8B64(b64){{
         try{{
@@ -3174,6 +3194,33 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         deb=setTimeout(renderLive, 120);
       }}
       if(ta){{ ta.addEventListener('input', queueLive); queueLive(); }}
+      async function renderTplPreview(){{
+        var v=(tplEditBody&&tplEditBody.value)||'';
+        if(!tplEditPreview)return;
+        if(!v.trim()){{ tplEditPreview.innerHTML='<span class="opacity-70">Начните ввод…</span>'; return; }}
+        try{{
+          var fd=new FormData(); fd.append('text', v);
+          var r=await fetch(previewEndpoint,{{method:'POST', body:fd, credentials:'same-origin'}});
+          var j=await r.json();
+          if(j&&j.html) tplEditPreview.innerHTML=j.html; else tplEditPreview.innerHTML='<span class="whitespace-pre-wrap">'+esc(v)+'</span>';
+        }}catch(_e){{
+          tplEditPreview.innerHTML='<span class="whitespace-pre-wrap">'+esc(v)+'</span>';
+        }}
+      }}
+      function queueTplPreview(){{
+        if(tplDeb)clearTimeout(tplDeb);
+        tplDeb=setTimeout(renderTplPreview, 120);
+      }}
+      if(tplEditBody) tplEditBody.addEventListener('input', queueTplPreview);
+      if(tplEditForm) tplEditForm.addEventListener('submit', function(e){{
+        var curT=(tplEditTitle&&tplEditTitle.value||'').trim();
+        var curB=(tplEditBody&&tplEditBody.value||'').trim();
+        if(curT===tplInitTitle && curB===tplInitBody){{
+          e.preventDefault();
+          if(tplModal) tplModal.close();
+          if(window.remnaToast)window.remnaToast('info','Изменений нет');
+        }}
+      }});
       function ins(w){{
         if(!ta)return;
         var s=ta.selectionStart||0,e=ta.selectionEnd||0,x=ta.value||'';
@@ -3256,8 +3303,11 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             document.getElementById('bc-tpl-edit-id').value=o.id||'0';
             document.getElementById('bc-tpl-edit-title').value=o.title||'';
             document.getElementById('bc-tpl-edit-body').value=o.body||'';
+            tplInitTitle=(o.title||'').trim();
+            tplInitBody=(o.body||'').trim();
             var f=document.getElementById('bc-tpl-edit-form');
             if(f) f.action='/admin/broadcast/template/'+encodeURIComponent(o.id)+'/edit';
+            queueTplPreview();
             document.getElementById('bc-tpl-modal').showModal();
           }}catch(e){{}}
         }});
@@ -3319,7 +3369,11 @@ async def admin_broadcast_test(request: Request, text: str = Form("")) -> Redire
     if tid <= 0:
         return RedirectResponse("/admin/broadcast?err=test_no_tg", status_code=303)
     md_body = draft_to_markdown_v2(body)
-    await send_telegram_message(tid, md_body, parse_mode="MarkdownV2", settings=settings)
+    sent_mid = await send_telegram_message(tid, md_body, parse_mode="MarkdownV2", settings=settings)
+    if sent_mid is None:
+        sent_mid = await send_telegram_message(tid, body, parse_mode=None, settings=settings)
+    if sent_mid is None:
+        return RedirectResponse("/admin/broadcast?err=test_fail", status_code=303)
     return RedirectResponse("/admin/broadcast?n=test_sent", status_code=303)
 
 
