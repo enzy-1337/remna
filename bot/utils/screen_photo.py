@@ -47,7 +47,44 @@ def truncate_caption(text: str, max_len: int = TELEGRAM_PHOTO_CAPTION_MAX) -> st
     return text[: max_len - 3].rstrip() + "..."
 
 
-def resolve_section_photo(settings: Settings) -> InputFile | None:
+def _photo_name_for_key(photo_key: str) -> str | None:
+    key = (photo_key or "").strip().lower()
+    if not key:
+        return None
+    exact_map = {
+        "menu:main": "my_profile.png",
+        "menu:sub_main": "my_sub.png",
+        "menu:subscription": "my_sub.png",
+        "menu:balance": "balance.png",
+        "menu:promo": "promocodes.png",
+        "menu:referrals": "referals.png",
+        "menu:devices": "devices.png",
+        "menu:instructions": "instruction.png",
+        "menu:info": "service.png",
+        "menu:about": "service.png",
+        "menu:support": "service.png",
+        "admin:panel": "admin_panel.png",
+        "admin:section:users": "chapter_users.png",
+        "admin:section:analytics": "chapter_analytics.png",
+        "admin:section:profile": "admin_profile.png",
+    }
+    if key in exact_map:
+        return exact_map[key]
+    if key.startswith("admin:promos"):
+        return "promocodes.png"
+    if key.startswith("menu:sub:extend"):
+        return "extension_sub.png"
+    return None
+
+
+def resolve_section_photo(settings: Settings, *, photo_key: str | None = None) -> InputFile | None:
+    """Фото экрана по ключу раздела; fallback: path/url/default."""
+    named = _photo_name_for_key(photo_key or "")
+    if named:
+        candidate = Path(__file__).resolve().parent.parent.parent / "assets" / "banners" / named
+        if candidate.is_file():
+            return FSInputFile(candidate)
+
     """Локальный файл (приоритет) или URL; иначе None — только текст."""
     url = (settings.bot_section_photo_url or "").strip()
     if url:
@@ -87,10 +124,11 @@ async def send_profile_screen(
     reply_markup,
     settings: Settings,
     delete_message: Message | None = None,
+    photo_key: str | None = None,
 ) -> Message:
     await delete_message_safe(delete_message)
     cap = truncate_caption(caption)
-    photo = resolve_section_photo(settings)
+    photo = resolve_section_photo(settings, photo_key=photo_key)
     if photo is not None:
         return await bot.send_photo(
             chat_id,
@@ -107,6 +145,7 @@ async def answer_callback_with_photo_screen(
     caption: str,
     reply_markup,
     settings: Settings,
+    photo_key: str | None = None,
 ) -> Message | None:
     if cq.message is None or cq.bot is None:
         return None
@@ -118,4 +157,5 @@ async def answer_callback_with_photo_screen(
         reply_markup=reply_markup,
         settings=settings,
         delete_message=cq.message,
+        photo_key=photo_key or (cq.data or ""),
     )

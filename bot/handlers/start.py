@@ -109,6 +109,7 @@ async def cmd_start(
         reply_markup=kb,
         settings=settings,
         delete_message=None,
+        photo_key="menu:main",
     )
     await delete_message_safe(message)
 
@@ -201,4 +202,5 @@ async def cb_channel_check(
         reply_markup=kb,
         settings=settings,
         delete_message=cq.message,
+        photo_key="menu:main",
     )
