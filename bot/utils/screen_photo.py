@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, FSInputFile, InputFile, Message, URLInp
 
 if TYPE_CHECKING:
     from shared.config import Settings
+from shared.md2 import strip_for_popup_alert
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +160,34 @@ async def send_profile_screen(
     await delete_message_safe(delete_message)
     cap = truncate_caption(caption)
     photo = resolve_section_photo(settings, photo_key=photo_key)
-    if photo is not None:
-        return await bot.send_photo(
+    try:
+        if photo is not None:
+            return await bot.send_photo(
+                chat_id,
+                photo,
+                caption=cap,
+                reply_markup=reply_markup,
+            )
+        return await bot.send_message(chat_id, cap, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "can't parse entities" not in str(e):
+            raise
+        # Fallback: caption мог обрезаться в середине MarkdownV2 escape-последовательности.
+        safe_plain = truncate_caption(strip_for_popup_alert(caption))
+        if photo is not None:
+            return await bot.send_photo(
+                chat_id,
+                photo,
+                caption=safe_plain,
+                reply_markup=reply_markup,
+                parse_mode=None,
+            )
+        return await bot.send_message(
             chat_id,
-            photo,
-            caption=cap,
+            safe_plain,
             reply_markup=reply_markup,
+            parse_mode=None,
         )
-    return await bot.send_message(chat_id, cap, reply_markup=reply_markup)
 
 
 async def answer_callback_with_photo_screen(
