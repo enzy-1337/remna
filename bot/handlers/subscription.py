@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -916,12 +917,23 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
     _append_transaction_detail_lines(extra_m, settings, txns_m, max_lines=28)
     text = join_lines(head, *extra_m) if extra_m else head
     show_tar = await user_has_tariff_subscription_charges(session, db_user.id)
-    await answer_callback_with_photo_screen(
-        cq,
-        caption=text,
-        reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
-        settings=settings,
-    )
+    try:
+        await answer_callback_with_photo_screen(
+            cq,
+            caption=text,
+            reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
+            settings=settings,
+        )
+    except TelegramBadRequest as e:
+        if "can't parse entities" not in str(e):
+            raise
+        safe_text = esc(strip_for_popup_alert(text))
+        await answer_callback_with_photo_screen(
+            cq,
+            caption=safe_text,
+            reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
+            settings=settings,
+        )
 
 
 @router.callback_query(F.data == "sub:detail:tariff:menu")
