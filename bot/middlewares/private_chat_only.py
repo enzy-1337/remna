@@ -35,6 +35,9 @@ class PrivateChatOnlyMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, Update):
             return await handler(event, data)
+        # Системные события подписки/отписки должны проходить даже из channel/supergroup.
+        if event.chat_member or event.my_chat_member:
+            return await handler(event, data)
         ctype = _chat_type_from_update(event)
         if ctype is not None and ctype != "private":
             return None

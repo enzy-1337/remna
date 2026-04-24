@@ -15,6 +15,7 @@ from bot.handlers.admin import router as admin_router
 from bot.handlers.admin_promo import router as admin_promo_router
 from bot.handlers.balance import router as balance_router
 from bot.handlers.calculator import router as calculator_router
+from bot.handlers.channel_events import router as channel_events_router
 from bot.handlers.devices import router as devices_router
 from bot.handlers.fallback import router as fallback_router
 from bot.handlers.github_link import router as github_link_router
@@ -55,6 +56,7 @@ def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
 
     dp.include_router(admin_router)
     dp.include_router(admin_promo_router)
+    dp.include_router(channel_events_router)
     dp.include_router(subscription_router)
     dp.include_router(devices_router)
     dp.include_router(referrals_router)

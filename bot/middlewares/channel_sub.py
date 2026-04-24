@@ -118,6 +118,9 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, Update):
             return await handler(event, data)
+        # Не проверяем принудительную подписку на системных chat_member-апдейтах.
+        if event.chat_member or event.my_chat_member:
+            return await handler(event, data)
 
         user = user_from_update(event)
         if user is None or user.is_bot:
