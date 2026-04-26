@@ -102,7 +102,7 @@ def topup_providers_keyboard(amount_rub: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="💳 Platega (СБП)",
+            text="💳 Platega",
             callback_data=f"topup:prov:platega:{amount_rub}",
         )
     )
