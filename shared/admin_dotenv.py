@@ -556,7 +556,14 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "PLATEGA_PAYMENT_METHODS",
                 "Platega способы оплаты",
                 lambda s: ",".join(str(x) for x in s.platega_payment_methods),
-                "Список идентификаторов способов оплаты через запятую. Можно комбинировать: СБП, карты, эквайринг, крипта.",
+                "Список идентификаторов способов оплаты через запятую. Можно комбинировать: СБП, карты, эквайринг, крипта. "
+                "Игнорируется в API, если включён Platega: плательщик выбирает способ на странице.",
+            ),
+            (
+                "PLATEGA_PAYER_CHOOSES_METHOD",
+                "Platega: плательщик выбирает способ на странице",
+                lambda s: "true" if s.platega_payer_chooses_method else "false",
+                "Создаётся платёж по API «без заданного метода»: POST /v2/transaction/process, без id и без paymentMethod(s).",
             ),
         ],
     ),

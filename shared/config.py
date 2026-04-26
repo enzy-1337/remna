@@ -616,6 +616,14 @@ class Settings(BaseSettings):
         validation_alias="PLATEGA_SKIP_WEBHOOK_AUTH",
         description="Только для отладки: не проверять X-MerchantId/X-Secret на вебхуке",
     )
+    platega_payer_chooses_method: bool = Field(
+        default=False,
+        validation_alias="PLATEGA_PAYER_CHOOSES_METHOD",
+        description=(
+            "Создавать ссылку без фиксированного способа: плательщик выбирает на стороне Platega (POST /v2/transaction/process). "
+            "В этом режиме PLATEGA_PAYMENT_METHODS в запрос не уходит."
+        ),
+    )
 
     @property
     def platega_payment_methods(self) -> list[int]:

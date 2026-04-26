@@ -1,4 +1,4 @@
-"""Platega.io — POST /transaction/process, вебхук по заголовкам + JSON."""
+"""Platega.io: POST /transaction/process (с фикс. способом) или /v2/transaction/process (плательщик выбирает способ). Вебхук по заголовкам + JSON."""
 
 from __future__ import annotations
 
@@ -52,27 +52,40 @@ class PlategaProvider(BasePaymentProvider):
             )
 
         payload = f"txn:{internal_transaction_id}"
-        body: dict[str, Any] = {
-            "id": str(uuid.uuid4()),
-            "paymentDetails": {
-                "amount": float(amount_rub),
-                "currency": "RUB",
-            },
-            "description": description[:512],
-            "payload": payload,
-        }
-        methods = self._s.platega_payment_methods
-        if len(methods) == 1:
-            body["paymentMethod"] = methods[0]
+        path = "/transaction/process"
+        if self._s.platega_payer_chooses_method:
+            # https://docs.platega.io/... (без заданного метода: не передавать id, только paymentDetails + description и т.д.)
+            path = "/v2/transaction/process"
+            body: dict[str, Any] = {
+                "paymentDetails": {
+                    "amount": float(amount_rub),
+                    "currency": "RUB",
+                },
+                "description": description[:512],
+                "payload": payload,
+            }
         else:
-            body["paymentMethods"] = methods
+            body = {
+                "id": str(uuid.uuid4()),
+                "paymentDetails": {
+                    "amount": float(amount_rub),
+                    "currency": "RUB",
+                },
+                "description": description[:512],
+                "payload": payload,
+            }
+            methods = self._s.platega_payment_methods
+            if len(methods) == 1:
+                body["paymentMethod"] = methods[0]
+            else:
+                body["paymentMethods"] = methods
         if self._s.platega_success_url:
             body["return"] = self._s.platega_success_url
         if self._s.platega_fail_url:
             body["failedUrl"] = self._s.platega_fail_url
 
         async with httpx.AsyncClient(base_url=self._base, timeout=30.0) as client:
-            r = await client.post("/transaction/process", headers=self._headers(), json=body)
+            r = await client.post(path, headers=self._headers(), json=body)
             txt = r.text
             if r.status_code >= 400:
                 logger.error("Platega process HTTP %s: %s", r.status_code, txt[:800])
@@ -80,7 +93,7 @@ class PlategaProvider(BasePaymentProvider):
             data = r.json()
 
         tx_id = str(data.get("transactionId") or data.get("id") or "")
-        pay_url = data.get("redirect") or data.get("payUrl") or ""
+        pay_url = data.get("url") or data.get("redirect") or data.get("payUrl") or ""
         if not tx_id or not pay_url:
             raise RuntimeError(f"Неожиданный ответ Platega: {data}")
         return CreatePaymentResult(
