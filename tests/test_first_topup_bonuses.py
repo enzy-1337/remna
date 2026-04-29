@@ -187,6 +187,43 @@ class FirstTopupBonusesTests(IsolatedAsyncioTestCase):
             self.assertIsNone(w)
             await session.commit()
 
+    async def test_welcome_sets_free_payg_steps_remaining(self) -> None:
+        settings = _settings(
+            billing_first_topup_extra_balance_percent=Decimal("0"),
+            billing_first_topup_welcome_gb=5,
+        )
+        async with self.factory() as session:
+            u = await self._mk_user(session)
+            self.assertEqual(u.billing_welcome_free_gb_steps_remaining, 0)
+            session.add(
+                Transaction(
+                    user_id=u.id,
+                    type="topup",
+                    amount=Decimal("50"),
+                    currency="RUB",
+                    payment_provider="cryptobot",
+                    payment_id="ext-welcome-steps",
+                    status="pending",
+                    description="test",
+                    meta={"telegram_id": int(u.telegram_id)},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.flush()
+            tid = (
+                await session.execute(select(Transaction.id).where(Transaction.user_id == u.id).limit(1))
+            ).scalar_one()
+            parsed = ParsedWebhookTopup(
+                internal_transaction_id=int(tid),
+                external_payment_id="ext-welcome-steps",
+                amount_rub=Decimal("50"),
+                paid=True,
+            )
+            await apply_topup_from_webhook(session, provider_name="cryptobot", parsed=parsed, settings=settings)
+            await session.refresh(u)
+            self.assertEqual(u.billing_welcome_free_gb_steps_remaining, 5)
+            await session.commit()
+
 
 if __name__ == "__main__":
     import unittest

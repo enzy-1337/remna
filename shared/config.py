@@ -317,7 +317,7 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="BILLING_FIRST_TOPUP_WELCOME_ENABLED",
         description=(
-            "Мастер-переключатель бонуса ГБ при первом пополнении без активной подписки (как отдельный флаг у триала). "
+            "Мастер-переключатель welcome при первом пополнении без активной подписки (как отдельный флаг у триала). "
             "Если false — блок welcome не выполняется даже при BILLING_FIRST_TOPUP_WELCOME_GB > 0."
         ),
     )
@@ -327,8 +327,8 @@ class Settings(BaseSettings):
         le=1024,
         validation_alias="BILLING_FIRST_TOPUP_WELCOME_GB",
         description=(
-            "ГБ к лимиту трафика в Remnawave при первом пополнении **без** активной подписки; 0 отключает сумму бонуса. "
-            "Идемпотентность по транзакции `welcome_gb_bonus:{user_id}` без изменений."
+            "Сколько первых ГБ в PAYG не тарифицируются (списание за шаг ГБ не выполняется); лимит в панели не меняется. "
+            "0 отключает. Идемпотентность по транзакции `welcome_gb_bonus:{user_id}` без изменений."
         ),
     )
     billing_legacy_lifetime_cutoff_year: int = Field(

@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,6 +68,10 @@ class User(Base):
 
     balance_floor_rw_suspended_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
+    )
+
+    billing_welcome_free_gb_steps_remaining: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
     )
 
     created_at: Mapped[datetime] = mapped_column(

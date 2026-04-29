@@ -127,6 +127,21 @@ async def charge_gb_step(
         )
         return True
 
+    if user.billing_welcome_free_gb_steps_remaining > 0:
+        user.billing_welcome_free_gb_steps_remaining -= 1
+        session.add(
+            BillingUsageEvent(
+                user_id=user.id,
+                event_id=event_id,
+                event_type="traffic_gb_step",
+                event_ts=event_ts,
+                usage_gb_step=1,
+                is_mobile_internet=is_mobile_internet,
+                meta={"package_covered": False, "first_topup_welcome_free": True},
+            )
+        )
+        return True
+
     amount = settings.billing_gb_step_rub
     # Надбавка за «мобильный интернет» из вебхука отключена: отдельная оплата только за оптим. маршрут (opt_extra).
     mobile_extra = Decimal("0")

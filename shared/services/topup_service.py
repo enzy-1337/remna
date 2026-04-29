@@ -19,7 +19,6 @@ from shared.payments.registry import get_payment_provider
 from shared.database import get_session_factory
 from shared.services.smart_cart import clear_cart, get_cart
 from shared.services.telegram_notify import send_telegram_message
-from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
 from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 from shared.services.referral_service import grant_referrer_reward_from_topup
@@ -317,6 +316,7 @@ async def apply_topup_from_webhook(
             )
         ).scalar_one_or_none()
         if already_bonus is None:
+            user.billing_welcome_free_gb_steps_remaining = welcome_gb
             session.add(
                 Transaction(
                     user_id=user.id,
@@ -326,19 +326,12 @@ async def apply_topup_from_webhook(
                     payment_provider="billing_v2",
                     payment_id=bonus_payment_id,
                     status="completed",
-                    description=f"Стартовый бонус {welcome_gb} ГБ после первого пополнения",
+                    description=(
+                        f"Первые {welcome_gb} ГБ трафика без списания с баланса (после первого пополнения)"
+                    ),
                     meta={"bonus_gb": welcome_gb},
                 )
             )
-            if user.remnawave_uuid is not None:
-                rw = RemnaWaveClient(settings)
-                try:
-                    uinfo = await rw.get_user(str(user.remnawave_uuid))
-                    current = int(uinfo.get("trafficLimitBytes") or 0)
-                    new_limit = current + welcome_gb * (1024**3)
-                    await rw.update_user(str(user.remnawave_uuid), traffic_limit_bytes=new_limit)
-                except RemnaWaveError:
-                    logger.warning("welcome GB bonus: failed to update rw user user_id=%s", user.id)
 
     await grant_referrer_reward_from_topup(
         session,

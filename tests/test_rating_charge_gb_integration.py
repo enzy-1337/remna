@@ -286,6 +286,46 @@ class RatingChargeGbIntegrationTests(IsolatedAsyncioTestCase):
             self.assertEqual(sm.total_amount_rub, Decimal("7.50"))
             await session.commit()
 
+    async def test_first_topup_welcome_free_skips_debit_until_exhausted(self) -> None:
+        settings = _settings()
+        event_ts = datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+        async with self.factory() as session:
+            u = await self._mk_hybrid_user(session, balance=Decimal("100"))
+            u.billing_welcome_free_gb_steps_remaining = 2
+            p = await self._mk_package_plan(session, monthly_gb_limit=0)
+            await self._mk_active_sub(session, user_id=u.id, plan_id=p.id)
+            bal0 = u.balance
+            await charge_gb_step(
+                session,
+                user=u,
+                event_id="gb-welcome-1",
+                event_ts=event_ts,
+                is_mobile_internet=False,
+                settings=settings,
+            )
+            self.assertEqual(u.balance, bal0)
+            self.assertEqual(u.billing_welcome_free_gb_steps_remaining, 1)
+            await charge_gb_step(
+                session,
+                user=u,
+                event_id="gb-welcome-2",
+                event_ts=event_ts,
+                is_mobile_internet=False,
+                settings=settings,
+            )
+            self.assertEqual(u.balance, bal0)
+            self.assertEqual(u.billing_welcome_free_gb_steps_remaining, 0)
+            await charge_gb_step(
+                session,
+                user=u,
+                event_id="gb-welcome-3",
+                event_ts=event_ts,
+                is_mobile_internet=False,
+                settings=settings,
+            )
+            self.assertEqual(u.balance, bal0 - Decimal("5"))
+            await session.commit()
+
 
 if __name__ == "__main__":
     import unittest
