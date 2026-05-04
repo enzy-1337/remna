@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.config import Settings
 from shared.database import get_session_factory
 from shared.models.billing_daily_summary import BillingDailySummary
+from shared.models.subscription import Subscription
+from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.billing_v2.balance_floor_panel_service import reconcile_hybrid_balance_floor_panel_batch
 from shared.services.telegram_notify import send_telegram_message
@@ -70,10 +72,43 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
             )
         ).scalars()
     )
+    user_ids = [int(u.id) for u in users]
+    users_with_any_subscription: set[int] = set()
+    users_with_completed_topup: set[int] = set()
+    if user_ids:
+        users_with_any_subscription = set(
+            (
+                await session.execute(
+                    select(Subscription.user_id)
+                    .where(Subscription.user_id.in_(user_ids))
+                    .distinct()
+                )
+            ).scalars()
+        )
+        users_with_completed_topup = set(
+            (
+                await session.execute(
+                    select(Transaction.user_id)
+                    .where(
+                        Transaction.user_id.in_(user_ids),
+                        Transaction.type == "topup",
+                        Transaction.status == "completed",
+                    )
+                    .distinct()
+                )
+            ).scalars()
+        )
     sent24 = 0
     sent1 = 0
     now = datetime.now(timezone.utc)
     for user in users:
+        # Не тревожим новых пользователей: без подписок и без успешных пополнений.
+        if (
+            int(user.id) not in users_with_any_subscription
+            and int(user.id) not in users_with_completed_topup
+        ):
+            user.low_balance_notified_at = None
+            continue
         floor = settings.billing_balance_floor_rub
         if user.balance <= Decimal("10") and user.balance > floor:
             if user.low_balance_notified_at is None:
