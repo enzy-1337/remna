@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.middlewares.db_session import DbSessionMiddleware
+from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from shared.config import get_settings
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin_plain
@@ -65,6 +66,7 @@ def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
+    dp.update.middleware(PrivateChatOnlyMiddleware())
     dp.update.middleware(DbSessionMiddleware())
     dp.include_router(tickets_router())
     dp.run_polling(bot)
