@@ -90,6 +90,7 @@ from shared.services.admin_purchase_refund_service import admin_refund_purchase_
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.admin_notify import notify_admin
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     admin_convert_monthly_subscriptions_to_payg_balance,
@@ -3629,18 +3630,28 @@ async def admin_ticket_user_add_balance(
             if au is not None:
                 admin_db_id = au.id
         u.balance += amt
-        session.add(
-            Transaction(
-                user_id=u.id,
-                type="admin_balance_add",
-                amount=amt,
-                currency="RUB",
-                payment_provider="admin",
-                payment_id=None,
-                status="completed",
-                description=f"Админ (web) добавил баланс: +{amt} ₽",
-                meta={"admin_id": admin_db_id, "source": "web_tickets"},
-            )
+        txn_bal = Transaction(
+            user_id=u.id,
+            type="admin_balance_add",
+            amount=amt,
+            currency="RUB",
+            payment_provider="admin",
+            payment_id=None,
+            status="completed",
+            description=f"Админ (web) добавил баланс: +{amt} ₽",
+            meta={"admin_id": admin_db_id, "source": "web_tickets"},
+        )
+        session.add(txn_bal)
+        await session.flush()
+        settings = get_settings()
+        await apply_balance_credit_followups(
+            session,
+            user=u,
+            credited=amt,
+            settings=settings,
+            triggering_txn=txn_bal,
+            grant_referrer_reward=True,
+            try_smart_cart=True,
         )
         await session.commit()
     return RedirectResponse(f"/admin/tickets/{ticket_id}?n=bal_ok", status_code=303)
@@ -6208,18 +6219,28 @@ async def admin_user_add_balance(
             if au is not None:
                 admin_db_id = au.id
         u.balance += amt
-        session.add(
-            Transaction(
-                user_id=u.id,
-                type="admin_balance_add",
-                amount=amt,
-                currency="RUB",
-                payment_provider="admin",
-                payment_id=None,
-                status="completed",
-                description=f"Админ (web user) добавил баланс: +{amt} ₽",
-                meta={"admin_id": admin_db_id, "source": "web_user"},
-            )
+        txn_bal = Transaction(
+            user_id=u.id,
+            type="admin_balance_add",
+            amount=amt,
+            currency="RUB",
+            payment_provider="admin",
+            payment_id=None,
+            status="completed",
+            description=f"Админ (web user) добавил баланс: +{amt} ₽",
+            meta={"admin_id": admin_db_id, "source": "web_user"},
+        )
+        session.add(txn_bal)
+        await session.flush()
+        settings = get_settings()
+        await apply_balance_credit_followups(
+            session,
+            user=u,
+            credited=amt,
+            settings=settings,
+            triggering_txn=txn_bal,
+            grant_referrer_reward=True,
+            try_smart_cart=True,
         )
         await session.commit()
     _USERS_HTML_CACHE.clear()
@@ -6941,18 +6962,28 @@ async def admin_profile_add_balance(request: Request, amount: str = Form(...)) -
             if au is not None:
                 admin_db_id = au.id
         u.balance += amt
-        session.add(
-            Transaction(
-                user_id=u.id,
-                type="admin_balance_add",
-                amount=amt,
-                currency="RUB",
-                payment_provider="admin",
-                payment_id=None,
-                status="completed",
-                description=f"Админ (web profile) добавил баланс: +{amt} ₽",
-                meta={"admin_id": admin_db_id, "source": "web_profile"},
-            )
+        txn_bal = Transaction(
+            user_id=u.id,
+            type="admin_balance_add",
+            amount=amt,
+            currency="RUB",
+            payment_provider="admin",
+            payment_id=None,
+            status="completed",
+            description=f"Админ (web profile) добавил баланс: +{amt} ₽",
+            meta={"admin_id": admin_db_id, "source": "web_profile"},
+        )
+        session.add(txn_bal)
+        await session.flush()
+        settings = get_settings()
+        await apply_balance_credit_followups(
+            session,
+            user=u,
+            credited=amt,
+            settings=settings,
+            triggering_txn=txn_bal,
+            grant_referrer_reward=True,
+            try_smart_cart=True,
         )
         await session.commit()
     _USERS_HTML_CACHE.clear()

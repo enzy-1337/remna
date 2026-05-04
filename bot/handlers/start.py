@@ -27,13 +27,14 @@ from shared.services.billing_v2.transition_service import maybe_switch_to_hybrid
 router = Router(name="start")
 
 
-async def _has_completed_topup(session: AsyncSession, user_id: int) -> bool:
+async def _had_balance_credit(session: AsyncSession, user_id: int) -> bool:
+    """Оплаченное пополнение или успешное ручное зачисление админом (web / бот)."""
     return (
         await session.execute(
             select(Transaction.id)
             .where(
                 Transaction.user_id == user_id,
-                Transaction.type == "topup",
+                Transaction.type.in_(("topup", "admin_balance_add")),
                 Transaction.status == "completed",
             )
             .limit(1)
@@ -102,7 +103,7 @@ async def cmd_start(
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(user, has_act))
-    has_completed_topup = await _has_completed_topup(session, user.id)
+    has_completed_topup = await _had_balance_credit(session, user.id)
     show_welcome_topup = not has_completed_topup
     kb = profile_main_keyboard(
         show_trial=show_trial,
@@ -118,7 +119,7 @@ async def cmd_start(
             "💡 " + bold("Старт без пакетного тарифа"),
             plain("Пополните баланс через платёж в боте — после первого успешного пополнения от 10 ₽ подключится доступ PAYG (устройства и трафик)."),
             plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
-            plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
+            plain("Бонусы первого зачисления — после успешной оплаты в боте или начисления администратором."),
         )
         if show_welcome_topup:
             no_sub_hint = join_lines(
@@ -206,7 +207,7 @@ async def cb_channel_check(
 
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
-    has_completed_topup = await _has_completed_topup(session, db_user.id)
+    has_completed_topup = await _had_balance_credit(session, db_user.id)
     show_welcome_topup = not has_completed_topup
     kb = profile_main_keyboard(
         show_trial=show_trial,
@@ -222,7 +223,7 @@ async def cb_channel_check(
             "💡 " + bold("Старт без пакетного тарифа"),
             plain("Пополните баланс через платёж в боте — после первого успешного пополнения от 10 ₽ подключится доступ PAYG (устройства и трафик)."),
             plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
-            plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
+            plain("Бонусы первого зачисления — после успешной оплаты в боте или начисления администратором."),
         )
         if show_welcome_topup:
             no_sub_hint = join_lines(

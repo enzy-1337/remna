@@ -74,7 +74,7 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
     )
     user_ids = [int(u.id) for u in users]
     users_with_any_subscription: set[int] = set()
-    users_with_completed_topup: set[int] = set()
+    users_with_balance_credit: set[int] = set()
     if user_ids:
         users_with_any_subscription = set(
             (
@@ -85,13 +85,13 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
                 )
             ).scalars()
         )
-        users_with_completed_topup = set(
+        users_with_balance_credit = set(
             (
                 await session.execute(
                     select(Transaction.user_id)
                     .where(
                         Transaction.user_id.in_(user_ids),
-                        Transaction.type == "topup",
+                        Transaction.type.in_(("topup", "admin_balance_add")),
                         Transaction.status == "completed",
                     )
                     .distinct()
@@ -105,7 +105,7 @@ async def process_negative_balance_notifications(session: AsyncSession, settings
         # Не тревожим новых пользователей: без подписок и без успешных пополнений.
         if (
             int(user.id) not in users_with_any_subscription
-            and int(user.id) not in users_with_completed_topup
+            and int(user.id) not in users_with_balance_credit
         ):
             user.low_balance_notified_at = None
             continue

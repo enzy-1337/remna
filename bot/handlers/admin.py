@@ -43,6 +43,7 @@ from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
+from shared.services.topup_service import apply_balance_credit_followups
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
 from shared.services.admin_log_topics import AdminLogTopic
@@ -2124,25 +2125,34 @@ async def msg_admin_add_balance(
     await state.clear()
 
     u.balance += amount
-    session.add(
-        Transaction(
-            user_id=u.id,
-            type="admin_balance_add",
-            amount=amount,
-            currency="RUB",
-            payment_provider="admin",
-            payment_id=None,
-            status="completed",
-            description=f"Админ добавил баланс: +{amount} ₽ (admin #{db_user.id})",
-            meta={"admin_id": db_user.id},
-        )
+    txn_bal = Transaction(
+        user_id=u.id,
+        type="admin_balance_add",
+        amount=amount,
+        currency="RUB",
+        payment_provider="admin",
+        payment_id=None,
+        status="completed",
+        description=f"Админ добавил баланс: +{amount} ₽ (admin #{db_user.id})",
+        meta={"admin_id": db_user.id},
+    )
+    session.add(txn_bal)
+    await session.flush()
+    settings = get_settings()
+    await apply_balance_credit_followups(
+        session,
+        user=u,
+        credited=amount,
+        settings=settings,
+        triggering_txn=txn_bal,
+        grant_referrer_reward=True,
+        try_smart_cart=True,
     )
 
     await session.commit()
 
     viewer = message.from_user.id if message.from_user else None
     built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
-    settings = get_settings()
     await notify_admin(
         settings,
         title="💳 " + bold("Админ: пополнение баланса"),

@@ -124,6 +124,212 @@ async def create_topup_payment(
     return txn, result.pay_url
 
 
+async def _has_prior_balance_credit_transaction(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    exclude_txn_id: int,
+) -> bool:
+    """Есть ли уже другое завершённое зачисление: оплата пополнения или ручное начисление админом."""
+    return (
+        await session.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.type.in_(("topup", "admin_balance_add")),
+                Transaction.status == "completed",
+                Transaction.id != exclude_txn_id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def apply_balance_credit_followups(
+    session: AsyncSession,
+    *,
+    user: User,
+    credited: Decimal,
+    settings: Settings,
+    triggering_txn: Transaction,
+    grant_referrer_reward: bool = True,
+    try_smart_cart: bool = False,
+) -> tuple[Decimal, Decimal]:
+    """
+    Вызывать после того, как ``user.balance`` уже увеличен на ``credited``.
+
+    Та же логика, что после успешного платёжного пополнения: промо к пополнению, бонус первого зачисления,
+    welcome ГБ, PAYG bootstrap, синхронизация панели при полу баланса, опционально корзина тарифа.
+
+    Возвращает (promo_bonus_total, first_topup_extra_total).
+    """
+    if credited <= 0:
+        return Decimal("0"), Decimal("0")
+
+    # Промо: бонус % к сумме этого зачисления
+    promo_bonus_total = Decimal("0")
+    now = datetime.now(timezone.utc)
+    r2 = await session.execute(
+        select(PromoUsage, PromoCode)
+        .join(PromoCode, PromoUsage.promo_id == PromoCode.id)
+        .where(
+            PromoUsage.user_id == user.id,
+            PromoCode.type == "topup_bonus_percent",
+            PromoUsage.topup_bonus_applied_at.is_(None),
+        )
+    )
+    for usage, promo in r2.all():
+        percent = Decimal(str(promo.value))
+        if percent <= 0:
+            usage.topup_bonus_applied_at = now
+            continue
+        bonus = (credited * percent / Decimal("100")).quantize(Decimal("0.01"))
+        if bonus > 0:
+            user.balance += bonus
+            promo_bonus_total += bonus
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="promo_topup_bonus",
+                    amount=bonus,
+                    currency="RUB",
+                    payment_provider="promo",
+                    payment_id=promo.code,
+                    status="completed",
+                    description=f"Промокод {promo.code}: бонус к пополнению (+{percent}%)",
+                    meta={
+                        "promo_id": promo.id,
+                        "promo_type": promo.type,
+                        "promo_percent": str(percent),
+                        "base_topup_amount": str(credited),
+                        "source_txn_id": triggering_txn.id,
+                    },
+                )
+            )
+        usage.topup_bonus_applied_at = now
+
+    first_balance_event = not await _has_prior_balance_credit_transaction(
+        session, user_id=user.id, exclude_txn_id=int(triggering_txn.id)
+    )
+
+    ft_extra_total = Decimal("0")
+    first_topup_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
+    first_topup_fixed_bonus = Decimal(str(getattr(settings, "billing_first_topup_fixed_bonus_rub", Decimal("0"))))
+    if first_balance_event and credited >= first_topup_min:
+        bonus_pid = f"first_topup_balance_bonus:{triggering_txn.id}"
+        exists_b = (
+            await session.execute(
+                select(Transaction.id).where(Transaction.payment_id == bonus_pid).limit(1)
+            )
+        ).scalar_one_or_none()
+        if exists_b is None:
+            bonus_desc = ""
+            bonus_meta: dict[str, str | int] = {
+                "from_topup_txn_id": triggering_txn.id,
+                "from_amount_rub": str(credited),
+            }
+            extra = Decimal("0")
+            if first_topup_fixed_bonus > Decimal("0"):
+                extra = first_topup_fixed_bonus.quantize(Decimal("0.01"))
+                bonus_desc = f"Бонус первого пополнения (+{extra} ₽ фикс.)"
+                bonus_meta["mode"] = "fixed"
+                bonus_meta["fixed_rub"] = str(extra)
+            elif settings.billing_first_topup_extra_balance_percent > Decimal("0"):
+                pct = settings.billing_first_topup_extra_balance_percent
+                extra = (credited * (pct / Decimal("100"))).quantize(Decimal("0.01"))
+                bonus_desc = f"Бонус первого пополнения (+{pct:g}% к сумме платежа)"
+                bonus_meta["mode"] = "percent"
+                bonus_meta["percent"] = str(pct)
+            if extra > Decimal("0"):
+                user.balance += extra
+                ft_extra_total = extra
+                session.add(
+                    Transaction(
+                        user_id=user.id,
+                        type="first_topup_balance_bonus",
+                        amount=extra,
+                        currency="RUB",
+                        payment_provider="billing_v2",
+                        payment_id=bonus_pid,
+                        status="completed",
+                        description=bonus_desc,
+                        meta=bonus_meta,
+                    )
+                )
+
+    had_active_sub_before_payg = (
+        await session.execute(
+            select(Subscription.id)
+            .where(
+                Subscription.user_id == user.id,
+                Subscription.status.in_(("active", "trial")),
+                Subscription.expires_at > datetime.now(timezone.utc),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+    payg_bootstrap_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
+    qualifies_for_payg_bootstrap = credited >= payg_bootstrap_min
+
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled and qualifies_for_payg_bootstrap:
+        from shared.services.subscription_service import provision_hybrid_payg_panel_if_needed
+
+        await provision_hybrid_payg_panel_if_needed(session, user=user, settings=settings)
+
+    welcome_gb = int(settings.billing_first_topup_welcome_gb)
+    if (
+        first_balance_event
+        and not had_active_sub_before_payg
+        and settings.billing_first_topup_welcome_enabled
+        and welcome_gb > 0
+    ):
+        bonus_payment_id = f"welcome_gb_bonus:{user.id}"
+        already_bonus = (
+            await session.execute(
+                select(Transaction.id)
+                .where(Transaction.user_id == user.id, Transaction.payment_id == bonus_payment_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if already_bonus is None:
+            user.billing_welcome_free_gb_steps_remaining = welcome_gb
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    type="welcome_gb_bonus",
+                    amount=Decimal("0"),
+                    currency="RUB",
+                    payment_provider="billing_v2",
+                    payment_id=bonus_payment_id,
+                    status="completed",
+                    description=(
+                        f"Первые {welcome_gb} ГБ трафика без списания с баланса (после первого пополнения)"
+                    ),
+                    meta={"bonus_gb": welcome_gb},
+                )
+            )
+
+    if grant_referrer_reward:
+        await grant_referrer_reward_from_topup(
+            session,
+            referred_user=user,
+            topup_amount_rub=credited,
+            settings=settings,
+            internal_topup_txn_id=int(triggering_txn.id),
+        )
+
+    await session.flush()
+
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+        await sync_hybrid_balance_floor_panel_state(session, user, settings)
+
+    if try_smart_cart and int(user.telegram_id) > 0:
+        await try_apply_smart_cart_after_topup(session, int(user.telegram_id), settings)
+
+    return promo_bonus_total, ft_extra_total
+
+
 async def apply_topup_from_webhook(
     session: AsyncSession,
     *,
@@ -184,105 +390,15 @@ async def apply_topup_from_webhook(
 
     user.balance += credited
 
-    # Применяем бонус к первому успешному пополнению после активации промокода.
-    # Начисление идемпотентно: если промокод уже применялся к пополнению, это отмечено в promo_usages.
-    promo_bonus_total = Decimal("0")
-    now = datetime.now(timezone.utc)  # местное время для метки applied_at
-    r2 = await session.execute(
-        select(PromoUsage, PromoCode)
-        .join(PromoCode, PromoUsage.promo_id == PromoCode.id)
-        .where(
-            PromoUsage.user_id == user.id,
-            PromoCode.type == "topup_bonus_percent",
-            PromoUsage.topup_bonus_applied_at.is_(None),
-        )
+    promo_bonus_total, ft_extra_total = await apply_balance_credit_followups(
+        session,
+        user=user,
+        credited=credited,
+        settings=settings,
+        triggering_txn=txn,
+        grant_referrer_reward=True,
+        try_smart_cart=False,
     )
-    for usage, promo in r2.all():
-        percent = Decimal(str(promo.value))
-        if percent <= 0:
-            usage.topup_bonus_applied_at = now
-            continue
-        bonus = (credited * percent / Decimal("100")).quantize(Decimal("0.01"))
-        if bonus > 0:
-            user.balance += bonus
-            promo_bonus_total += bonus
-            session.add(
-                Transaction(
-                    user_id=user.id,
-                    type="promo_topup_bonus",
-                    amount=bonus,
-                    currency="RUB",
-                    payment_provider="promo",
-                    payment_id=promo.code,
-                    status="completed",
-                    description=f"Промокод {promo.code}: бонус к пополнению (+{percent}%)",
-                    meta={
-                        "promo_id": promo.id,
-                        "promo_type": promo.type,
-                        "promo_percent": str(percent),
-                        "base_topup_amount": str(credited),
-                    },
-                )
-            )
-        usage.topup_bonus_applied_at = now
-
-    first_topup = (
-        await session.execute(
-            select(Transaction.id)
-            .where(
-                Transaction.user_id == user.id,
-                Transaction.type == "topup",
-                Transaction.status == "completed",
-                Transaction.id != txn.id,
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none() is None
-
-    ft_extra_total = Decimal("0")
-    first_topup_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
-    first_topup_fixed_bonus = Decimal(str(getattr(settings, "billing_first_topup_fixed_bonus_rub", Decimal("0"))))
-    if first_topup and credited >= first_topup_min:
-        bonus_pid = f"first_topup_balance_bonus:{txn.id}"
-        exists_b = (
-            await session.execute(
-                select(Transaction.id).where(Transaction.payment_id == bonus_pid).limit(1)
-            )
-        ).scalar_one_or_none()
-        if exists_b is None:
-            bonus_desc = ""
-            bonus_meta: dict[str, str | int] = {
-                "from_topup_txn_id": txn.id,
-                "from_amount_rub": str(credited),
-            }
-            extra = Decimal("0")
-            if first_topup_fixed_bonus > Decimal("0"):
-                extra = first_topup_fixed_bonus.quantize(Decimal("0.01"))
-                bonus_desc = f"Бонус первого пополнения (+{extra} ₽ фикс.)"
-                bonus_meta["mode"] = "fixed"
-                bonus_meta["fixed_rub"] = str(extra)
-            elif settings.billing_first_topup_extra_balance_percent > Decimal("0"):
-                pct = settings.billing_first_topup_extra_balance_percent
-                extra = (credited * (pct / Decimal("100"))).quantize(Decimal("0.01"))
-                bonus_desc = f"Бонус первого пополнения (+{pct:g}% к сумме платежа)"
-                bonus_meta["mode"] = "percent"
-                bonus_meta["percent"] = str(pct)
-            if extra > Decimal("0"):
-                user.balance += extra
-                ft_extra_total = extra
-                session.add(
-                    Transaction(
-                        user_id=user.id,
-                        type="first_topup_balance_bonus",
-                        amount=extra,
-                        currency="RUB",
-                        payment_provider="billing_v2",
-                        payment_id=bonus_pid,
-                        status="completed",
-                        description=bonus_desc,
-                        meta=bonus_meta,
-                    )
-                )
 
     txn.status = "completed"
     meta = dict(txn.meta or {})
@@ -294,72 +410,7 @@ async def apply_topup_from_webhook(
 
     tg_id = int(meta.get("telegram_id") or 0)
 
-    had_active_sub_before_payg = (
-        await session.execute(
-            select(Subscription.id)
-            .where(
-                Subscription.user_id == user.id,
-                Subscription.status.in_(("active", "trial")),
-                Subscription.expires_at > datetime.now(timezone.utc),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none() is not None
-
-    payg_bootstrap_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
-    topup_qualifies_for_payg_bootstrap = credited >= payg_bootstrap_min
-
-    if user.billing_mode == "hybrid" and settings.billing_v2_enabled and topup_qualifies_for_payg_bootstrap:
-        from shared.services.subscription_service import provision_hybrid_payg_panel_if_needed
-
-        await provision_hybrid_payg_panel_if_needed(session, user=user, settings=settings)
-
-    # Приветственный бонус ГБ на первом пополнении без активной подписки (см. BILLING_FIRST_TOPUP_WELCOME_GB).
-    welcome_gb = int(settings.billing_first_topup_welcome_gb)
-    if (
-        first_topup
-        and not had_active_sub_before_payg
-        and settings.billing_first_topup_welcome_enabled
-        and welcome_gb > 0
-    ):
-        bonus_payment_id = f"welcome_gb_bonus:{user.id}"
-        already_bonus = (
-            await session.execute(
-                select(Transaction.id)
-                .where(Transaction.user_id == user.id, Transaction.payment_id == bonus_payment_id)
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if already_bonus is None:
-            user.billing_welcome_free_gb_steps_remaining = welcome_gb
-            session.add(
-                Transaction(
-                    user_id=user.id,
-                    type="welcome_gb_bonus",
-                    amount=Decimal("0"),
-                    currency="RUB",
-                    payment_provider="billing_v2",
-                    payment_id=bonus_payment_id,
-                    status="completed",
-                    description=(
-                        f"Первые {welcome_gb} ГБ трафика без списания с баланса (после первого пополнения)"
-                    ),
-                    meta={"bonus_gb": welcome_gb},
-                )
-            )
-
-    await grant_referrer_reward_from_topup(
-        session,
-        referred_user=user,
-        topup_amount_rub=credited,
-        settings=settings,
-        internal_topup_txn_id=txn.id,
-    )
-
     await session.flush()
-
-    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
-        await sync_hybrid_balance_floor_panel_state(session, user, settings)
 
     credited_total = credited + promo_bonus_total + ft_extra_total
     return "completed", (tg_id if tg_id else None), credited_total, user.id, promo_bonus_total, ft_extra_total
