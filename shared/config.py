@@ -296,7 +296,17 @@ class Settings(BaseSettings):
         description="Доплата ₽ за 1 шаг pay-as-you-go ГБ при включённом «оптимизированном маршруте»",
     )
     billing_balance_floor_rub: Decimal = Field(default=Decimal("-50"), validation_alias="BILLING_BALANCE_FLOOR_RUB")
-    billing_min_topup_rub: Decimal = Field(default=Decimal("1"), validation_alias="BILLING_MIN_TOPUP_RUB")
+    billing_min_topup_rub: Decimal = Field(default=Decimal("10"), validation_alias="BILLING_MIN_TOPUP_RUB")
+    billing_first_topup_fixed_bonus_rub: Decimal = Field(
+        default=Decimal("10"),
+        ge=Decimal("0"),
+        le=Decimal("10000"),
+        validation_alias="BILLING_FIRST_TOPUP_FIXED_BONUS_RUB",
+        description=(
+            "Фиксированный бонус в ₽ при первом успешном пополнении (если сумма не ниже порога "
+            "BILLING_FIRST_TOPUP_EXTRA_BALANCE_MIN_RUB). 0 — выключено."
+        ),
+    )
     billing_first_topup_extra_balance_percent: Decimal = Field(
         default=Decimal("0"),
         ge=Decimal("0"),

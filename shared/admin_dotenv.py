@@ -277,6 +277,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Минимальная сумма создания счёта на пополнение.",
             ),
             (
+                "BILLING_FIRST_TOPUP_FIXED_BONUS_RUB",
+                "Фикс. бонус 1-го пополнения (₽)",
+                lambda s: str(getattr(s, "billing_first_topup_fixed_bonus_rub", "0")),
+                "Сколько рублей добавить к первому успешному пополнению при сумме от BILLING_FIRST_TOPUP_EXTRA_BALANCE_MIN_RUB.",
+            ),
+            (
                 "BILLING_TRAFFIC_RW_METER_ENABLED",
                 "Опрос панели для ГБ (ceil)",
                 lambda s: "true" if s.billing_traffic_rw_meter_enabled else "false",

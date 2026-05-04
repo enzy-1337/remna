@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message, User as TgUser
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.handlers.common import reject_if_blocked, support_telegram_url
@@ -13,6 +14,7 @@ from bot.keyboards.profile_kb import profile_main_keyboard
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import delete_message_safe, send_profile_screen
 from shared.models.user import User
+from shared.models.transaction import Transaction
 from shared.config import get_settings
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
@@ -23,6 +25,20 @@ from shared.services.user_registration import register_user
 from shared.services.billing_v2.transition_service import maybe_switch_to_hybrid
 
 router = Router(name="start")
+
+
+async def _has_completed_topup(session: AsyncSession, user_id: int) -> bool:
+    return (
+        await session.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.type == "topup",
+                Transaction.status == "completed",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
 
 
 def extract_start_payload(message: Message) -> str | None:
@@ -86,10 +102,13 @@ async def cmd_start(
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(user, has_act))
+    has_completed_topup = await _has_completed_topup(session, user.id)
+    show_welcome_topup = not has_completed_topup
     kb = profile_main_keyboard(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_welcome_topup=show_welcome_topup,
     )
     profile_block = profile_caption(user, tg, is_admin=is_bot_admin)
     no_sub_hint = ""
@@ -97,10 +116,18 @@ async def cmd_start(
         no_sub_hint = join_lines(
             "",
             "💡 " + bold("Старт без пакетного тарифа"),
-            plain("Пополните баланс через платёж в боте — при гибридном биллинге подключится списание pay-as-you-go (устройства и трафик)."),
+            plain("Пополните баланс через платёж в боте — после первого успешного пополнения от 10 ₽ подключится доступ PAYG (устройства и трафик)."),
             plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
             plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
         )
+        if show_welcome_topup:
+            no_sub_hint = join_lines(
+                no_sub_hint,
+                "",
+                "🧪 " + bold("Проверка платежа"),
+                plain("Сделайте тестовый платёж на 10 ₽ кнопкой ниже."),
+                plain("После первого успешного пополнения от 10 ₽ начислим приветственный бонус +10 ₽ на баланс."),
+            )
     body = join_lines(*intro_lines, "", profile_block, no_sub_hint)
     await send_profile_screen(
         message.bot,
@@ -179,10 +206,13 @@ async def cb_channel_check(
 
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
+    has_completed_topup = await _has_completed_topup(session, db_user.id)
+    show_welcome_topup = not has_completed_topup
     kb = profile_main_keyboard(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        show_welcome_topup=show_welcome_topup,
     )
     cap = profile_caption(db_user, tg_user, is_admin=is_bot_admin)
     no_sub_hint = ""
@@ -190,10 +220,18 @@ async def cb_channel_check(
         no_sub_hint = join_lines(
             "",
             "💡 " + bold("Старт без пакетного тарифа"),
-            plain("Пополните баланс через платёж в боте — при гибридном биллинге подключится списание pay-as-you-go (устройства и трафик)."),
+            plain("Пополните баланс через платёж в боте — после первого успешного пополнения от 10 ₽ подключится доступ PAYG (устройства и трафик)."),
             plain("Пакетный тариф в «Моя подписка» → «Тарифы» — только если так удобнее."),
             plain("Бонусы первого пополнения — только за успешный платёж в боте, не за ручное начисление админом."),
         )
+        if show_welcome_topup:
+            no_sub_hint = join_lines(
+                no_sub_hint,
+                "",
+                "🧪 " + bold("Проверка платежа"),
+                plain("Сделайте тестовый платёж на 10 ₽ кнопкой ниже."),
+                plain("После первого успешного пополнения от 10 ₽ начислим приветственный бонус +10 ₽ на баланс."),
+            )
     caption = join_lines(*intro_lines, "", cap, no_sub_hint) if intro_lines else join_lines(cap, no_sub_hint)
     await send_profile_screen(
         cq.bot,

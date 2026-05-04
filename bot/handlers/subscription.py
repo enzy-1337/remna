@@ -74,6 +74,7 @@ def _sub_main_keyboard(
     optimized_on: bool = False,
     show_reissue_subscription: bool = False,
     show_tariffs: bool = True,
+    show_renewal_controls: bool = True,
 ) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_active:
@@ -106,7 +107,8 @@ def _sub_main_keyboard(
                     callback_data="sub:reissue:ask",
                 )
             )
-        b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
+        if show_renewal_controls:
+            b.row(InlineKeyboardButton(text="🔄 Продление подписки", callback_data="sub:renewal_menu"))
     else:
         if show_tariffs:
             b.row(
@@ -135,6 +137,7 @@ async def _sub_main_markup(
     show_detail = settings.billing_v2_enabled and db_user.billing_mode == "hybrid" and has_active
     show_reissue = bool(has_active and db_user.remnawave_uuid is not None)
     show_tariffs = await tariff_purchases_enabled(settings)
+    show_renewal_controls = show_tariffs
     return _sub_main_keyboard(
         has_active=has_active,
         subscription_url=subscription_url,
@@ -143,6 +146,7 @@ async def _sub_main_markup(
         optimized_on=db_user.optimized_route_enabled,
         show_reissue_subscription=show_reissue,
         show_tariffs=show_tariffs,
+        show_renewal_controls=show_renewal_controls,
     ).as_markup()
 
 
@@ -737,6 +741,7 @@ async def cb_renewal_menu(
     plan = await session.get(Plan, sub.plan_id) if sub.plan_id else None
     monthly_price = str(plan.price_rub) if plan is not None else "—"
     auto_text = "включено ✅" if sub.auto_renew else "выключено ⏸"
+    tariffs_enabled = await tariff_purchases_enabled(get_settings())
     cap = join_lines(
         "🔄 " + bold("Продление подписки"),
         "",
@@ -744,12 +749,18 @@ async def cb_renewal_menu(
         plain("Стоимость продления в месяц: ") + bold(monthly_price) + plain(" ₽"),
         plain("Текущее автопродление: ") + bold(auto_text),
     )
+    if not tariffs_enabled:
+        cap = join_lines(
+            cap,
+            "",
+            plain("⛔ Продление сейчас отключено: магазин тарифов выключен."),
+            plain("Текущая подписка действует до конца срока, затем пользователь переходит на PAYG."),
+        )
     b = InlineKeyboardBuilder()
-    show_shop = await tariff_purchases_enabled(get_settings())
-    if show_shop:
+    if tariffs_enabled:
         b.row(InlineKeyboardButton(text="💳 Продлить подписку", callback_data="sub:extend"))
-    toggle_text = "⏸ Выключить автопродление" if sub.auto_renew else "▶️ Включить автопродление"
-    b.row(InlineKeyboardButton(text=toggle_text, callback_data="sub:renewal_toggle"))
+        toggle_text = "⏸ Выключить автопродление" if sub.auto_renew else "▶️ Включить автопродление"
+        b.row(InlineKeyboardButton(text=toggle_text, callback_data="sub:renewal_toggle"))
     b.row(InlineKeyboardButton(text="⬅️ Назад к подписке", callback_data="menu:sub_main"))
     await answer_callback_with_photo_screen(
         cq,
@@ -768,6 +779,9 @@ async def cb_renewal_toggle(
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    if not await tariff_purchases_enabled(get_settings()):
+        await cq.answer("Продление отключено, пока выключена продажа тарифов.", show_alert=True)
+        return
     sub = await get_active_subscription(session, db_user.id)
     if not sub:
         await cq.answer("Нет активной подписки.", show_alert=True)

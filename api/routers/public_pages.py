@@ -102,6 +102,7 @@ def _subscription_page(
 ) -> HTMLResponse:
     bot_href = _esc((bot_open_url or "").strip()) or "#"
     bot_btn_disabled = " opacity-60 pointer-events-none" if not (bot_open_url or "").strip() else ""
+    topup_href = f"/sub/{_esc(token)}/topup"
     active_badge = "Активна"
     hint_html = f'<div class="subid">{_esc(headline_hint or "")}</div>' if headline_hint else ""
     page = f"""<!DOCTYPE html>
@@ -227,6 +228,7 @@ def _subscription_page(
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
     <section class="actions">
+      <a class="btn btn-outline" href="{topup_href}">Пополнить баланс</a>
       <a class="btn btn-primary{bot_btn_disabled}" href="{bot_href}">Перейти в бота</a>
     </section>
   </main>

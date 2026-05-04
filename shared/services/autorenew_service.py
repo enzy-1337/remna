@@ -21,6 +21,7 @@ from shared.services.remnawave_description import build_remnawave_panel_descript
 from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.subscription_service import get_base_subscription_plan
+from shared.services.feature_flags import tariff_purchases_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
     Возвращает число успешных продлений.
     """
     if not settings.subscription_autorenew_enabled:
+        return 0
+    if not await tariff_purchases_enabled(settings):
         return 0
 
     base_plan = await get_base_subscription_plan(session)

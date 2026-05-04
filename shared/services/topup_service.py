@@ -240,37 +240,49 @@ async def apply_topup_from_webhook(
     ).scalar_one_or_none() is None
 
     ft_extra_total = Decimal("0")
-    if first_topup and settings.billing_first_topup_extra_balance_percent > Decimal("0"):
-        if credited >= settings.billing_first_topup_extra_balance_min_rub:
-            pct = settings.billing_first_topup_extra_balance_percent
-            extra = (credited * (pct / Decimal("100"))).quantize(Decimal("0.01"))
+    first_topup_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
+    first_topup_fixed_bonus = Decimal(str(getattr(settings, "billing_first_topup_fixed_bonus_rub", Decimal("0"))))
+    if first_topup and credited >= first_topup_min:
+        bonus_pid = f"first_topup_balance_bonus:{txn.id}"
+        exists_b = (
+            await session.execute(
+                select(Transaction.id).where(Transaction.payment_id == bonus_pid).limit(1)
+            )
+        ).scalar_one_or_none()
+        if exists_b is None:
+            bonus_desc = ""
+            bonus_meta: dict[str, str | int] = {
+                "from_topup_txn_id": txn.id,
+                "from_amount_rub": str(credited),
+            }
+            extra = Decimal("0")
+            if first_topup_fixed_bonus > Decimal("0"):
+                extra = first_topup_fixed_bonus.quantize(Decimal("0.01"))
+                bonus_desc = f"Бонус первого пополнения (+{extra} ₽ фикс.)"
+                bonus_meta["mode"] = "fixed"
+                bonus_meta["fixed_rub"] = str(extra)
+            elif settings.billing_first_topup_extra_balance_percent > Decimal("0"):
+                pct = settings.billing_first_topup_extra_balance_percent
+                extra = (credited * (pct / Decimal("100"))).quantize(Decimal("0.01"))
+                bonus_desc = f"Бонус первого пополнения (+{pct:g}% к сумме платежа)"
+                bonus_meta["mode"] = "percent"
+                bonus_meta["percent"] = str(pct)
             if extra > Decimal("0"):
-                bonus_pid = f"first_topup_balance_bonus:{txn.id}"
-                exists_b = (
-                    await session.execute(
-                        select(Transaction.id).where(Transaction.payment_id == bonus_pid).limit(1)
+                user.balance += extra
+                ft_extra_total = extra
+                session.add(
+                    Transaction(
+                        user_id=user.id,
+                        type="first_topup_balance_bonus",
+                        amount=extra,
+                        currency="RUB",
+                        payment_provider="billing_v2",
+                        payment_id=bonus_pid,
+                        status="completed",
+                        description=bonus_desc,
+                        meta=bonus_meta,
                     )
-                ).scalar_one_or_none()
-                if exists_b is None:
-                    user.balance += extra
-                    ft_extra_total = extra
-                    session.add(
-                        Transaction(
-                            user_id=user.id,
-                            type="first_topup_balance_bonus",
-                            amount=extra,
-                            currency="RUB",
-                            payment_provider="billing_v2",
-                            payment_id=bonus_pid,
-                            status="completed",
-                            description=f"Бонус первого пополнения (+{pct:g}% к сумме платежа)",
-                            meta={
-                                "percent": str(pct),
-                                "from_topup_txn_id": txn.id,
-                                "from_amount_rub": str(credited),
-                            },
-                        )
-                    )
+                )
 
     txn.status = "completed"
     meta = dict(txn.meta or {})
@@ -294,7 +306,10 @@ async def apply_topup_from_webhook(
         )
     ).scalar_one_or_none() is not None
 
-    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
+    payg_bootstrap_min = Decimal(str(settings.billing_first_topup_extra_balance_min_rub))
+    topup_qualifies_for_payg_bootstrap = credited >= payg_bootstrap_min
+
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled and topup_qualifies_for_payg_bootstrap:
         from shared.services.subscription_service import provision_hybrid_payg_panel_if_needed
 
         await provision_hybrid_payg_panel_if_needed(session, user=user, settings=settings)

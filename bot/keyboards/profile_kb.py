@@ -11,8 +11,16 @@ def profile_main_keyboard(
     show_trial: bool,
     support_url: str | None,
     is_admin: bool = False,
+    show_welcome_topup: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    if show_welcome_topup:
+        b.row(
+            InlineKeyboardButton(
+                text="💳 Оплатить 10 ₽",
+                callback_data="topup:amt:10",
+            )
+        )
     if show_trial:
         b.row(
             InlineKeyboardButton(
