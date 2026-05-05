@@ -48,6 +48,7 @@ def main() -> None:
                     chat_id=chat_id,
                     message_thread_id=settings.admin_log_topic_boot or settings.admin_log_topic_id,
                     text=f"🎬 Reels bot запущен\n{boot_ts}",
+                    parse_mode=None,
                 )
             except Exception:
                 logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление downloader-бота")
