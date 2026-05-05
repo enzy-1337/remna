@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -9,18 +11,15 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.handlers.downloader import router as downloader_router
-from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
-from bot.middlewares.user_context import UserContextMiddleware
-from shared.config import get_settings
+from downloader.config import get_downloader_settings
+from downloader.middlewares.db_session import DownloaderDbSessionMiddleware
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    settings = get_settings()
+    settings = get_downloader_settings()
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     token = (settings.downloader_bot_token or "").strip()
     if not token:
         raise RuntimeError("DOWNLOADER_BOT_TOKEN is empty")
@@ -33,8 +32,7 @@ def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(PrivateChatOnlyMiddleware())
-    dp.update.middleware(DbSessionMiddleware())
-    dp.update.middleware(UserContextMiddleware())
+    dp.update.middleware(DownloaderDbSessionMiddleware())
     dp.include_router(downloader_router)
 
     async def _on_startup(*_args, **_kwargs) -> None:
@@ -42,6 +40,17 @@ def main() -> None:
             commands=[BotCommand(command="start", description="Начать работу с ботом")],
             scope=BotCommandScopeAllPrivateChats(),
         )
+        chat_id = settings.admin_log_chat_id
+        if chat_id is not None and (not isinstance(chat_id, str) or chat_id.strip()):
+            boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=settings.admin_log_topic_boot or settings.admin_log_topic_id,
+                    text=f"🎬 Reels bot запущен\n{boot_ts}",
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление downloader-бота")
 
     dp.startup.register(_on_startup)
     dp.run_polling(bot)

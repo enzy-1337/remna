@@ -5,19 +5,19 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from decimal import Decimal
+import secrets
+import string
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.handlers.common import reject_if_blocked
-from shared.config import get_settings
+from downloader.config import get_downloader_settings
 from shared.md2 import bold, esc, join_lines, plain
 from shared.models.downloader_user_topic import DownloaderUserTopic
 from shared.models.user import User
-from shared.services.user_registration import register_user
 from shared.services.video_downloader import (
     download_video,
     extract_first_url,
@@ -47,13 +47,47 @@ def _build_cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None
     )
 
 
+async def _generate_unique_referral_code(session: AsyncSession) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    for _ in range(50):
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        q: Select[tuple[int]] = select(User.id).where(User.referral_code == code)
+        if (await session.execute(q)).scalar_one_or_none() is None:
+            return code
+    raise RuntimeError("Не удалось сгенерировать referral_code")
+
+
+async def _get_or_create_user(session: AsyncSession, message: Message) -> User:
+    tg = message.from_user
+    if tg is None:
+        raise RuntimeError("Пользователь Telegram не найден")
+    existing = (
+        await session.execute(select(User).where(User.telegram_id == tg.id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    user = User(
+        telegram_id=tg.id,
+        username=tg.username,
+        first_name=tg.first_name,
+        last_name=tg.last_name,
+        language_code=tg.language_code,
+        referral_code=await _generate_unique_referral_code(session),
+        is_subscribed_channel=True,
+        billing_mode="legacy",
+    )
+    session.add(user)
+    await session.flush()
+    return user
+
+
 async def _ensure_user_topic(
     *,
     session: AsyncSession,
     message: Message,
     db_user: User,
 ) -> DownloaderUserTopic:
-    settings = get_settings()
+    settings = get_downloader_settings()
     forum_chat_id = settings.downloader_forum_chat_id
     if forum_chat_id is None:
         raise RuntimeError("Не задан DOWNLOADER_FORUM_CHAT_ID в .env")
@@ -105,12 +139,14 @@ async def _recreate_user_topic(
 
 def _start_caption() -> str:
     return join_lines(
-        plain("Привет! 👋"),
+        "👋 " + bold("Привет!"),
         "",
         plain("Пришли ссылку — скачаю и отправлю видео:"),
+        "",
         plain("• Instagram Reels"),
         plain("• YouTube Shorts"),
         plain("• TikTok"),
+        plain("• VK Видео"),
     )
 
 
@@ -131,14 +167,14 @@ def _meta_caption(*, platform: str, duration_sec: int, size_bytes: int, tg_id: i
 async def cmd_start_downloader(
     message: Message,
     session: AsyncSession,
-    db_user: User | None,
 ) -> None:
+    settings = get_downloader_settings()
     tg = message.from_user
     if tg is None:
         return
-    if db_user is None:
-        db_user, _, _ = await register_user(session, tg, None)
-    if await reject_if_blocked(message, db_user):
+    db_user = await _get_or_create_user(session, message)
+    if db_user.is_blocked:
+        await message.answer(plain("Ваш аккаунт заблокирован. Обратитесь в поддержку."))
         return
     await _ensure_user_topic(session=session, message=message, db_user=db_user)
     await message.answer(_start_caption())
@@ -148,22 +184,21 @@ async def cmd_start_downloader(
 async def handle_download_link(
     message: Message,
     session: AsyncSession,
-    db_user: User | None,
 ) -> None:
-    settings = get_settings()
+    settings = get_downloader_settings()
     tg = message.from_user
     if tg is None or tg.is_bot:
         return
-    if db_user is None:
-        db_user, _, _ = await register_user(session, tg, None)
-    if await reject_if_blocked(message, db_user):
+    db_user = await _get_or_create_user(session, message)
+    if db_user.is_blocked:
+        await message.answer(plain("Ваш аккаунт заблокирован. Обратитесь в поддержку."))
         return
 
     url = extract_first_url(message.text or "")
     if not url:
         return
     if not is_supported_url(url):
-        await message.answer(plain("Поддерживаются только Instagram Reels, YouTube Shorts и TikTok ссылки."))
+        await message.answer(plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok и VK Видео."))
         return
 
     topic = await _ensure_user_topic(session=session, message=message, db_user=db_user)

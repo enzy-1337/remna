@@ -34,6 +34,8 @@ def detect_platform(url: str) -> str:
         return "Instagram Reels"
     if "tiktok.com" in u:
         return "TikTok"
+    if "vkvideo.ru" in u or "vk.com/video" in u or "vk.com/clip" in u or "m.vk.com/video" in u:
+        return "VK Видео"
     if "youtube.com/shorts/" in u or "youtu.be/" in u or "youtube.com/" in u:
         return "YouTube Shorts"
     return "Unknown"
@@ -41,7 +43,19 @@ def detect_platform(url: str) -> str:
 
 def is_supported_url(url: str) -> bool:
     u = (url or "").lower()
-    return any(x in u for x in ("instagram.com", "tiktok.com", "youtube.com", "youtu.be"))
+    return any(
+        x in u
+        for x in (
+            "instagram.com",
+            "tiktok.com",
+            "youtube.com",
+            "youtu.be",
+            "vkvideo.ru",
+            "vk.com/video",
+            "vk.com/clip",
+            "m.vk.com/video",
+        )
+    )
 
 
 def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
