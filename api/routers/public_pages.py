@@ -448,6 +448,16 @@ def _support_page(token: str) -> HTMLResponse:
     .bubble {{ max-width:84%; border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; background:var(--admin); }}
     .msg-row.me .bubble {{ background:var(--my); }}
     .ts {{ margin-top:4px; font-size:11px; color:var(--muted); }}
+    .msg-media {{ margin-top:8px; }}
+    .msg-media img {{
+      display:block;
+      max-width:100%;
+      max-height:320px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      object-fit:contain;
+      background:rgba(255,255,255,.03);
+    }}
     .composer {{
       position:fixed; left:0; right:0; bottom:72px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
       padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -505,7 +515,9 @@ def _support_page(token: str) -> HTMLResponse:
       chat.innerHTML = msgs.map(m => {{
         const me = m.sender_role === 'user';
         const text = m.text ? '<div>'+esc(m.text).replace(/\\n/g,'<br>')+'</div>' : '';
-        const photo = m.photo_file_id ? '<div class="ts"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/photo">Открыть фото</a></div>' : '';
+        const photo = m.photo_file_id
+          ? '<div class="msg-media"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/photo"><img src="/sub/'+token+'/support/media/'+m.id+'/photo" alt="Фото" loading="lazy" decoding="async"></a></div>'
+          : '';
         const doc = m.document_file_id ? '<div class="ts"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/document">'+esc(m.document_file_name||'Документ')+'</a></div>' : '';
         return '<div class="msg-row '+(me?'me':'')+'"><div class="bubble">'+text+photo+doc+'<div class="ts">'+esc(m.created_at||'')+'</div></div></div>';
       }}).join('');
