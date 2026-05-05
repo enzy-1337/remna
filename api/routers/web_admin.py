@@ -4847,7 +4847,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
           var row=left?'justify-start':'justify-end';
           var who=note?'Заметка':(left?'Пользователь':'Администратор');
-          if(!left && m.sender_label){ who='Администратор '+String(m.sender_label); }
+          if(!left && m.sender_label){{ who='Администратор '+String(m.sender_label); }}
           var mediaHtml='';
           if(m.photo_file_id){{
             var psrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/photo';
