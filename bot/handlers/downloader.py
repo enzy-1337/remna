@@ -297,12 +297,12 @@ async def handle_download_link(
                     except TelegramBadRequest as e:
                         msg = str(e).lower()
                         if "file is too big" in msg or "request entity too large" in msg:
-                        await message.answer(
-                            join_lines(
-                                "❌ " + bold("Telegram не принял файл по размеру."),
-                                plain("Попробуйте другую ссылку или более короткий ролик."),
+                            await message.answer(
+                                join_lines(
+                                    "❌ " + bold("Telegram не принял файл по размеру."),
+                                    plain("Попробуйте другую ссылку или более короткий ролик."),
+                                )
                             )
-                        )
                             logger.warning(
                                 "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
                                 tg.id,
