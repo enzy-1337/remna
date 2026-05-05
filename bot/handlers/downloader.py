@@ -169,9 +169,8 @@ def _start_caption() -> str:
         plain("Пришли ссылку — скачаю и отправлю видео:"),
         "",
         plain("• Instagram Reels"),
-        plain("• YouTube Shorts и обычные YouTube видео"),
+        plain("• YouTube Shorts"),
         plain("• TikTok"),
-        plain("• VK Видео"),
         plain("• VK Clips"),
     )
 
@@ -228,7 +227,7 @@ async def handle_download_link(
         logger.info("Short URL resolved: %s -> %s", url, resolved_url)
     if not is_supported_url(resolved_url):
         await message.answer(
-            plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts/YouTube, TikTok, VK Видео и VK Clips.")
+            plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok и VK Clips.")
         )
         return
 

@@ -41,18 +41,8 @@ def detect_platform(url: str) -> str:
         return "TikTok"
     if "vk.com/clip" in u or "clips.vk.com" in u or "vk.ru/clip" in u:
         return "VK Clips"
-    if (
-        "vkvideo.ru" in u
-        or "vk.com/video" in u
-        or "m.vk.com/video" in u
-        or "vk.ru/video" in u
-        or "m.vk.ru/video" in u
-    ):
-        return "VK Видео"
     if "youtube.com/shorts/" in u:
         return "YouTube Shorts"
-    if "youtu.be/" in u or "youtube.com/watch" in u or "youtube.com/" in u:
-        return "YouTube"
     return "Unknown"
 
 
@@ -63,16 +53,10 @@ def is_supported_url(url: str) -> bool:
         for x in (
             "instagram.com",
             "tiktok.com",
-            "youtube.com",
-            "youtu.be",
-            "vkvideo.ru",
-            "vk.com/video",
+            "youtube.com/shorts/",
             "vk.com/clip",
-            "m.vk.com/video",
             "clips.vk.com",
-            "vk.ru/video",
             "vk.ru/clip",
-            "m.vk.ru/video",
         )
     )
 

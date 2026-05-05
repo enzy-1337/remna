@@ -4847,6 +4847,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
           var row=left?'justify-start':'justify-end';
           var who=note?'Заметка':(left?'Пользователь':'Администратор');
+          if(!left && m.sender_label){ who='Администратор '+String(m.sender_label); }
           var mediaHtml='';
           if(m.photo_file_id){{
             var psrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/photo';
@@ -4855,6 +4856,11 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           if(m.video_file_id){{
             var vsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video';
             mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
+          }}
+          if(m.document_file_id){{
+            var dsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/document';
+            var dname=esc(m.document_file_name||'document');
+            mediaHtml+='<div class="mt-2"><a href="'+dsrc+'" class="btn btn-sm btn-ghost border border-base-content/15" download><i class="fa-solid fa-paperclip mr-2"></i>'+dname+'</a></div>';
           }}
           var textHtml=(m.text&&String(m.text).trim())?('<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'):'';
           return ''

@@ -10,19 +10,30 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Form, Request, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from aiogram import Bot
+from aiogram.enums import ParseMode
+from aiogram.types import BufferedInputFile
 from sqlalchemy import select
+from sqlalchemy import text
 
 from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
 from shared.models.user import User
+from shared.tickets_db_compat import (
+    ticket_messages_has_document_columns,
+    ticket_messages_has_photo_file_id_column,
+    ticket_messages_has_video_file_id_column,
+)
 from shared.services.billing_v2.balance_runway_service import compute_balance_runway
 from shared.services.billing_v2.detail_service import user_has_tariff_subscription_charges
 from shared.services.topup_service import create_topup_payment
 from shared.services.subscription_service import get_active_subscription
+from tickets.config import config as tickets_config
+from tickets.services import create_ticket, set_ticket_topic
 
 router = APIRouter(tags=["public-pages"])
 logger = logging.getLogger(__name__)
@@ -38,6 +49,14 @@ def _fmt_dt(dt: datetime | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%d.%m.%Y")
+
+
+def _to_iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M")
 
 
 def _days_left(exp: datetime | None) -> int:
@@ -190,6 +209,7 @@ def _subscription_page(
       display: grid;
       gap: 10px;
       margin-top: 14px;
+      margin-bottom: 90px;
     }}
     .btn {{
       display: flex;
@@ -210,6 +230,41 @@ def _subscription_page(
     .btn-outline {{
       background: transparent;
       color: #d8e3fa;
+    }}
+    .hotbar {{
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 12, 28, 0.95);
+      backdrop-filter: blur(8px);
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    }}
+    .hotbar-inner {{
+      max-width: 430px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }}
+    .hotbtn {{
+      text-decoration: none;
+      color: #c8d5ef;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 600;
+      background: rgba(15, 26, 52, 0.55);
+    }}
+    .hotbtn.active {{
+      color: #fff;
+      border-color: rgba(86, 135, 255, 0.45);
+      background: rgba(39, 101, 224, 0.35);
     }}
   </style>
 </head>
@@ -232,6 +287,12 @@ def _subscription_page(
       <a class="btn btn-primary{bot_btn_disabled}" href="{bot_href}">Перейти в бота</a>
     </section>
   </main>
+  <nav class="hotbar">
+    <div class="hotbar-inner">
+      <a class="hotbtn active" href="/sub/{_esc(token)}">Моя подписка</a>
+      <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>
+    </div>
+  </nav>
 </body>
 </html>"""
     return HTMLResponse(page)
@@ -353,6 +414,147 @@ def _topup_page(
     return HTMLResponse(page)
 
 
+def _support_page(token: str) -> HTMLResponse:
+    token_esc = _esc(token)
+    page = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flux Network — поддержка</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg:#060a1b; --line:rgba(148,163,184,.16); --text:#e8edf6; --muted:#95a3bf;
+      --accent:#7c6cff; --chip:#111a30; --my:#1a2440; --admin:#1f3569;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0; min-height:100vh; color:var(--text);
+      font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
+    }}
+    .wrap {{ max-width:430px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; }}
+    .head {{ padding:14px 14px 8px; }}
+    .brand {{ font-weight:700; font-size:22px; }}
+    .sub {{ display:flex; align-items:center; justify-content:space-between; margin-top:4px; }}
+    .subtitle {{ font-size:14px; color:var(--muted); }}
+    .online {{ border:1px solid rgba(34,197,94,.45); color:#7ff0a8; border-radius:999px; padding:4px 10px; font-size:12px; display:flex; align-items:center; gap:6px; }}
+    .dot {{ width:8px; height:8px; border-radius:50%; background:#22c55e; }}
+    .chat {{ flex:1; overflow:auto; padding:8px 14px 100px; }}
+    .msg-row {{ display:flex; margin:8px 0; }}
+    .msg-row.me {{ justify-content:flex-end; }}
+    .bubble {{ max-width:84%; border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; background:var(--admin); }}
+    .msg-row.me .bubble {{ background:var(--my); }}
+    .ts {{ margin-top:4px; font-size:11px; color:var(--muted); }}
+    .composer {{
+      position:fixed; left:0; right:0; bottom:72px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
+      padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+    }}
+    .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:44px 1fr 44px; gap:8px; align-items:center; }}
+    .iconbtn {{ width:44px; height:44px; border-radius:12px; border:1px solid var(--line); background:#0d1730; color:#dbe6ff; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
+    .input {{ width:100%; height:44px; border-radius:12px; border:1px solid var(--line); background:#0b142b; color:#fff; padding:0 12px; }}
+    .hotbar {{
+      position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line);
+      background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
+    }}
+    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+    .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:rgba(15,26,52,.55); }}
+    .hotbtn.active {{ color:#fff; border-color:rgba(124,108,255,.55); background:rgba(124,108,255,.25); }}
+    .attach-info {{ font-size:12px; color:var(--muted); padding:0 14px; margin-top:4px; }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="head">
+      <div class="brand">Flux Network</div>
+      <div class="sub">
+        <div class="subtitle">Поддержка</div>
+        <div class="online"><span class="dot"></span>Онлайн</div>
+      </div>
+    </header>
+    <section id="chat" class="chat"><div class="ts">Загрузка чата...</div></section>
+  </main>
+  <div class="composer">
+    <div class="composer-inner">
+      <button id="pick" class="iconbtn" type="button">📎</button>
+      <input id="txt" class="input" type="text" placeholder="Написать сообщение..." maxlength="4000" />
+      <button id="send" class="iconbtn" type="button">➤</button>
+      <input id="file" type="file" hidden accept="image/*,.pdf,.txt" />
+    </div>
+    <div id="attach-info" class="attach-info"></div>
+  </div>
+  <nav class="hotbar">
+    <div class="hotbar-inner">
+      <a class="hotbtn" href="/sub/{token_esc}">Моя подписка</a>
+      <a class="hotbtn active" href="/sub/{token_esc}/support">Поддержка</a>
+    </div>
+  </nav>
+  <script>
+    const token = {token_esc!r};
+    const chat = document.getElementById('chat');
+    const txt = document.getElementById('txt');
+    const send = document.getElementById('send');
+    const pick = document.getElementById('pick');
+    const file = document.getElementById('file');
+    const attachInfo = document.getElementById('attach-info');
+    let lastSig = '';
+    let attached = null;
+    function esc(s) {{ return String(s||'').replace(/[&<>"]/g, c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c])); }}
+    function render(data) {{
+      const msgs = data.messages || [];
+      const sig = JSON.stringify(msgs.map(m=>[m.id,m.created_at,m.text,m.sender_role,m.photo_file_id,m.document_file_id]));
+      if (sig === lastSig) return;
+      lastSig = sig;
+      if (!msgs.length) {{
+        chat.innerHTML = '<div class="ts">Пока нет сообщений. Напишите первым.</div>'; return;
+      }}
+      chat.innerHTML = msgs.map(m => {{
+        const me = m.sender_role === 'user';
+        const text = m.text ? '<div>'+esc(m.text).replace(/\\n/g,'<br>')+'</div>' : '';
+        const photo = m.photo_file_id ? '<div class="ts"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/photo">Открыть фото</a></div>' : '';
+        const doc = m.document_file_id ? '<div class="ts"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/document">'+esc(m.document_file_name||'Документ')+'</a></div>' : '';
+        return '<div class="msg-row '+(me?'me':'')+'"><div class="bubble">'+text+photo+doc+'<div class="ts">'+esc(m.created_at||'')+'</div></div></div>';
+      }}).join('');
+      chat.scrollTop = chat.scrollHeight;
+    }}
+    async function load() {{
+      try {{
+        const r = await fetch('/sub/'+token+'/support/messages');
+        if (!r.ok) return;
+        render(await r.json());
+      }} catch (_e) {{}}
+    }}
+    async function sendMsg() {{
+      const t = (txt.value||'').trim();
+      if (!t && !attached) return;
+      const fd = new FormData();
+      fd.append('text', t);
+      if (attached) fd.append('file', attached);
+      send.disabled = true;
+      try {{
+        const r = await fetch('/sub/'+token+'/support/send', {{ method:'POST', body:fd }});
+        if (!r.ok) throw new Error('send failed');
+        txt.value=''; attached=null; file.value=''; attachInfo.textContent='';
+        await load();
+      }} finally {{
+        send.disabled = false;
+      }}
+    }}
+    pick.addEventListener('click',()=>file.click());
+    file.addEventListener('change',()=> {{
+      attached = (file.files && file.files[0]) ? file.files[0] : null;
+      attachInfo.textContent = attached ? ('Файл: '+attached.name) : '';
+    }});
+    send.addEventListener('click', sendMsg);
+    txt.addEventListener('keydown', (e)=>{{ if (e.key==='Enter') sendMsg(); }});
+    load(); setInterval(load, 2500);
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(page)
+
+
 async def _resolve_subscription_context(subscription_key: str) -> tuple[dict | None, User | None, Subscription | None]:
     token = (subscription_key or "").strip()
     if not token:
@@ -446,6 +648,50 @@ async def _resolve_subscription_context(subscription_key: str) -> tuple[dict | N
                     )
                 ).scalar_one_or_none()
     return panel_user, db_user, sub
+
+
+async def _ensure_active_support_ticket(*, db_user: User) -> tuple[int, int]:
+    """Возвращает (ticket_id, topic_id). Если активного нет — создаёт новый."""
+    factory = get_session_factory()
+    async with factory() as session:
+        active_id = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id, topic_id
+                    FROM tickets
+                    WHERE user_id=:uid AND status IN ('open','in_progress')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"uid": db_user.id},
+            )
+        ).mappings().first()
+        if active_id is not None:
+            return int(active_id["id"]), int(active_id["topic_id"] or 0)
+        tid = await create_ticket(
+            session,
+            user=db_user,
+            telegram_user_id=int(db_user.telegram_id),
+            text_body="Тикет создан из web-поддержки.",
+        )
+        if not tickets_config.bot_token or not tickets_config.support_group_id:
+            await session.commit()
+            return tid, 0
+        title = f"Тикет #{tid} — web user {db_user.id}"[:128]
+        async with Bot(token=tickets_config.bot_token) as bot:
+            topic = await bot.create_forum_topic(chat_id=tickets_config.support_group_id, name=title)
+            topic_id = int(topic.message_thread_id)
+            await set_ticket_topic(session, ticket_id=tid, topic_id=topic_id)
+            await bot.send_message(
+                chat_id=tickets_config.support_group_id,
+                message_thread_id=topic_id,
+                text=f"<b>🎫 Тикет #{tid} из веб-поддержки</b>\nПользователь: <code>{int(db_user.telegram_id)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        await session.commit()
+        return tid, topic_id
 
 
 def _page(title: str, message: str, *, variant: str, badge: str, footer: str) -> HTMLResponse:
@@ -595,6 +841,252 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         balance_rub=db_user.balance if db_user is not None else Decimal("0"),
         bot_open_url=bot_open_url,
     )
+
+
+@router.get("/sub/{subscription_key}/support")
+async def public_subscription_support_page(subscription_key: str) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>/support")
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        return render_not_found_page(f"/sub/{token}/support")
+    return _support_page(token)
+
+
+@router.get("/sub/{subscription_key}/support/messages")
+async def public_subscription_support_messages(subscription_key: str) -> dict[str, object]:
+    token = (subscription_key or "").strip()
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    ticket_id, _topic_id = await _ensure_active_support_ticket(db_user=db_user)
+    factory = get_session_factory()
+    async with factory() as session:
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        has_video = await ticket_messages_has_video_file_id_column(session)
+        has_document = await ticket_messages_has_document_columns(session)
+        msg_cols = (
+            "id,sender_role,text,created_at,photo_file_id,video_file_id,document_file_id,document_file_name"
+            if (has_photo and has_video and has_document)
+            else "id,sender_role,text,created_at,photo_file_id,video_file_id"
+            if (has_photo and has_video)
+            else "id,sender_role,text,created_at,photo_file_id"
+            if has_photo
+            else "id,sender_role,text,created_at"
+        )
+        rows = (
+            await session.execute(
+                text(f"SELECT {msg_cols} FROM ticket_messages WHERE ticket_id=:tid AND COALESCE(is_internal,false)=false ORDER BY id ASC"),
+                {"tid": ticket_id},
+            )
+        ).mappings().all()
+    return {
+        "ticket_id": ticket_id,
+        "messages": [
+            {
+                "id": int(r["id"]),
+                "sender_role": r["sender_role"],
+                "text": r.get("text"),
+                "created_at": _to_iso(r.get("created_at")) if r.get("created_at") is not None else None,
+                "photo_file_id": r.get("photo_file_id") if has_photo else None,
+                "video_file_id": r.get("video_file_id") if has_video else None,
+                "document_file_id": r.get("document_file_id") if has_document else None,
+                "document_file_name": r.get("document_file_name") if has_document else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/sub/{subscription_key}/support/send")
+async def public_subscription_support_send(
+    subscription_key: str,
+    text_value: str = Form(default="", alias="text"),
+    file: UploadFile | None = File(default=None),
+) -> dict[str, object]:
+    token = (subscription_key or "").strip()
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    msg = (text_value or "").strip()
+    if not msg and file is None:
+        raise HTTPException(status_code=400, detail="Message is empty")
+    ticket_id, topic_id = await _ensure_active_support_ticket(db_user=db_user)
+    photo_file_id: str | None = None
+    video_file_id: str | None = None
+    document_file_id: str | None = None
+    document_name: str | None = None
+    if file is not None:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Empty file")
+        if len(raw) > int(tickets_config.media_max_mb) * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File too large (max {tickets_config.media_max_mb} MB)")
+        ctype = (file.content_type or "").lower()
+        safe_name = (file.filename or "").strip() or "attachment.bin"
+        if not tickets_config.bot_token:
+            raise HTTPException(status_code=503, detail="Tickets bot not configured")
+        async with Bot(token=tickets_config.bot_token) as bot:
+            upload = BufferedInputFile(file=raw, filename=safe_name)
+            if ctype.startswith("image/"):
+                sent = await bot.send_photo(chat_id=int(db_user.telegram_id), photo=upload, caption=msg[:1024] or None)
+                photo_file_id = sent.photo[-1].file_id if sent.photo else None
+            elif ctype.startswith("video/"):
+                sent = await bot.send_video(chat_id=int(db_user.telegram_id), video=upload, caption=msg[:1024] or None)
+                video_file_id = sent.video.file_id if sent.video else None
+            else:
+                sent = await bot.send_document(chat_id=int(db_user.telegram_id), document=upload, caption=msg[:1024] or None)
+                document_file_id = sent.document.file_id if sent.document else None
+                document_name = safe_name
+            if topic_id:
+                topic_caption = "<b>✉️ Сообщение из web-поддержки</b>"
+                if msg:
+                    topic_caption += f"\n\n<blockquote>{_esc(msg)}</blockquote>"
+                if photo_file_id:
+                    await bot.send_photo(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, photo=photo_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
+                elif video_file_id:
+                    await bot.send_video(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, video=video_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
+                elif document_file_id:
+                    await bot.send_document(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, document=document_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
+    elif topic_id and tickets_config.bot_token:
+        async with Bot(token=tickets_config.bot_token) as bot:
+            await bot.send_message(
+                chat_id=tickets_config.support_group_id,
+                message_thread_id=topic_id,
+                text=f"<b>✉️ Сообщение из web-поддержки</b>\n\n<blockquote>{_esc(msg)}</blockquote>",
+                parse_mode=ParseMode.HTML,
+            )
+    factory = get_session_factory()
+    async with factory() as session:
+        now = datetime.now(timezone.utc)
+        has_photo = await ticket_messages_has_photo_file_id_column(session)
+        has_video = await ticket_messages_has_video_file_id_column(session)
+        has_document = await ticket_messages_has_document_columns(session)
+        if has_photo and has_video and has_document:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id,document_file_id,document_file_name)
+                    VALUES (:tid,:sid,'user',:stg,:txt,:now,false,:photo,:video,:doc,:dname)
+                    """
+                ),
+                {"tid": ticket_id, "sid": db_user.id, "stg": int(db_user.telegram_id), "txt": msg, "now": now, "photo": photo_file_id, "video": video_file_id, "doc": document_file_id, "dname": document_name},
+            )
+        elif has_photo and has_video:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id)
+                    VALUES (:tid,:sid,'user',:stg,:txt,:now,false,:photo,:video)
+                    """
+                ),
+                {"tid": ticket_id, "sid": db_user.id, "stg": int(db_user.telegram_id), "txt": msg, "now": now, "photo": photo_file_id, "video": video_file_id},
+            )
+        elif has_photo:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id)
+                    VALUES (:tid,:sid,'user',:stg,:txt,:now,false,:photo)
+                    """
+                ),
+                {"tid": ticket_id, "sid": db_user.id, "stg": int(db_user.telegram_id), "txt": msg, "now": now, "photo": photo_file_id},
+            )
+        else:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal)
+                    VALUES (:tid,:sid,'user',:stg,:txt,:now,false)
+                    """
+                ),
+                {"tid": ticket_id, "sid": db_user.id, "stg": int(db_user.telegram_id), "txt": msg, "now": now},
+            )
+        await session.execute(
+            text(
+                "UPDATE tickets SET status=CASE WHEN status='open' THEN 'in_progress' ELSE status END, updated_at=:now, last_activity=:now WHERE id=:tid"
+            ),
+            {"tid": ticket_id, "now": now},
+        )
+        await session.commit()
+    return {"ok": True, "ticket_id": ticket_id}
+
+
+@router.get("/sub/{subscription_key}/support/media/{msg_id}/photo")
+async def public_subscription_support_media_photo(subscription_key: str, msg_id: int) -> Response:
+    token = (subscription_key or "").strip()
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not tickets_config.bot_token:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    factory = get_session_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT tm.photo_file_id
+                    FROM ticket_messages tm
+                    JOIN tickets t ON t.id=tm.ticket_id
+                    WHERE tm.id=:mid AND t.user_id=:uid
+                    """
+                ),
+                {"mid": msg_id, "uid": db_user.id},
+            )
+        ).mappings().first()
+    if not row or not row.get("photo_file_id"):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    async with Bot(token=tickets_config.bot_token) as bot:
+        f = await bot.get_file(str(row["photo_file_id"]))
+        if not f.file_path:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+        url = f"https://api.telegram.org/file/bot{tickets_config.bot_token}/{f.file_path}"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(content=r.content, media_type="image/jpeg")
+
+
+@router.get("/sub/{subscription_key}/support/media/{msg_id}/document")
+async def public_subscription_support_media_document(subscription_key: str, msg_id: int) -> Response:
+    token = (subscription_key or "").strip()
+    panel_user, db_user, _sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not tickets_config.bot_token:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    factory = get_session_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT tm.document_file_id, tm.document_file_name
+                    FROM ticket_messages tm
+                    JOIN tickets t ON t.id=tm.ticket_id
+                    WHERE tm.id=:mid AND t.user_id=:uid
+                    """
+                ),
+                {"mid": msg_id, "uid": db_user.id},
+            )
+        ).mappings().first()
+    if not row or not row.get("document_file_id"):
+        raise HTTPException(status_code=404, detail="Document not found")
+    async with Bot(token=tickets_config.bot_token) as bot:
+        f = await bot.get_file(str(row["document_file_id"]))
+        if not f.file_path:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+        url = f"https://api.telegram.org/file/bot{tickets_config.bot_token}/{f.file_path}"
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(
+            content=r.content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{_esc(str(row.get("document_file_name") or "document"))}"'},
+        )
 
 
 @router.get("/sub/{subscription_key}/topup")

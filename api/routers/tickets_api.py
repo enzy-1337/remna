@@ -21,6 +21,7 @@ from sqlalchemy import select
 from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.tickets_db_compat import (
+    ticket_messages_has_document_columns,
     ticket_messages_has_photo_file_id_column,
     ticket_messages_has_video_file_id_column,
 )
@@ -64,12 +65,15 @@ def _to_iso(dt: Any) -> str | None:
     return str(dt)
 
 
-def _ticket_message_json(m: Any, has_photo: bool, has_video: bool) -> dict[str, Any]:
+def _ticket_message_json(m: Any, has_photo: bool, has_video: bool, has_document: bool) -> dict[str, Any]:
     d = {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
     if not has_photo:
         d["photo_file_id"] = None
     if not has_video:
         d["video_file_id"] = None
+    if not has_document:
+        d["document_file_id"] = None
+        d["document_file_name"] = None
     return d
 
 
@@ -282,8 +286,12 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             raise HTTPException(status_code=404, detail="Ticket not found")
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         has_video = await ticket_messages_has_video_file_id_column(session)
+        has_document = await ticket_messages_has_document_columns(session)
         msg_cols = (
-            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id"
+            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,"
+            "photo_file_id,video_file_id,document_file_id,document_file_name"
+            if (has_photo and has_video and has_document)
+            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id"
             if (has_photo and has_video)
             else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id"
             if has_photo
@@ -353,16 +361,71 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
         ).scalar_one_or_none()
         if lc is not None:
             last_cancelled_sub_id = int(lc)
+    sender_ids = {int(m["sender_id"]) for m in msgs if m.get("sender_id") is not None}
+    sender_labels: dict[int, str] = {}
+    if sender_ids:
+        async with await _session() as session:
+            users = (
+                await session.execute(
+                    select(User).where(User.id.in_(sender_ids))
+                )
+            ).scalars().all()
+            for u in users:
+                label = (u.first_name or u.username or f"user#{u.id}").strip()
+                sender_labels[int(u.id)] = label
+    messages = []
+    for m in msgs:
+        item = _ticket_message_json(m, has_photo, has_video, has_document)
+        sid = item.get("sender_id")
+        if sid is not None:
+            try:
+                item["sender_label"] = sender_labels.get(int(sid))
+            except Exception:
+                item["sender_label"] = None
+        else:
+            item["sender_label"] = None
+        messages.append(item)
     return {
         "ticket": {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()},
-        "messages": [
-            _ticket_message_json(m, has_photo, has_video)
-            for m in msgs
-        ],
+        "messages": messages,
         "user": user_info,
         "user_subscription": user_subscription,
         "last_cancelled_subscription_id": last_cancelled_sub_id,
     }
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/document")
+async def api_ticket_message_document(request: Request, ticket_id: int, msg_id: int) -> Response:
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        if not await ticket_messages_has_document_columns(session):
+            raise HTTPException(status_code=404, detail="Document not available")
+        row = (
+            await session.execute(
+                text("SELECT document_file_id, document_file_name FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+                {"mid": msg_id, "tid": ticket_id},
+            )
+        ).mappings().first()
+    if not row or not row.get("document_file_id"):
+        raise HTTPException(status_code=404, detail="Document not found")
+    fid = str(row["document_file_id"])
+    async with Bot(token=tok) as bot:
+        f = await bot.get_file(fid)
+        fp = f.file_path
+        if not fp:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+    url = f"https://api.telegram.org/file/bot{tok}/{fp}"
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(
+            content=r.content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{str(row.get("document_file_name") or "document")}"'},
+        )
 
 
 @router.get("/tickets/{ticket_id}/messages/{msg_id}/photo")

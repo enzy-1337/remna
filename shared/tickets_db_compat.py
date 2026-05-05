@@ -40,3 +40,30 @@ async def ticket_messages_has_video_file_id_column(session: AsyncSession) -> boo
     )
     val = r.scalar()
     return bool(val)
+
+
+async def ticket_messages_has_document_columns(session: AsyncSession) -> bool:
+    """True, если есть document_file_id/document_file_name (миграция 0022)."""
+    r = await session.execute(
+        text(
+            """
+            SELECT (
+                EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'ticket_messages'
+                      AND column_name = 'document_file_id'
+                )
+                AND
+                EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'ticket_messages'
+                      AND column_name = 'document_file_name'
+                )
+            )
+            """
+        )
+    )
+    val = r.scalar()
+    return bool(val)
