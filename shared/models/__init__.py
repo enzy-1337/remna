@@ -9,6 +9,7 @@ from shared.models.billing_traffic_meter import BillingTrafficMeter
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.device_history import DeviceHistory
+from shared.models.downloader_user_topic import DownloaderUserTopic
 from shared.models.notification_log import NotificationLog
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoUsage
@@ -29,6 +30,7 @@ __all__ = [
     "BillingCronCheckpoint",
     "BillingDailySummary",
     "DeviceHistory",
+    "DownloaderUserTopic",
     "RemnawaveWebhookEvent",
     "User",
     "Plan",

@@ -131,5 +131,36 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  downloader-bot:
+    build: .
+    entrypoint: ["/app/scripts/bot-entrypoint.sh"]
+    command: ["python", "-m", "downloader.main"]
+    env_file:
+      - .env
+    environment:
+      <<: *tz-env
+      DATABASE_URL: postgresql+asyncpg://vpnbot:vpnbot@postgres:5432/vpnbot
+      REDIS_URL: redis://redis:6379/0
+      DOWNLOADER_BOT_TOKEN: ${DOWNLOADER_BOT_TOKEN:-}
+      DOWNLOADER_FORUM_CHAT_ID: ${DOWNLOADER_FORUM_CHAT_ID:-}
+      BOT_USERNAME: ${BOT_USERNAME:-}
+      BOT_PROXYCHAINS_ENABLED: ${BOT_PROXYCHAINS_ENABLED:-false}
+      PROXYCHAINS_SOCKS5_HOST: ${PROXYCHAINS_SOCKS5_HOST:-host.docker.internal}
+      PROXYCHAINS_SOCKS5_PORT: ${PROXYCHAINS_SOCKS5_PORT:-1080}
+      PROXYCHAINS_PROXY_DNS: ${PROXYCHAINS_PROXY_DNS:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   pgdata:

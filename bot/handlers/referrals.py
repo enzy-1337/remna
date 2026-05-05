@@ -16,7 +16,6 @@ from shared.services.referral_service import (
     count_invited_users,
     list_invited_users,
     list_referrer_rewards_with_referred,
-    sum_referrer_bonus_days,
     sum_referrer_bonus_rub,
 )
 
@@ -44,11 +43,9 @@ def _referrals_main_body(
     settings,
     invited: int,
     earned_rub,
-    earned_days: int,
 ) -> str:
     signup_rub = settings.referral_signup_bonus_rub
     rub_m = settings.referral_inviter_reward_rub_per_30_days
-    days_m = settings.referral_inviter_reward_days_per_30_days
     cond_lines: list[str] = []
     if signup_rub > 0:
         cond_lines.append(
@@ -76,14 +73,6 @@ def _referrals_main_body(
             + bold("первой")
             + plain(" платной покупке друга (напр. 2 мес. → ×2)")
         )
-    if days_m > 0:
-        cond_lines.append(
-            plain("• ")
-            + bold(str(days_m))
-            + plain(" дн. к вашей подписке за каждые ")
-            + bold("30 дн.")
-            + plain(" его первого тарифа (если у вас активна подписка)")
-        )
     if not cond_lines:
         cond_lines.append(
             plain("• Условия: первая ") + bold("платная") + plain(" покупка приглашённого")
@@ -105,8 +94,7 @@ def _referrals_main_body(
         "👥 " + bold("Рефералы"),
         "",
         plain("Приглашено людей: ") + bold(str(invited)),
-        plain("Получено дней (бонусы): ") + bold(str(earned_days)),
-        plain("Получено денег (бонусы): ") + bold(str(earned_rub)) + plain(" ₽"),
+        plain("Бонусные рубли: ") + bold(str(earned_rub)) + plain(" ₽"),
         "",
         bold("Как это работает"),
         cond_block,
@@ -135,19 +123,18 @@ async def cb_referrals(
     settings = get_settings()
     invited = await count_invited_users(session, db_user.id)
     earned = await sum_referrer_bonus_rub(session, db_user.id)
-    days_sum = await sum_referrer_bonus_days(session, db_user.id)
     body = _referrals_main_body(
         db_user=db_user,
         settings=settings,
         invited=invited,
         earned_rub=earned,
-        earned_days=days_sum,
     )
     await answer_callback_with_photo_screen(
         cq,
         caption=body,
         reply_markup=_referrals_main_kb(),
         settings=settings,
+        photo_key="menu:referrals",
     )
 
 
@@ -190,6 +177,7 @@ async def cb_ref_list(
         caption=body,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="menu:referrals",
     )
 
 
@@ -216,16 +204,10 @@ async def cb_ref_rewards(
         for idx, (row, ref_u) in enumerate(rows, start=1):
             applied = row.applied_at.strftime("%d.%m.%Y %H:%M") if row.applied_at else "—"
             src = _REF_REWARD_SOURCE_RU.get(row.source, row.source)
-            extra_days = (
-                plain(" · +") + bold(str(row.bonus_days)) + plain(" дн.")
-                if int(row.bonus_days or 0) > 0
-                else plain("")
-            )
             lines.append(
                 plain(f"{idx}. ")
                 + bold(str(row.bonus_rub))
                 + plain(" ₽")
-                + extra_days
                 + plain(" · ")
                 + plain(src)
                 + plain(" · ")
@@ -241,4 +223,5 @@ async def cb_ref_rewards(
         caption=text,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="menu:referrals",
     )

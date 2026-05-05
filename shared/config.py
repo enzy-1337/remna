@@ -31,6 +31,28 @@ class Settings(BaseSettings):
         validation_alias="BOT_USERNAME",
         description="Username бота без @ (для реф. ссылок на шаге 9)",
     )
+    downloader_bot_token: str = Field(
+        default="",
+        validation_alias="DOWNLOADER_BOT_TOKEN",
+        description="Токен отдельного downloader-бота (Instagram Reels / Shorts / TikTok).",
+    )
+    downloader_forum_chat_id: int | None = Field(
+        default=None,
+        validation_alias="DOWNLOADER_FORUM_CHAT_ID",
+        description="ID forum-группы, где создаются персональные топики пользователей downloader-бота.",
+    )
+    downloader_max_file_mb: int = Field(
+        default=0,
+        ge=0,
+        validation_alias="DOWNLOADER_MAX_FILE_MB",
+        description="Ограничение размера отправляемого видео в МБ (0 = без лимита).",
+    )
+    downloader_max_duration_sec: int = Field(
+        default=0,
+        ge=0,
+        validation_alias="DOWNLOADER_MAX_DURATION_SEC",
+        description="Ограничение длительности в секундах (0 = без лимита).",
+    )
     support_username: str | None = Field(
         default=None,
         validation_alias="SUPPORT_USERNAME",

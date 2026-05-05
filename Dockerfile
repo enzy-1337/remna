@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    ffmpeg \
     gnupg \
     proxychains4 \
     && install -d /usr/share/postgresql-common/pgdg \
