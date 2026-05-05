@@ -458,6 +458,20 @@ def _support_page(token: str) -> HTMLResponse:
       border:1px solid var(--line);
       object-fit:contain;
       background:rgba(255,255,255,.03);
+      cursor:zoom-in;
+    }}
+    .lb {{
+      position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+      background:rgba(0,0,0,.85); padding:20px;
+    }}
+    .lb.open {{ display:flex; }}
+    .lb img {{
+      max-width:min(95vw,1280px); max-height:92vh; border-radius:12px; border:1px solid var(--line);
+      background:rgba(255,255,255,.03); object-fit:contain;
+    }}
+    .lb-close {{
+      position:absolute; top:14px; right:14px; width:38px; height:38px; border-radius:10px;
+      border:1px solid var(--line); background:rgba(15,26,52,.75); color:#fff; cursor:pointer;
     }}
     .composer {{
       position:fixed; left:0; right:0; bottom:72px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
@@ -498,17 +512,65 @@ def _support_page(token: str) -> HTMLResponse:
       <a class="hotbtn active" href="/sub/{token_esc}/support">Поддержка</a>
     </div>
   </nav>
+  <div id="img-lb" class="lb" role="dialog" aria-modal="true" aria-label="Просмотр фото">
+    <button id="img-lb-close" class="lb-close" type="button">✕</button>
+    <img id="img-lb-src" src="" alt="Фото"/>
+  </div>
   <script>
     const token = {token_esc!r};
     const chat = document.getElementById('chat');
     const txt = document.getElementById('txt');
     const send = document.getElementById('send');
+    const lb = document.getElementById('img-lb');
+    const lbImg = document.getElementById('img-lb-src');
+    const lbClose = document.getElementById('img-lb-close');
     let lastSig = '';
+    let notifyInit = false;
+    let lastCount = 0;
     function esc(s) {{ return String(s||'').replace(/[&<>"]/g, c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c])); }}
+    function playNotifyTone() {{
+      try {{
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        gain.gain.value = 0.0001;
+        osc.connect(gain); gain.connect(ctx.destination);
+        const now = ctx.currentTime;
+        gain.gain.exponentialRampToValueAtTime(0.07, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+        osc.start(now);
+        osc.stop(now + 0.24);
+      }} catch(_e) {{}}
+    }}
+    function openImageModal(src) {{
+      if (!lb || !lbImg || !src) return;
+      lbImg.src = src;
+      lb.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }}
+    function closeImageModal() {{
+      if (!lb || !lbImg) return;
+      lb.classList.remove('open');
+      lbImg.removeAttribute('src');
+      document.body.style.overflow = '';
+    }}
     function render(data) {{
       const msgs = data.messages || [];
       const sig = JSON.stringify(msgs.map(m=>[m.id,m.created_at,m.text,m.sender_role,m.photo_file_id,m.document_file_id]));
       if (sig === lastSig) return;
+      const hadNew = notifyInit && msgs.length > lastCount;
+      if (hadNew) {{
+        const last = msgs[msgs.length - 1];
+        if (last && last.sender_role !== 'user' && !document.hidden) {{
+          playNotifyTone();
+        }}
+      }}
+      lastCount = msgs.length;
+      notifyInit = true;
       lastSig = sig;
       if (!msgs.length) {{
         chat.innerHTML = '<div class="ts">Пока нет сообщений. Напишите первым.</div>'; return;
@@ -517,7 +579,7 @@ def _support_page(token: str) -> HTMLResponse:
         const me = m.sender_role === 'user';
         const text = m.text ? '<div>'+esc(m.text).replace(/\\n/g,'<br>')+'</div>' : '';
         const photo = m.photo_file_id
-          ? '<div class="msg-media"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/photo"><img src="/sub/'+token+'/support/media/'+m.id+'/photo" alt="Фото" loading="lazy" decoding="async"></a></div>'
+          ? '<div class="msg-media"><img data-photo-src="/sub/'+token+'/support/media/'+m.id+'/photo" src="/sub/'+token+'/support/media/'+m.id+'/photo" alt="Фото" loading="lazy" decoding="async"></div>'
           : '';
         const doc = m.document_file_id ? '<div class="ts"><a target="_blank" href="/sub/'+token+'/support/media/'+m.id+'/document">'+esc(m.document_file_name||'Документ')+'</a></div>' : '';
         return '<div class="msg-row '+(me?'me':'')+'"><div class="bubble">'+text+photo+doc+'<div class="ts">'+esc(m.created_at||'')+'</div></div></div>';
@@ -546,6 +608,24 @@ def _support_page(token: str) -> HTMLResponse:
         send.disabled = false;
       }}
     }}
+    if (chat) {{
+      chat.addEventListener('click', (e) => {{
+        const t = e.target;
+        if (!t || !t.closest) return;
+        const img = t.closest('img[data-photo-src]');
+        if (!img) return;
+        e.preventDefault();
+        openImageModal(img.getAttribute('data-photo-src') || '');
+      }});
+    }}
+    if (lb) {{
+      lb.addEventListener('click', (e) => {{
+        if (e.target === lb || e.target === lbClose) closeImageModal();
+      }});
+    }}
+    document.addEventListener('keydown', (e) => {{
+      if (e.key === 'Escape') closeImageModal();
+    }});
     send.addEventListener('click', sendMsg);
     txt.addEventListener('keydown', (e)=>{{ if (e.key==='Enter' && !e.shiftKey) {{ e.preventDefault(); sendMsg(); }} }});
     load(); setInterval(load, 2500);

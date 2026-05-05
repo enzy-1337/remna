@@ -4682,14 +4682,13 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           <div id="tk-chat" class="max-h-[62vh] overflow-y-auto rounded-xl border border-base-content/10 bg-base-200/40 p-3 space-y-2"></div>
           <div id="tk-compose" class="grid gap-2">
             <div class="flex items-start gap-2">
-              <textarea id="tk-text" class="textarea textarea-bordered min-h-[44px] h-[44px] max-h-56 resize-none flex-1" placeholder="Введите ответ пользователю или заметку (Enter = отправить, Shift+Enter = новая строка)"></textarea>
               <input id="tk-file-input" type="file" accept="image/*,video/*" class="hidden"/>
-              <div class="flex flex-col gap-2">
-                <button id="tk-send-reply" class="btn btn-primary btn-sm btn-square h-10 min-h-10" title="Отправить ответ"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
-                <button id="tk-send-note" class="btn btn-outline btn-sm btn-square h-10 min-h-10" title="Добавить внутреннюю заметку"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i></button>
-                <button id="tk-attach" class="btn btn-ghost btn-sm btn-square h-10 min-h-10" title="Прикрепить фото/видео"><i class="fa-solid fa-paperclip" aria-hidden="true"></i></button>
-              </div>
+              <button id="tk-attach" class="btn btn-ghost btn-sm btn-square h-10 min-h-10" title="Прикрепить фото/видео"><i class="fa-solid fa-paperclip" aria-hidden="true"></i></button>
+              <textarea id="tk-text" class="textarea textarea-bordered min-h-[44px] h-[44px] max-h-56 resize-none flex-1" placeholder="Введите ответ пользователю или заметку (Enter = отправить, Shift+Enter = новая строка)"></textarea>
+              <button id="tk-send-reply" class="btn btn-primary btn-sm btn-square h-10 min-h-10" title="Отправить ответ"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
             </div>
+            <button id="tk-send-note" class="btn btn-outline btn-sm w-full h-10 min-h-10" title="Добавить внутреннюю заметку"><i class="fa-solid fa-note-sticky mr-2" aria-hidden="true"></i>Добавить заметку</button>
+            <button id="tk-sound-toggle" class="btn btn-ghost btn-xs self-end" type="button" title="Вкл/выкл звук уведомлений">Звук: вкл</button>
           </div>
         </div>
       </div>
@@ -4726,6 +4725,9 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       var compose=document.getElementById('tk-compose');
       var model=null;
       var lastSig='';
+      var notifyInit=false;
+      var lastMsgCount=0;
+      var soundEnabled=true;
       var loadInFlight=false;
       function esc(s){{return String(s||'').replace(/[&<>\"']/g,function(ch){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}}[ch]||ch;}});}}
       function modelSig(m){{
@@ -4742,6 +4744,41 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           String(last&&last.photo_file_id||''),
           String(last&&last.video_file_id||'')
         ].join('|');
+      }}
+      function loadSoundPref() {{
+        try {{
+          var raw=localStorage.getItem('remna_ticket_sound_enabled');
+          soundEnabled = raw===null ? true : raw==='1';
+        }} catch(_e) {{
+          soundEnabled = true;
+        }}
+      }}
+      function saveSoundPref() {{
+        try {{ localStorage.setItem('remna_ticket_sound_enabled', soundEnabled?'1':'0'); }} catch(_e) {{}}
+      }}
+      function updateSoundBtn() {{
+        var b=document.getElementById('tk-sound-toggle');
+        if(!b) return;
+        b.textContent='Звук: '+(soundEnabled?'вкл':'выкл');
+      }}
+      function playNotifyTone() {{
+        if(!soundEnabled || document.hidden) return;
+        try {{
+          var Ctx=window.AudioContext||window.webkitAudioContext;
+          if(!Ctx) return;
+          var ctx=new Ctx();
+          var osc=ctx.createOscillator();
+          var gain=ctx.createGain();
+          osc.type='sine';
+          osc.frequency.value=930;
+          gain.gain.value=0.0001;
+          osc.connect(gain); gain.connect(ctx.destination);
+          var now=ctx.currentTime;
+          gain.gain.exponentialRampToValueAtTime(0.07, now+0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now+0.20);
+          osc.start(now);
+          osc.stop(now+0.22);
+        }} catch(_e) {{}}
       }}
       function initAssign() {{
         assign.innerHTML='';
@@ -4930,6 +4967,15 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var ct=(r.headers.get('content-type')||'');
           if(ct.indexOf('application/json')===-1){{meta.textContent='Ответ не JSON (проверьте, что /api открыт на этом же домене)';chat.innerHTML='';return;}}
           var nextModel=await r.json();
+          var nextMsgs=(nextModel&&nextModel.messages)||[];
+          if(notifyInit && nextMsgs.length>lastMsgCount){{
+            var lastIncoming=nextMsgs[nextMsgs.length-1];
+            if(lastIncoming && lastIncoming.sender_role==='user') {{
+              playNotifyTone();
+            }}
+          }}
+          lastMsgCount=nextMsgs.length;
+          notifyInit=true;
           var sig=modelSig(nextModel);
           if(sig===lastSig) return;
           model=nextModel;
@@ -5004,6 +5050,14 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         }});
         autosizeText();
       }}
+      var soundBtn=document.getElementById('tk-sound-toggle');
+      if(soundBtn){{
+        soundBtn.addEventListener('click', function(){{
+          soundEnabled=!soundEnabled;
+          saveSoundPref();
+          updateSoundBtn();
+        }});
+      }}
       var attachBtn=document.getElementById('tk-attach');
       if(attachBtn&&fileInput){{
         attachBtn.addEventListener('click', function(){{ fileInput.click(); }});
@@ -5044,6 +5098,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         if(liveTimer)clearInterval(liveTimer);
       }});
       if('Notification' in window && Notification.permission==='default'){{ Notification.requestPermission(); }}
+      loadSoundPref();
+      updateSoundBtn();
       initAssign(); load(); loadTicketCount(); startLive();
     }})();
     </script>
