@@ -437,13 +437,21 @@ def _support_page(token: str) -> HTMLResponse:
       background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
     }}
     .wrap {{ max-width:430px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; }}
-    .head {{ padding:14px 14px 8px; }}
+    .head {{
+      position:sticky;
+      top:0;
+      z-index:20;
+      padding:14px 14px 8px;
+      background:linear-gradient(180deg, rgba(6,10,27,.96), rgba(6,10,27,.82));
+      backdrop-filter: blur(6px);
+      border-bottom:1px solid var(--line);
+    }}
     .brand {{ font-weight:700; font-size:22px; }}
     .sub {{ display:flex; align-items:center; justify-content:space-between; margin-top:4px; }}
     .subtitle {{ font-size:14px; color:var(--muted); }}
     .online {{ border:1px solid rgba(34,197,94,.45); color:#7ff0a8; border-radius:999px; padding:4px 10px; font-size:12px; display:flex; align-items:center; gap:6px; }}
     .dot {{ width:8px; height:8px; border-radius:50%; background:#22c55e; }}
-    .chat {{ flex:1; overflow:auto; padding:8px 14px 100px; }}
+    .chat {{ flex:1; overflow:auto; padding:8px 14px 150px; }}
     .msg-row {{ display:flex; margin:8px 0; }}
     .msg-row.me {{ justify-content:flex-end; }}
     .bubble {{ max-width:84%; border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; background:var(--admin); }}
@@ -474,8 +482,9 @@ def _support_page(token: str) -> HTMLResponse:
       border:1px solid var(--line); background:rgba(15,26,52,.75); color:#fff; cursor:pointer;
     }}
     .composer {{
-      position:fixed; left:0; right:0; bottom:72px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
+      position:fixed; left:0; right:0; bottom:62px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
       padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+      z-index:30;
     }}
     .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:44px 1fr 44px; gap:8px; align-items:center; }}
     .iconbtn {{ width:44px; height:44px; border-radius:12px; border:1px solid var(--line); background:#0d1730; color:#dbe6ff; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
@@ -484,6 +493,7 @@ def _support_page(token: str) -> HTMLResponse:
     .hotbar {{
       position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line);
       background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
+      z-index:35;
     }}
     .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
     .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:rgba(15,26,52,.55); }}
