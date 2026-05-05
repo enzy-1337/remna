@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from aiogram import Bot

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -631,16 +632,31 @@ async def api_ticket_reply_media(
         label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
         photo_fid: str | None = None
         video_fid: str | None = None
+        document_fid: str | None = None
+        document_name: str | None = None
         async with Bot(token=tickets_config.bot_token) as bot:
             safe_name = (file.filename or "").strip() or ("upload.jpg" if is_photo else "upload.mp4")
             upload = BufferedInputFile(file=file_data, filename=safe_name)
             if is_photo:
-                sent_user = await bot.send_photo(
-                    chat_id=int(t["telegram_user_id"]),
-                    photo=upload,
-                    caption=txt[:1024] or None,
-                )
-                photo_fid = sent_user.photo[-1].file_id if sent_user.photo else None
+                try:
+                    sent_user = await bot.send_photo(
+                        chat_id=int(t["telegram_user_id"]),
+                        photo=upload,
+                        caption=txt[:1024] or None,
+                    )
+                    photo_fid = sent_user.photo[-1].file_id if sent_user.photo else None
+                except TelegramBadRequest as e:
+                    err = str(e)
+                    if "PHOTO_INVALID_DIMENSIONS" in err or "IMAGE_PROCESS_FAILED" in err:
+                        sent_user = await bot.send_document(
+                            chat_id=int(t["telegram_user_id"]),
+                            document=BufferedInputFile(file=file_data, filename=safe_name),
+                            caption=txt[:1024] or None,
+                        )
+                        document_fid = sent_user.document.file_id if sent_user.document else None
+                        document_name = safe_name
+                    else:
+                        raise
             else:
                 sent_user = await bot.send_video(
                     chat_id=int(t["telegram_user_id"]),
@@ -669,9 +685,39 @@ async def api_ticket_reply_media(
                         caption=topic_caption[:1024],
                         parse_mode=ParseMode.HTML,
                     )
+                elif document_fid:
+                    await bot.send_document(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        document=document_fid,
+                        caption=topic_caption[:1024],
+                        parse_mode=ParseMode.HTML,
+                    )
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         has_video = await ticket_messages_has_video_file_id_column(session)
-        if has_photo and has_video:
+        has_document = await ticket_messages_has_document_columns(session)
+        if has_photo and has_video and has_document:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO ticket_messages (ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id,document_file_id,document_file_name)
+                    VALUES (:tid,:sid,'admin',:stg,:txt,:now,:internal,:photo,:video,:doc,:dname)
+                    """
+                ),
+                {
+                    "tid": ticket_id,
+                    "sid": admin_uid,
+                    "stg": admin_tg or None,
+                    "txt": media_text,
+                    "now": now,
+                    "internal": bool(is_internal),
+                    "photo": photo_fid,
+                    "video": video_fid,
+                    "doc": document_fid,
+                    "dname": document_name,
+                },
+            )
+        elif has_photo and has_video:
             await session.execute(
                 text(
                     """
