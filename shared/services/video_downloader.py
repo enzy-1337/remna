@@ -7,6 +7,7 @@ import logging
 import re
 import shlex
 import tempfile
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ class DownloadedVideo:
     duration_sec: int
     size_bytes: int
     original_url: str
+    photo_paths: list[Path] | None = None
 
 
 def extract_first_url(text: str) -> str | None:
@@ -124,6 +126,43 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
             raise RuntimeError("Не удалось получить информацию о видео.")
         if "entries" in info and info["entries"]:
             info = info["entries"][0]
+        images = info.get("images") or []
+        if images:
+            photo_paths: list[Path] = []
+            for idx, image in enumerate(images, start=1):
+                image_url = ""
+                if isinstance(image, dict):
+                    # Для TikTok image-post обычно URL без водяного знака лежит в url_list.
+                    url_list = image.get("url_list") or []
+                    if isinstance(url_list, list):
+                        for candidate in url_list:
+                            c = str(candidate or "").strip()
+                            if c:
+                                image_url = c
+                                break
+                    if not image_url:
+                        for key in ("display_image_url", "image_url", "url"):
+                            c = str(image.get(key) or "").strip()
+                            if c:
+                                image_url = c
+                                break
+                if not image_url:
+                    continue
+                photo_path = Path(temp_dir) / f"{info.get('id') or 'item'}_{idx:02d}.jpg"
+                with urllib.request.urlopen(image_url, timeout=20) as resp:
+                    photo_path.write_bytes(resp.read())
+                if photo_path.exists() and photo_path.stat().st_size > 0:
+                    photo_paths.append(photo_path)
+            if photo_paths:
+                first = photo_paths[0]
+                return DownloadedVideo(
+                    path=first,
+                    platform=detect_platform(url),
+                    duration_sec=0,
+                    size_bytes=sum(int(p.stat().st_size) for p in photo_paths),
+                    original_url=url,
+                    photo_paths=photo_paths,
+                )
         file_path = Path(ydl.prepare_filename(info))
         if file_path.suffix.lower() != ".mp4":
             candidate = file_path.with_suffix(".mp4")

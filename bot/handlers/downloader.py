@@ -12,7 +12,7 @@ import string
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputMediaPhoto
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -258,67 +258,79 @@ async def handle_download_link(
                             )
                         )
                         return
-                send_path, send_size, was_compressed = await _maybe_compress_for_telegram(
-                    video_path=video.path,
-                    duration_sec=video.duration_sec,
-                    size_bytes=video.size_bytes,
-                )
-                if was_compressed:
-                    await message.answer(plain("🎞 Видео было автоматически сжато для отправки в Telegram."))
-                telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
-                if send_size > telegram_limit_bytes:
-                    await progress_msg.edit_text(
-                        plain(
-                            "Видео скачалось, но Telegram не принял размер даже после попытки сжатия. "
-                            f"Размер: {_format_size_mb(send_size)} MB, лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
-                        )
-                    )
-                    return
-
                 kb = _build_cta_keyboard(settings.bot_username)
-                await progress_msg.delete()
-                try:
-                    await message.answer_video(
-                        FSInputFile(send_path),
-                        reply_markup=kb,
+                sent_user_video: Message | None = None
+                sent_user_photos: list[Message] = []
+                delivered_size = video.size_bytes
+                if video.photo_paths:
+                    await progress_msg.delete()
+                    media = [InputMediaPhoto(media=FSInputFile(p)) for p in video.photo_paths[:10]]
+                    sent_user_photos = await message.answer_media_group(media)
+                    delivered_size = sum(int(p.stat().st_size) for p in video.photo_paths[:10])
+                    if kb is not None:
+                        await message.answer(plain("❤️ Поддержать бота"), reply_markup=kb)
+                else:
+                    send_path, send_size, was_compressed = await _maybe_compress_for_telegram(
+                        video_path=video.path,
+                        duration_sec=video.duration_sec,
+                        size_bytes=video.size_bytes,
                     )
-                except TelegramBadRequest as e:
-                    msg = str(e).lower()
-                    if "file is too big" in msg or "request entity too large" in msg:
+                    if was_compressed:
+                        await message.answer(plain("🎞 Видео было автоматически сжато для отправки в Telegram."))
+                    telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
+                    if send_size > telegram_limit_bytes:
+                        await progress_msg.delete()
+                        await message.answer(
+                            plain(
+                                "Видео скачалось, но Telegram не принял размер даже после попытки сжатия. "
+                                f"Размер: {_format_size_mb(send_size)} MB, лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
+                            )
+                        )
+                        return
+                    delivered_size = send_size
+                    await progress_msg.delete()
+                    try:
+                        sent_user_video = await message.answer_video(
+                            FSInputFile(send_path),
+                            reply_markup=kb,
+                        )
+                    except TelegramBadRequest as e:
+                        msg = str(e).lower()
+                        if "file is too big" in msg or "request entity too large" in msg:
+                            await message.answer(
+                                plain(
+                                    "Видео скачалось, но Telegram не принял файл по размеру. "
+                                    "Попробуйте другую ссылку или более короткий ролик."
+                                )
+                            )
+                            logger.warning(
+                                "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
+                                tg.id,
+                                _format_size_mb(video.size_bytes),
+                                resolved_url,
+                                e,
+                            )
+                            return
+                        raise
+                    except TelegramEntityTooLarge:
                         await message.answer(
                             plain(
                                 "Видео скачалось, но Telegram не принял файл по размеру. "
-                                "Попробуйте другую ссылку или более короткий ролик."
+                                f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
                             )
                         )
                         logger.warning(
-                            "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
+                            "TelegramEntityTooLarge user_id=%s size_mb=%s url=%s",
                             tg.id,
                             _format_size_mb(video.size_bytes),
                             resolved_url,
-                            e,
                         )
                         return
-                    raise
-                except TelegramEntityTooLarge:
-                    await message.answer(
-                        plain(
-                            "Видео скачалось, но Telegram не принял файл по размеру. "
-                            f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
-                        )
-                    )
-                    logger.warning(
-                        "TelegramEntityTooLarge user_id=%s size_mb=%s url=%s",
-                        tg.id,
-                        _format_size_mb(video.size_bytes),
-                        resolved_url,
-                    )
-                    return
 
                 meta = _meta_caption(
                     platform=video.platform,
                     duration_sec=video.duration_sec,
-                    size_bytes=send_size,
+                    size_bytes=delivered_size,
                     tg_id=tg.id,
                     username=tg.username,
                     url=video.original_url,
@@ -328,12 +340,46 @@ async def handle_download_link(
                     message_thread_id=topic.topic_id,
                     text=meta,
                 )
-                await message.bot.send_video(
-                    chat_id=topic.forum_chat_id,
-                    message_thread_id=topic.topic_id,
-                    video=FSInputFile(send_path),
-                    reply_markup=kb,
-                )
+                if sent_user_photos:
+                    try:
+                        for sent_photo in sent_user_photos:
+                            await message.bot.forward_message(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                from_chat_id=sent_photo.chat.id,
+                                message_id=sent_photo.message_id,
+                            )
+                    except TelegramBadRequest:
+                        media_admin = []
+                        for sent_photo in sent_user_photos[:10]:
+                            if not sent_photo.photo:
+                                continue
+                            media_admin.append(InputMediaPhoto(media=sent_photo.photo[-1].file_id))
+                        if media_admin:
+                            await message.bot.send_media_group(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                media=media_admin,
+                            )
+                else:
+                    if sent_user_video is None:
+                        raise RuntimeError("Не удалось отправить видео пользователю.")
+                    try:
+                        await message.bot.forward_message(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            from_chat_id=sent_user_video.chat.id,
+                            message_id=sent_user_video.message_id,
+                        )
+                    except TelegramBadRequest:
+                        if sent_user_video.video is None:
+                            raise
+                        await message.bot.send_video(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            video=sent_user_video.video.file_id,
+                            reply_markup=kb,
+                        )
             except Exception as topic_exc:
                 err = str(topic_exc).lower()
                 if "message thread not found" not in err and "topic" not in err:
@@ -349,12 +395,31 @@ async def handle_download_link(
                     message_thread_id=topic.topic_id,
                     text=meta,
                 )
-                await message.bot.send_video(
-                    chat_id=topic.forum_chat_id,
-                    message_thread_id=topic.topic_id,
-                    video=FSInputFile(video.path),
-                    reply_markup=kb,
-                )
+                if sent_user_photos:
+                    for sent_photo in sent_user_photos:
+                        await message.bot.forward_message(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            from_chat_id=sent_photo.chat.id,
+                            message_id=sent_photo.message_id,
+                        )
+                else:
+                    try:
+                        await message.bot.forward_message(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            from_chat_id=sent_user_video.chat.id,
+                            message_id=sent_user_video.message_id,
+                        )
+                    except TelegramBadRequest:
+                        if sent_user_video is None or sent_user_video.video is None:
+                            raise
+                        await message.bot.send_video(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            video=sent_user_video.video.file_id,
+                            reply_markup=kb,
+                        )
             finally:
                 temp_dir.cleanup()
         except Exception as e:
