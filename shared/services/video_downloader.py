@@ -113,7 +113,7 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
     }
     with YoutubeDL(ydl_opts) as ydl:
         try:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(url, download=False)
         except DownloadError as e:
             msg = str(e)
             logger.warning("yt-dlp download failed for url=%s: %s", url, msg)
@@ -163,6 +163,16 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
                     original_url=url,
                     photo_paths=photo_paths,
                 )
+        try:
+            info = ydl.process_ie_result(info, download=True)
+        except DownloadError as e:
+            msg = str(e)
+            logger.warning("yt-dlp process_ie_result failed for url=%s: %s", url, msg)
+            if "Unsupported URL" in msg or "No video formats found" in msg:
+                raise RuntimeError("Площадка не отдала видео по этой ссылке (возможно приватный ролик или ограничения доступа).")
+            if "This video is private" in msg or "Login required" in msg:
+                raise RuntimeError("Видео приватное или требует авторизацию.")
+            raise RuntimeError(f"Ошибка скачивания: {msg[:300]}")
         file_path = Path(ydl.prepare_filename(info))
         if file_path.suffix.lower() != ".mp4":
             candidate = file_path.with_suffix(".mp4")
