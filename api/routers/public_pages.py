@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile
 from sqlalchemy import select
@@ -930,8 +931,19 @@ async def public_subscription_support_send(
         async with Bot(token=tickets_config.bot_token) as bot:
             upload = BufferedInputFile(file=raw, filename=safe_name)
             if ctype.startswith("image/"):
-                sent = await bot.send_photo(chat_id=int(db_user.telegram_id), photo=upload, caption=msg[:1024] or None)
-                photo_file_id = sent.photo[-1].file_id if sent.photo else None
+                try:
+                    sent = await bot.send_photo(chat_id=int(db_user.telegram_id), photo=upload, caption=msg[:1024] or None)
+                    photo_file_id = sent.photo[-1].file_id if sent.photo else None
+                except TelegramBadRequest as e:
+                    err = str(e)
+                    # Некоторые изображения Telegram не принимает как photo (например, некорректные размеры).
+                    # В этом случае отправляем тот же файл как document, чтобы сообщение не падало с 500.
+                    if "PHOTO_INVALID_DIMENSIONS" in err or "IMAGE_PROCESS_FAILED" in err:
+                        sent = await bot.send_document(chat_id=int(db_user.telegram_id), document=upload, caption=msg[:1024] or None)
+                        document_file_id = sent.document.file_id if sent.document else None
+                        document_name = safe_name
+                    else:
+                        raise
             elif ctype.startswith("video/"):
                 sent = await bot.send_video(chat_id=int(db_user.telegram_id), video=upload, caption=msg[:1024] or None)
                 video_file_id = sent.video.file_id if sent.video else None

@@ -66,7 +66,7 @@ def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
-    dp.update.middleware(PrivateChatOnlyMiddleware())
+    dp.update.middleware(PrivateChatOnlyMiddleware(allowed_chat_ids={int(config.support_group_id)}))
     dp.update.middleware(DbSessionMiddleware())
     dp.include_router(tickets_router())
     dp.run_polling(bot)
