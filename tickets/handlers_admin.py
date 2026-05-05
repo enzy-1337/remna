@@ -338,9 +338,14 @@ async def msg_admin_reply(
 
 @router.message(F.chat.id == config.support_group_id, F.message_thread_id)
 async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) -> None:
-    if message.from_user is None or message.from_user.is_bot:
+    is_anonymous_group_admin = (
+        message.from_user is None
+        and message.sender_chat is not None
+        and int(message.sender_chat.id) == int(config.support_group_id)
+    )
+    if message.from_user is not None and message.from_user.is_bot:
         return
-    if not _is_admin(message.from_user.id):
+    if not is_anonymous_group_admin and not _is_admin(message.from_user.id if message.from_user else None):
         return
     try:
         topic_id = int(message.message_thread_id or 0)
@@ -366,19 +371,21 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         return
     if not txt and not (photo_fid or video_fid):
         return
-    db_admin = await ensure_db_user(session, message.from_user)
-    await assign_ticket_admin(
-        session,
-        ticket_id=int(t["id"]),
-        admin_user_id=db_admin.id,
-        admin_telegram_id=int(message.from_user.id),
-    )
+    db_admin = None
+    if message.from_user is not None:
+        db_admin = await ensure_db_user(session, message.from_user)
+        await assign_ticket_admin(
+            session,
+            ticket_id=int(t["id"]),
+            admin_user_id=db_admin.id,
+            admin_telegram_id=int(message.from_user.id),
+        )
     await add_ticket_message(
         session,
         ticket_id=int(t["id"]),
-        sender_id=db_admin.id,
+        sender_id=(db_admin.id if db_admin is not None else None),
         sender_role="admin",
-        sender_telegram_id=int(message.from_user.id),
+        sender_telegram_id=(int(message.from_user.id) if message.from_user is not None else None),
         text_body=txt,
         is_internal=False,
         photo_file_id=photo_fid,

@@ -452,9 +452,9 @@ def _support_page(token: str) -> HTMLResponse:
       position:fixed; left:0; right:0; bottom:72px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
       padding:10px 14px calc(10px + env(safe-area-inset-bottom));
     }}
-    .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:44px 1fr 44px; gap:8px; align-items:center; }}
+    .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 44px; gap:8px; align-items:end; }}
     .iconbtn {{ width:44px; height:44px; border-radius:12px; border:1px solid var(--line); background:#0d1730; color:#dbe6ff; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
-    .input {{ width:100%; height:44px; border-radius:12px; border:1px solid var(--line); background:#0b142b; color:#fff; padding:0 12px; }}
+    .input {{ width:100%; min-height:44px; border-radius:12px; border:1px solid var(--line); background:#0b142b; color:#fff; padding:10px 12px; resize:vertical; max-height:132px; }}
     .hotbar {{
       position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line);
       background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
@@ -462,7 +462,6 @@ def _support_page(token: str) -> HTMLResponse:
     .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
     .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:rgba(15,26,52,.55); }}
     .hotbtn.active {{ color:#fff; border-color:rgba(124,108,255,.55); background:rgba(124,108,255,.25); }}
-    .attach-info {{ font-size:12px; color:var(--muted); padding:0 14px; margin-top:4px; }}
   </style>
 </head>
 <body>
@@ -478,12 +477,9 @@ def _support_page(token: str) -> HTMLResponse:
   </main>
   <div class="composer">
     <div class="composer-inner">
-      <button id="pick" class="iconbtn" type="button">📎</button>
-      <input id="txt" class="input" type="text" placeholder="Написать сообщение..." maxlength="4000" />
+      <textarea id="txt" class="input" placeholder="Написать сообщение..." maxlength="4000" spellcheck="true" autocapitalize="sentences" autocorrect="on"></textarea>
       <button id="send" class="iconbtn" type="button">➤</button>
-      <input id="file" type="file" hidden accept="image/*,.pdf,.txt" />
     </div>
-    <div id="attach-info" class="attach-info"></div>
   </div>
   <nav class="hotbar">
     <div class="hotbar-inner">
@@ -496,11 +492,7 @@ def _support_page(token: str) -> HTMLResponse:
     const chat = document.getElementById('chat');
     const txt = document.getElementById('txt');
     const send = document.getElementById('send');
-    const pick = document.getElementById('pick');
-    const file = document.getElementById('file');
-    const attachInfo = document.getElementById('attach-info');
     let lastSig = '';
-    let attached = null;
     function esc(s) {{ return String(s||'').replace(/[&<>"]/g, c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c])); }}
     function render(data) {{
       const msgs = data.messages || [];
@@ -528,27 +520,21 @@ def _support_page(token: str) -> HTMLResponse:
     }}
     async function sendMsg() {{
       const t = (txt.value||'').trim();
-      if (!t && !attached) return;
+      if (!t) return;
       const fd = new FormData();
       fd.append('text', t);
-      if (attached) fd.append('file', attached);
       send.disabled = true;
       try {{
         const r = await fetch('/sub/'+token+'/support/send', {{ method:'POST', body:fd }});
         if (!r.ok) throw new Error('send failed');
-        txt.value=''; attached=null; file.value=''; attachInfo.textContent='';
+        txt.value='';
         await load();
       }} finally {{
         send.disabled = false;
       }}
     }}
-    pick.addEventListener('click',()=>file.click());
-    file.addEventListener('change',()=> {{
-      attached = (file.files && file.files[0]) ? file.files[0] : null;
-      attachInfo.textContent = attached ? ('Файл: '+attached.name) : '';
-    }});
     send.addEventListener('click', sendMsg);
-    txt.addEventListener('keydown', (e)=>{{ if (e.key==='Enter') sendMsg(); }});
+    txt.addEventListener('keydown', (e)=>{{ if (e.key==='Enter' && !e.shiftKey) {{ e.preventDefault(); sendMsg(); }} }});
     load(); setInterval(load, 2500);
   </script>
 </body>
