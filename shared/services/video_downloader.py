@@ -44,22 +44,26 @@ def _pick_best_image_url(url_list: list[str]) -> str:
 
 
 def _extract_tiktok_photo_urls_from_html(html_text: str) -> list[str]:
-    m = re.search(
-        r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
-        html_text,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    if not m:
-        return []
-    raw_json = m.group(1).strip()
-    if not raw_json:
-        return []
-    try:
-        payload = json.loads(raw_json)
-    except Exception:
-        return []
-
     urls: list[str] = []
+    payloads: list[Any] = []
+    script_patterns = [
+        r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        r'<script[^>]*id="SIGI_STATE"[^>]*>(.*?)</script>',
+        r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+    ]
+    for pat in script_patterns:
+        m = re.search(pat, html_text, flags=re.DOTALL | re.IGNORECASE)
+        if not m:
+            continue
+        raw_json = m.group(1).strip()
+        if not raw_json:
+            continue
+        try:
+            payloads.append(json.loads(raw_json))
+        except Exception:
+            continue
+    if not payloads:
+        return []
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
@@ -89,7 +93,8 @@ def _extract_tiktok_photo_urls_from_html(html_text: str) -> list[str]:
             for v in node:
                 walk(v)
 
-    walk(payload)
+    for payload in payloads:
+        walk(payload)
 
     # Удаляем дубли с сохранением порядка.
     seen: set[str] = set()
@@ -157,6 +162,13 @@ def _download_tiktok_photo_post_sync(url: str, temp_dir: str) -> DownloadedVideo
         original_url=url,
         photo_paths=photo_paths,
     )
+
+
+def _extract_unsupported_url_from_msg(msg: str) -> str | None:
+    m = re.search(r"Unsupported URL:\s*(https?://\S+)", msg or "", flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).strip()
 
 
 def extract_first_url(text: str) -> str | None:
@@ -247,9 +259,12 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
             msg = str(e)
             logger.warning("yt-dlp download failed for url=%s: %s", url, msg)
             if "Unsupported URL" in msg and "tiktok.com" in (url or "").lower():
-                fallback = _download_tiktok_photo_post_sync(url, temp_dir)
+                fallback_url = _extract_unsupported_url_from_msg(msg) or url
+                fallback = _download_tiktok_photo_post_sync(fallback_url, temp_dir)
+                if fallback is None and fallback_url != url:
+                    fallback = _download_tiktok_photo_post_sync(url, temp_dir)
                 if fallback is not None:
-                    logger.info("TikTok photo fallback used for url=%s", url)
+                    logger.info("TikTok photo fallback used for url=%s (source=%s)", url, fallback_url)
                     return fallback
             if "Unsupported URL" in msg or "No video formats found" in msg:
                 raise RuntimeError("Площадка не отдала видео по этой ссылке (возможно приватный ролик или ограничения доступа).")
