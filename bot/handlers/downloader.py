@@ -234,10 +234,10 @@ async def handle_download_link(
     topic = await _ensure_user_topic(session=session, message=message, db_user=db_user)
     lock = _user_locks.setdefault(tg.id, asyncio.Lock())
     if lock.locked():
-        await message.answer(plain("⏳ Предыдущее видео ещё загружается. Дождитесь завершения."))
+        await message.answer(join_lines("⏳ " + bold("Предыдущее видео ещё загружается."), plain("Дождитесь завершения.")))
         return
 
-    progress_msg = await message.answer(plain("⏳ Загружаем видео, подождите..."))
+    progress_msg = await message.answer("⏳ " + bold("Загружаем, подождите..."))
     async with lock:
         try:
             video, temp_dir = await download_video(resolved_url)
@@ -297,12 +297,12 @@ async def handle_download_link(
                     except TelegramBadRequest as e:
                         msg = str(e).lower()
                         if "file is too big" in msg or "request entity too large" in msg:
-                            await message.answer(
-                                plain(
-                                    "Видео скачалось, но Telegram не принял файл по размеру. "
-                                    "Попробуйте другую ссылку или более короткий ролик."
-                                )
+                        await message.answer(
+                            join_lines(
+                                "❌ " + bold("Telegram не принял файл по размеру."),
+                                plain("Попробуйте другую ссылку или более короткий ролик."),
                             )
+                        )
                             logger.warning(
                                 "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
                                 tg.id,
@@ -314,9 +314,9 @@ async def handle_download_link(
                         raise
                     except TelegramEntityTooLarge:
                         await message.answer(
-                            plain(
-                                "Видео скачалось, но Telegram не принял файл по размеру. "
-                                f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
+                            join_lines(
+                                "❌ " + bold("Telegram не принял файл по размеру."),
+                                plain(f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."),
                             )
                         )
                         logger.warning(
@@ -433,7 +433,15 @@ async def handle_download_link(
             reason_line = f"\nПричина: {reason[:220]}" if reason else ""
             try:
                 await progress_msg.edit_text(
-                    plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова." + reason_line)
+                    join_lines(
+                        "❌ " + bold("Не удалось скачать видео."),
+                        plain("Проверьте ссылку и попробуйте снова." + reason_line),
+                    )
                 )
             except Exception:
-                await message.answer(plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова." + reason_line))
+                await message.answer(
+                    join_lines(
+                        "❌ " + bold("Не удалось скачать видео."),
+                        plain("Проверьте ссылку и попробуйте снова." + reason_line),
+                    )
+                )

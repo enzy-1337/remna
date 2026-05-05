@@ -9,6 +9,7 @@ import re
 import shlex
 import tempfile
 import urllib.request
+from urllib.parse import quote
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,45 @@ def _download_tiktok_photo_post_sync(url: str, temp_dir: str) -> DownloadedVideo
 
     urls = _extract_tiktok_photo_urls_from_html(html_text)
     if not urls:
+        parts = _extract_tiktok_photo_parts(url)
+        try:
+            if parts is not None:
+                username, item_id = parts
+                node_url = f"https://www.tiktok.com/node/share/post/@{username}/{item_id}"
+                req_node = urllib.request.Request(
+                    node_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+                        "Referer": "https://www.tiktok.com/",
+                    },
+                )
+                with urllib.request.urlopen(req_node, timeout=20) as node_resp:
+                    node_payload = json.loads(node_resp.read().decode("utf-8", "ignore"))
+                urls = _extract_tiktok_photo_urls_from_item_struct(node_payload)
+            if not urls:
+                oembed_url = "https://www.tiktok.com/oembed?url=" + quote(url, safe="")
+                req_oembed = urllib.request.Request(
+                    oembed_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                    },
+                )
+                with urllib.request.urlopen(req_oembed, timeout=20) as oembed_resp:
+                    oembed = json.loads(oembed_resp.read().decode("utf-8", "ignore"))
+                html_part = str(oembed.get("html") or "")
+                urls = _extract_tiktok_photo_urls_from_html(html_part)
+        except Exception:
+            urls = []
+    if not urls:
         return None
 
     photo_paths: list[Path] = []
@@ -169,6 +209,41 @@ def _extract_unsupported_url_from_msg(msg: str) -> str | None:
     if not m:
         return None
     return m.group(1).strip()
+
+
+def _extract_tiktok_photo_parts(url: str) -> tuple[str, str] | None:
+    m = re.search(r"tiktok\.com/@([^/]+)/photo/(\d+)", url or "", flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _extract_tiktok_photo_urls_from_item_struct(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    item = payload.get("itemInfo", {}).get("itemStruct", {})
+    image_post = item.get("imagePost", {})
+    images = image_post.get("images", [])
+    urls: list[str] = []
+    if isinstance(images, list):
+        for image in images:
+            if not isinstance(image, dict):
+                continue
+            image_url = image.get("imageURL") or {}
+            if isinstance(image_url, dict):
+                url_list = image_url.get("urlList") or image_url.get("url_list") or []
+                if isinstance(url_list, list):
+                    best = _pick_best_image_url([str(u) for u in url_list])
+                    if best:
+                        urls.append(best)
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        uniq.append(u)
+    return uniq
 
 
 def extract_first_url(text: str) -> str | None:
