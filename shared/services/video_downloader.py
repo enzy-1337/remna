@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from yt_dlp import YoutubeDL
 
 _URL_RE = re.compile(r"https?://\S+", flags=re.IGNORECASE)
@@ -34,7 +35,13 @@ def detect_platform(url: str) -> str:
         return "Instagram Reels"
     if "tiktok.com" in u:
         return "TikTok"
-    if "vkvideo.ru" in u or "vk.com/video" in u or "vk.com/clip" in u or "m.vk.com/video" in u:
+    if (
+        "vkvideo.ru" in u
+        or "vk.com/video" in u
+        or "vk.com/clip" in u
+        or "m.vk.com/video" in u
+        or "clips.vk.com" in u
+    ):
         return "VK Видео"
     if "youtube.com/shorts/" in u or "youtu.be/" in u or "youtube.com/" in u:
         return "YouTube Shorts"
@@ -54,8 +61,39 @@ def is_supported_url(url: str) -> bool:
             "vk.com/video",
             "vk.com/clip",
             "m.vk.com/video",
+            "clips.vk.com",
         )
     )
+
+
+def is_short_url(url: str) -> bool:
+    u = (url or "").lower()
+    return any(
+        x in u
+        for x in (
+            "vk.cc/",
+            "bit.ly/",
+            "t.co/",
+            "tinyurl.com/",
+            "goo.su/",
+            "clck.ru/",
+            "cutt.ly/",
+            "is.gd/",
+            "tiny.one/",
+        )
+    )
+
+
+async def resolve_short_url(url: str) -> str:
+    if not is_short_url(url):
+        return url
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
+            r = await client.get(url)
+            final = str(r.url)
+            return final or url
+    except Exception:
+        return url
 
 
 def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:

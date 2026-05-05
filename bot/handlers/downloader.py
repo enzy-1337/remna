@@ -22,6 +22,7 @@ from shared.services.video_downloader import (
     download_video,
     extract_first_url,
     is_supported_url,
+    resolve_short_url,
 )
 
 router = Router(name="downloader")
@@ -197,7 +198,8 @@ async def handle_download_link(
     url = extract_first_url(message.text or "")
     if not url:
         return
-    if not is_supported_url(url):
+    resolved_url = await resolve_short_url(url)
+    if not is_supported_url(resolved_url):
         await message.answer(plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok и VK Видео."))
         return
 
@@ -210,7 +212,7 @@ async def handle_download_link(
     progress_msg = await message.answer(plain("⏳ Загружаем видео, подождите..."))
     async with lock:
         try:
-            video, temp_dir = await download_video(url)
+            video, temp_dir = await download_video(resolved_url)
             try:
                 if settings.downloader_max_duration_sec > 0 and video.duration_sec > settings.downloader_max_duration_sec:
                     await progress_msg.edit_text(
