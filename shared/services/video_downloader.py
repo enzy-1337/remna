@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import tempfile
 from dataclasses import dataclass
@@ -11,8 +12,10 @@ from typing import Any
 
 import httpx
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 
 _URL_RE = re.compile(r"https?://\S+", flags=re.IGNORECASE)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -112,9 +115,26 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://vk.com/",
+        },
     }
     with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        try:
+            info = ydl.extract_info(url, download=True)
+        except DownloadError as e:
+            msg = str(e)
+            logger.warning("yt-dlp download failed for url=%s: %s", url, msg)
+            if "Unsupported URL" in msg or "No video formats found" in msg:
+                raise RuntimeError("Площадка не отдала видео по этой ссылке (возможно приватный ролик или ограничения доступа).")
+            if "This video is private" in msg or "Login required" in msg:
+                raise RuntimeError("Видео приватное или требует авторизацию.")
+            raise RuntimeError(f"Ошибка скачивания: {msg[:300]}")
         if info is None:
             raise RuntimeError("Не удалось получить информацию о видео.")
         if "entries" in info and info["entries"]:

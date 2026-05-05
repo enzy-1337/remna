@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from decimal import Decimal
+import logging
 import secrets
 import string
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,7 @@ from shared.services.video_downloader import (
 
 router = Router(name="downloader")
 _user_locks: dict[int, asyncio.Lock] = {}
+logger = logging.getLogger(__name__)
 
 
 def _now_label() -> str:
@@ -200,6 +203,8 @@ async def handle_download_link(
     if not url:
         return
     resolved_url = await resolve_short_url(url)
+    if resolved_url != url:
+        logger.info("Short URL resolved: %s -> %s", url, resolved_url)
     if not is_supported_url(resolved_url):
         await message.answer(
             plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts/YouTube, TikTok, VK Видео и VK Clips.")
@@ -236,10 +241,29 @@ async def handle_download_link(
 
                 kb = _build_cta_keyboard(settings.bot_username)
                 await progress_msg.delete()
-                await message.answer_video(
-                    FSInputFile(video.path),
-                    reply_markup=kb,
-                )
+                try:
+                    await message.answer_video(
+                        FSInputFile(video.path),
+                        reply_markup=kb,
+                    )
+                except TelegramBadRequest as e:
+                    msg = str(e).lower()
+                    if "file is too big" in msg or "request entity too large" in msg:
+                        await message.answer(
+                            plain(
+                                "Видео скачалось, но Telegram не принял файл по размеру. "
+                                "Попробуйте другую ссылку или более короткий ролик."
+                            )
+                        )
+                        logger.warning(
+                            "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
+                            tg.id,
+                            _format_size_mb(video.size_bytes),
+                            resolved_url,
+                            e,
+                        )
+                        return
+                    raise
 
                 meta = _meta_caption(
                     platform=video.platform,
@@ -283,8 +307,18 @@ async def handle_download_link(
                 )
             finally:
                 temp_dir.cleanup()
-        except Exception:
+        except Exception as e:
+            logger.exception(
+                "Downloader failed user_id=%s url=%s resolved_url=%s",
+                tg.id,
+                url,
+                resolved_url,
+            )
+            reason = str(e).strip()
+            reason_line = f"\nПричина: {reason[:220]}" if reason else ""
             try:
-                await progress_msg.edit_text(plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова."))
+                await progress_msg.edit_text(
+                    plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова." + reason_line)
+                )
             except Exception:
-                await message.answer(plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова."))
+                await message.answer(plain("Не удалось скачать видео. Проверьте ссылку и попробуйте снова." + reason_line))
