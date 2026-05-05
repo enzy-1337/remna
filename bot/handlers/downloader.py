@@ -11,7 +11,7 @@ import string
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from shared.md2 import bold, esc, join_lines, plain
 from shared.models.downloader_user_topic import DownloaderUserTopic
 from shared.models.user import User
 from shared.services.video_downloader import (
+    compress_video_to_limit,
     download_video,
     extract_first_url,
     is_supported_url,
@@ -30,6 +31,7 @@ from shared.services.video_downloader import (
 router = Router(name="downloader")
 _user_locks: dict[int, asyncio.Lock] = {}
 logger = logging.getLogger(__name__)
+_TELEGRAM_BOT_UPLOAD_MAX_MB = 49
 
 
 def _now_label() -> str:
@@ -38,6 +40,25 @@ def _now_label() -> str:
 
 def _format_size_mb(size_bytes: int) -> str:
     return f"{(size_bytes / 1024 / 1024):.2f}"
+
+
+async def _maybe_compress_for_telegram(
+    *,
+    video_path,
+    duration_sec: int,
+    size_bytes: int,
+):
+    telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
+    if size_bytes <= telegram_limit_bytes:
+        return video_path, size_bytes, False
+    compressed = await compress_video_to_limit(
+        source_path=video_path,
+        duration_sec=duration_sec,
+        max_size_mb=_TELEGRAM_BOT_UPLOAD_MAX_MB,
+    )
+    if compressed is None:
+        return video_path, size_bytes, False
+    return compressed, int(compressed.stat().st_size), True
 
 
 def _build_cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None:
@@ -238,12 +259,28 @@ async def handle_download_link(
                             )
                         )
                         return
+                send_path, send_size, was_compressed = await _maybe_compress_for_telegram(
+                    video_path=video.path,
+                    duration_sec=video.duration_sec,
+                    size_bytes=video.size_bytes,
+                )
+                if was_compressed:
+                    await message.answer(plain("🎞 Видео было автоматически сжато для отправки в Telegram."))
+                telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
+                if send_size > telegram_limit_bytes:
+                    await progress_msg.edit_text(
+                        plain(
+                            "Видео скачалось, но Telegram не принял размер даже после попытки сжатия. "
+                            f"Размер: {_format_size_mb(send_size)} MB, лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
+                        )
+                    )
+                    return
 
                 kb = _build_cta_keyboard(settings.bot_username)
                 await progress_msg.delete()
                 try:
                     await message.answer_video(
-                        FSInputFile(video.path),
+                        FSInputFile(send_path),
                         reply_markup=kb,
                     )
                 except TelegramBadRequest as e:
@@ -264,11 +301,25 @@ async def handle_download_link(
                         )
                         return
                     raise
+                except TelegramEntityTooLarge:
+                    await message.answer(
+                        plain(
+                            "Видео скачалось, но Telegram не принял файл по размеру. "
+                            f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
+                        )
+                    )
+                    logger.warning(
+                        "TelegramEntityTooLarge user_id=%s size_mb=%s url=%s",
+                        tg.id,
+                        _format_size_mb(video.size_bytes),
+                        resolved_url,
+                    )
+                    return
 
                 meta = _meta_caption(
                     platform=video.platform,
                     duration_sec=video.duration_sec,
-                    size_bytes=video.size_bytes,
+                    size_bytes=send_size,
                     tg_id=tg.id,
                     username=tg.username,
                     url=video.original_url,
@@ -281,7 +332,7 @@ async def handle_download_link(
                 await message.bot.send_video(
                     chat_id=topic.forum_chat_id,
                     message_thread_id=topic.topic_id,
-                    video=FSInputFile(video.path),
+                    video=FSInputFile(send_path),
                     reply_markup=kb,
                 )
             except Exception as topic_exc:
