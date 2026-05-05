@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import shlex
@@ -28,6 +29,134 @@ class DownloadedVideo:
     size_bytes: int
     original_url: str
     photo_paths: list[Path] | None = None
+
+
+def _pick_best_image_url(url_list: list[str]) -> str:
+    # Предпочитаем URL без водяного знака, если TikTok отдает несколько вариантов.
+    cleaned = [str(u or "").strip() for u in url_list if str(u or "").strip()]
+    if not cleaned:
+        return ""
+    for u in cleaned:
+        low = u.lower()
+        if "watermark" not in low and "wm" not in low:
+            return u
+    return cleaned[0]
+
+
+def _extract_tiktok_photo_urls_from_html(html_text: str) -> list[str]:
+    m = re.search(
+        r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        html_text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return []
+    raw_json = m.group(1).strip()
+    if not raw_json:
+        return []
+    try:
+        payload = json.loads(raw_json)
+    except Exception:
+        return []
+
+    urls: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            # Самый релевантный блок для photo-post.
+            image_post = node.get("imagePost")
+            if isinstance(image_post, dict):
+                images = image_post.get("images")
+                if isinstance(images, list):
+                    for item in images:
+                        if not isinstance(item, dict):
+                            continue
+                        url_list = item.get("urlList") or item.get("url_list") or []
+                        if isinstance(url_list, list):
+                            best = _pick_best_image_url([str(u) for u in url_list])
+                            if best:
+                                urls.append(best)
+                        image_url = item.get("imageURL") or {}
+                        if isinstance(image_url, dict):
+                            url_list2 = image_url.get("urlList") or image_url.get("url_list") or []
+                            if isinstance(url_list2, list):
+                                best2 = _pick_best_image_url([str(u) for u in url_list2])
+                                if best2:
+                                    urls.append(best2)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(payload)
+
+    # Удаляем дубли с сохранением порядка.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        uniq.append(u)
+    return uniq
+
+
+def _download_tiktok_photo_post_sync(url: str, temp_dir: str) -> DownloadedVideo | None:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html_text = resp.read().decode("utf-8", "ignore")
+    except Exception:
+        return None
+
+    urls = _extract_tiktok_photo_urls_from_html(html_text)
+    if not urls:
+        return None
+
+    photo_paths: list[Path] = []
+    for idx, image_url in enumerate(urls, start=1):
+        photo_path = Path(temp_dir) / f"tiktok_photo_{idx:02d}.jpg"
+        try:
+            req_img = urllib.request.Request(
+                image_url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": "https://www.tiktok.com/",
+                },
+            )
+            with urllib.request.urlopen(req_img, timeout=20) as img_resp:
+                photo_path.write_bytes(img_resp.read())
+        except Exception:
+            continue
+        if photo_path.exists() and photo_path.stat().st_size > 0:
+            photo_paths.append(photo_path)
+    if not photo_paths:
+        return None
+
+    first = photo_paths[0]
+    return DownloadedVideo(
+        path=first,
+        platform=detect_platform(url),
+        duration_sec=0,
+        size_bytes=sum(int(p.stat().st_size) for p in photo_paths),
+        original_url=url,
+        photo_paths=photo_paths,
+    )
 
 
 def extract_first_url(text: str) -> str | None:
@@ -117,6 +246,11 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
         except DownloadError as e:
             msg = str(e)
             logger.warning("yt-dlp download failed for url=%s: %s", url, msg)
+            if "Unsupported URL" in msg and "tiktok.com" in (url or "").lower():
+                fallback = _download_tiktok_photo_post_sync(url, temp_dir)
+                if fallback is not None:
+                    logger.info("TikTok photo fallback used for url=%s", url)
+                    return fallback
             if "Unsupported URL" in msg or "No video formats found" in msg:
                 raise RuntimeError("Площадка не отдала видео по этой ссылке (возможно приватный ролик или ограничения доступа).")
             if "This video is private" in msg or "Login required" in msg:
