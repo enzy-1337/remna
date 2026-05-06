@@ -46,7 +46,7 @@ async def maybe_switch_to_hybrid(
     if user.billing_mode == "hybrid":
         return False
     ts = now or datetime.now(timezone.utc)
-    active_sub = (
+    latest_sub = (
         await session.execute(
             select(Subscription)
             .where(Subscription.user_id == user.id)
@@ -54,9 +54,43 @@ async def maybe_switch_to_hybrid(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if user_is_transition_exempt(user, active_sub, settings):
+    if user_is_transition_exempt(user, latest_sub, settings):
         return False
-    if active_sub is not None and not is_transition_due(expires_at=active_sub.expires_at, now=ts):
+    # Переводим только пользователей, у которых была подписка и она уже истекла.
+    if latest_sub is None or latest_sub.expires_at is None:
+        return False
+    if not is_transition_due(expires_at=latest_sub.expires_at, now=ts):
+        return False
+
+    # Дополнительная защита: активный статус/триал в БД блокирует переход.
+    has_active_sub = (
+        await session.execute(
+            select(Subscription.id)
+            .where(
+                Subscription.user_id == user.id,
+                Subscription.status.in_(("active", "trial")),
+                Subscription.expires_at > ts,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if has_active_sub is not None:
+        return False
+
+    # Переход только после пополнения, сделанного уже после окончания подписки.
+    has_topup_after_expiry = (
+        await session.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user.id,
+                Transaction.status == "completed",
+                Transaction.type.in_(("topup", "admin_balance_add")),
+                Transaction.created_at >= latest_sub.expires_at,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if has_topup_after_expiry is None:
         return False
     user.billing_mode = "hybrid"
     session.add(

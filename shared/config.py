@@ -377,7 +377,7 @@ class Settings(BaseSettings):
         validation_alias="BILLING_TRANSITION_FEE_PERCENT",
     )
     billing_transition_check_interval_sec: int = Field(
-        default=30,
+        default=1800,
         ge=5,
         validation_alias="BILLING_TRANSITION_CHECK_INTERVAL_SEC",
     )
