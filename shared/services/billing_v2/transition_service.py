@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
@@ -15,6 +16,18 @@ import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_rw_expire_at(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def user_is_transition_exempt(user: User, sub: Subscription | None, settings: Settings) -> bool:
@@ -59,6 +72,35 @@ async def maybe_switch_to_hybrid(
     # Переводим только пользователей, у которых была подписка и она уже истекла.
     if latest_sub is None or latest_sub.expires_at is None:
         return False
+    # Если срок в БД истёк, но в панели подписка уже продлена вручную, не переводим в hybrid.
+    if latest_sub.expires_at <= ts and user.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            info = await rw.get_user(str(user.remnawave_uuid))
+        except RemnaWaveError as e:
+            logger.warning(
+                "legacy_transition: panel recheck failed user_id=%s rw_uuid=%s: %s",
+                user.id,
+                user.remnawave_uuid,
+                e,
+            )
+        else:
+            panel_exp = _parse_rw_expire_at(
+                info.get("expireAt")
+                or info.get("expiresAt")
+                or info.get("expire_at")
+                or info.get("expires_at")
+            )
+            if panel_exp is not None and panel_exp > ts:
+                latest_sub.expires_at = panel_exp
+                latest_sub.status = "active"
+                logger.info(
+                    "legacy_transition: skip switch due panel extension user_id=%s db_exp=%s panel_exp=%s",
+                    user.id,
+                    ts.isoformat(),
+                    panel_exp.isoformat(),
+                )
+                return False
     if not is_transition_due(expires_at=latest_sub.expires_at, now=ts):
         return False
 
