@@ -281,6 +281,9 @@ first_install() {
 
   run_compose down --remove-orphans || true
   run_compose up -d --build --force-recreate
+  if [[ -f "$APP_DIR/scripts/docker-stack-start.sh" ]]; then
+    chmod +x "$APP_DIR/scripts/docker-stack-start.sh" 2>/dev/null || $SUDO chmod +x "$APP_DIR/scripts/docker-stack-start.sh"
+  fi
   echo "$(msg install_done)"
 }
 
@@ -334,7 +337,11 @@ update_system() {
 
 start_stack() {
   require_app_installed || return 1
-  run_compose up -d
+  if [[ -x "$APP_DIR/scripts/docker-stack-start.sh" ]]; then
+    bash "$APP_DIR/scripts/docker-stack-start.sh"
+  else
+    run_compose up -d
+  fi
   echo "$(msg start_done)"
 }
 
@@ -346,8 +353,12 @@ stop_stack() {
 
 restart_stack() {
   require_app_installed || return 1
-  run_compose down
-  run_compose up -d
+  if [[ -x "$APP_DIR/scripts/docker-stack-start.sh" ]]; then
+    bash "$APP_DIR/scripts/docker-stack-start.sh"
+  else
+    run_compose down
+    run_compose up -d
+  fi
   echo "$(msg restart_done)"
 }
 
@@ -379,9 +390,13 @@ run_migrations() {
 
 fix_docker_network() {
   require_app_installed || return 1
-  run_compose down --remove-orphans || true
-  docker rm -f "${APP_NAME}-postgres-1" >/dev/null 2>&1 || true
-  run_compose up -d --force-recreate
+  if [[ -x "$APP_DIR/scripts/docker-stack-start.sh" ]]; then
+    bash "$APP_DIR/scripts/docker-stack-start.sh"
+  else
+    run_compose down --remove-orphans || true
+    docker rm -f "${APP_NAME}-postgres-1" >/dev/null 2>&1 || true
+    run_compose up -d --force-recreate
+  fi
   run_compose ps
 }
 
@@ -391,6 +406,13 @@ setup_systemd_autostart() {
     echo "$(msg only_linux_systemd)"
     return 1
   fi
+
+  local starter="$APP_DIR/scripts/docker-stack-start.sh"
+  if [[ ! -f "$starter" ]]; then
+    log "Не найден $starter — обновите репозиторий."
+    return 1
+  fi
+  chmod +x "$starter" 2>/dev/null || $SUDO chmod +x "$starter"
 
   local unit_path="/etc/systemd/system/$SERVICE_NAME"
   $SUDO tee "$unit_path" >/dev/null <<EOF
@@ -403,8 +425,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+ExecStart=$starter
+ExecStop=-/usr/bin/docker compose down --remove-orphans
 RemainAfterExit=yes
 TimeoutStartSec=0
 

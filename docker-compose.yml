@@ -1,6 +1,12 @@
 x-tz-env: &tz-env
   TZ: ${TZ:-Europe/Moscow}
 
+# Автоперезапуск контейнеров. На VPS с systemd (remna-bot.service) задайте в .env:
+# RESTART_POLICY=no — иначе после reboot Docker Engine может поднять контейнеры
+# раньше появления сети проекта и получится «network ... not found».
+x-restart: &restart-policy
+  restart: ${RESTART_POLICY:-no}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,7 +23,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    <<: *restart-policy
 
   # Однократно применяет Alembic (в т.ч. новые колонки) до старта ботов/API.
   migrate:
@@ -38,7 +44,7 @@ services:
     environment:
       <<: *tz-env
     # Пробрасываем на хост нестандартный порт под `network_mode: host`.
-    restart: unless-stopped
+    <<: *restart-policy
 
   bot:
     build: .
@@ -66,7 +72,7 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    <<: *restart-policy
 
   api:
     build: .
@@ -96,7 +102,7 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    <<: *restart-policy
 
   tickets-bot:
     build: .
@@ -129,7 +135,7 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    <<: *restart-policy
 
   downloader-bot:
     build: .
@@ -160,7 +166,7 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    <<: *restart-policy
 
 volumes:
   pgdata:

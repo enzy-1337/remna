@@ -113,15 +113,39 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-org>/<your-repo>/<bran
 
 ### Устойчивый запуск после reboot (production)
 
-Если после перезагрузки сервера появляется ошибка вида `network ... not found`, это почти всегда означает рассинхрон Docker-сети (контейнер пытается стартовать со старым network id, который уже удалён). В этом проекте это предотвращается фиксированным именем сети в `docker-compose.yml`:
+Если после перезагрузки появляется `network ... not found`, типичная цепочка такая:
 
-- `networks.default.name: remna-bot-net`
+1. В `docker-compose.yml` зафиксирована сеть **`remna-bot-net`** (`networks.default.name`).
+2. Если у контейнеров **`restart: unless-stopped`** (или иная политика автозапуска), **Docker Engine** после старта демона поднимает контейнеры **сам**, иногда **раньше** полноценного `docker compose up` → контейнер остаётся с «битой» привязкой к сети.
+3. В итоге видите только часть контейнеров (например, только Redis) или падает `postgres` при следующем `up`.
 
-Ниже — рекомендуемый порядок для прод-сервера, чтобы стек гарантированно поднимался после reboot.
+Что нужно для стабильного VPS:
+
+#### 0) Переменные в `.env` (обязательно для systemd)
+
+- **`RESTART_POLICY=no`** — чтобы после reboot контейнеры **не стартовали сами**, пока их не поднимет `compose` через unit (или вручную). В `.env.example` это уже прописано с комментарием.
+- Внутри Docker для БД/Redis в контейнере используйте хост **`postgres`** / **`redis`**, а не `localhost` в `DATABASE_URL` / `REDIS_URL`, иначе миграции и сервисы не достучатся до БД по DNS.
+
+Универсальный сценарий подъёма: **`scripts/docker-stack-start.sh`** — выполняет `docker compose down --remove-orphans` (контейнеры и сеть проекта без `-v`), затем `postgres` + `redis` → **`migrate`** → остальные сервисы.
+
+```bash
+chmod +x scripts/docker-stack-start.sh
+./scripts/docker-stack-start.sh
+```
+
+Его же вызывает пункт **11)** в `deploy/remna-manager.sh` при настройке systemd.
 
 #### 1) Одноразовое восстановление, если уже сломалось
 
 Из директории проекта (`/opt/remna-bot`):
+
+```bash
+chmod +x scripts/docker-stack-start.sh
+./scripts/docker-stack-start.sh
+docker compose logs postgres --tail=100
+```
+
+Либо вручную (эквивалент скрипта):
 
 ```bash
 docker compose down --remove-orphans
@@ -130,19 +154,13 @@ docker compose up -d --force-recreate
 docker compose ps
 ```
 
-Проверка логов PostgreSQL:
-
-```bash
-docker compose logs postgres --tail=100
-```
-
-Если в выводе `docker compose ps` сервис `postgres` в `Up`, а боты/API стартовали — аварийное восстановление завершено.
+После восстановления добавьте в `.env`: **`RESTART_POLICY=no`** и пересоздайте контейнеры один раз (`./scripts/docker-stack-start.sh`).
 
 #### 2) Включить автоподъём стека через systemd
 
-`restart: unless-stopped` у контейнеров полезен, но на практике надёжнее запускать весь compose-стек через unit после старта Docker.
+Поднимать стек лучше **скриптом** `scripts/docker-stack-start.sh`, а не простой командой `docker compose up`, чтобы перед стартом снимать «сломанные» после reboot контейнеры и гарантированно выполнять миграции.
 
-Создайте unit:
+Создайте unit (путь к проекту при необходимости замените):
 
 ```bash
 sudo tee /etc/systemd/system/remna-bot.service >/dev/null <<'EOF'
@@ -155,14 +173,16 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/remna-bot
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+ExecStart=/opt/remna-bot/scripts/docker-stack-start.sh
+ExecStop=-/usr/bin/docker compose down --remove-orphans
 RemainAfterExit=yes
 TimeoutStartSec=0
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+chmod +x /opt/remna-bot/scripts/docker-stack-start.sh
 ```
 
 Активируйте автозапуск:
@@ -176,8 +196,8 @@ sudo systemctl start remna-bot.service
 Проверьте статус:
 
 ```bash
-systemctl status remna-bot.service --no-pager
-docker compose -f /opt/remna-bot/docker-compose.yml ps
+systemctl status remna-bot.service --no-pager -l
+cd /opt/remna-bot && docker compose ps
 ```
 
 #### 3) Проверка после тестового reboot
@@ -199,12 +219,11 @@ docker compose logs postgres --tail=80
 
 #### 4) Регламент после обновлений Docker/Compose
 
-После крупных апдейтов Docker Engine/Compose plugin рекомендуется один раз “пересобрать состояние”:
+После крупных апдейтов Docker Engine/Compose plugin рекомендуется один раз прогнать тот же сценарий, что при boot:
 
 ```bash
 cd /opt/remna-bot
-docker compose down --remove-orphans
-docker compose up -d --force-recreate
+./scripts/docker-stack-start.sh
 ```
 
 Это безопасно для данных БД, потому что данные лежат в volume `pgdata`.
