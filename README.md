@@ -84,6 +84,33 @@ docker compose build --no-cache
 docker compose up -d --build
 ```
 
+### Универсальный менеджер (install/update/menu)
+
+Добавлен интерактивный скрипт `deploy/remna-manager.sh` для управления сервером:
+
+- выбор языка (Русский/English) при старте;
+- первичная установка (проверка зависимостей, clone/pull, первый запуск);
+- проверка обновлений при старте и предложение обновиться;
+- запуск/остановка/перезапуск, статус, логи;
+- пересборка контейнеров, миграции;
+- автофикс ошибки `network ... not found`;
+- настройка автозапуска через `systemd`.
+
+Локальный запуск из репозитория:
+
+```bash
+chmod +x deploy/remna-manager.sh
+./deploy/remna-manager.sh
+```
+
+Запуск через `curl | bash` (для первого деплоя на чистом сервере):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/<your-org>/<your-repo>/<branch>/deploy/remna-manager.sh)
+```
+
+Перед запуском через `curl` замените `<your-org>/<your-repo>/<branch>` на ваш GitHub-путь.
+
 ### Устойчивый запуск после reboot (production)
 
 Если после перезагрузки сервера появляется ошибка вида `network ... not found`, это почти всегда означает рассинхрон Docker-сети (контейнер пытается стартовать со старым network id, который уже удалён). В этом проекте это предотвращается фиксированным именем сети в `docker-compose.yml`:
