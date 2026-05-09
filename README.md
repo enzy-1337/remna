@@ -84,6 +84,104 @@ docker compose build --no-cache
 docker compose up -d --build
 ```
 
+### Устойчивый запуск после reboot (production)
+
+Если после перезагрузки сервера появляется ошибка вида `network ... not found`, это почти всегда означает рассинхрон Docker-сети (контейнер пытается стартовать со старым network id, который уже удалён). В этом проекте это предотвращается фиксированным именем сети в `docker-compose.yml`:
+
+- `networks.default.name: remna-bot-net`
+
+Ниже — рекомендуемый порядок для прод-сервера, чтобы стек гарантированно поднимался после reboot.
+
+#### 1) Одноразовое восстановление, если уже сломалось
+
+Из директории проекта (`/opt/remna-bot`):
+
+```bash
+docker compose down --remove-orphans
+docker rm -f remna-bot-postgres-1 2>/dev/null || true
+docker compose up -d --force-recreate
+docker compose ps
+```
+
+Проверка логов PostgreSQL:
+
+```bash
+docker compose logs postgres --tail=100
+```
+
+Если в выводе `docker compose ps` сервис `postgres` в `Up`, а боты/API стартовали — аварийное восстановление завершено.
+
+#### 2) Включить автоподъём стека через systemd
+
+`restart: unless-stopped` у контейнеров полезен, но на практике надёжнее запускать весь compose-стек через unit после старта Docker.
+
+Создайте unit:
+
+```bash
+sudo tee /etc/systemd/system/remna-bot.service >/dev/null <<'EOF'
+[Unit]
+Description=Remna Bot Docker Compose Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/remna-bot
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Активируйте автозапуск:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable remna-bot.service
+sudo systemctl start remna-bot.service
+```
+
+Проверьте статус:
+
+```bash
+systemctl status remna-bot.service --no-pager
+docker compose -f /opt/remna-bot/docker-compose.yml ps
+```
+
+#### 3) Проверка после тестового reboot
+
+После `sudo reboot`:
+
+```bash
+systemctl status remna-bot.service --no-pager
+cd /opt/remna-bot
+docker compose ps
+docker compose logs postgres --tail=80
+```
+
+Ожидаемое состояние:
+
+- `remna-bot.service` — `active (exited)` (это нормально для `Type=oneshot` + `RemainAfterExit=yes`);
+- `postgres`, `redis`, `bot`, `tickets-bot`, `downloader-bot` — `Up`;
+- в логах нет `network ... not found`.
+
+#### 4) Регламент после обновлений Docker/Compose
+
+После крупных апдейтов Docker Engine/Compose plugin рекомендуется один раз “пересобрать состояние”:
+
+```bash
+cd /opt/remna-bot
+docker compose down --remove-orphans
+docker compose up -d --force-recreate
+```
+
+Это безопасно для данных БД, потому что данные лежат в volume `pgdata`.
+
 **Однострочник из корня** (обёртка с проверкой `.env`):
 
 - **Linux/macOS:** `chmod +x start.sh && ./start.sh`

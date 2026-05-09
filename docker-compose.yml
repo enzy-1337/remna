@@ -164,3 +164,7 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  default:
+    name: remna-bot-net
