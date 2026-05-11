@@ -16,7 +16,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -120,15 +121,32 @@ async def lifespan(app: FastAPI):
             sw_kwargs["allowed_updates"] = allowed
         await bot.set_webhook(**sw_kwargs)
         log.info("Telegram setWebhook: %s", url)
-        try:
-            await notify_admin_plain(
-                s,
-                text=f"🌐 API: режим Telegram webhook\n{url}",
-                topic=AdminLogTopic.BOOT,
-                event_type="api_telegram_webhook_startup",
-            )
-        except Exception:
-            log.debug("admin notify webhook startup", exc_info=True)
+
+    try:
+        boot_ts = (
+            datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
+        )
+        mode = "webhook" if s.telegram_webhook_enabled else "polling"
+        lines = [
+            "🚀 Сайт (API) запущен",
+            f"Режим Telegram: {mode}",
+        ]
+        if s.telegram_webhook_enabled:
+            wh_url = (s.telegram_webhook_url or "").strip()
+            if wh_url:
+                lines.append(f"URL: {wh_url}")
+        lines.append(boot_ts)
+        sent = await notify_admin_plain(
+            s,
+            text="\n".join(lines),
+            topic=AdminLogTopic.BOOT,
+            event_type="api_startup",
+        )
+        if sent:
+            log.info("Уведомление о запуске сайта отправлено в админ-чат (тема BOOT).")
+    except Exception:
+        log.debug("admin notify api startup", exc_info=True)
+
     async def broadcast_schedule_tick() -> None:
         while True:
             await asyncio.sleep(60)
