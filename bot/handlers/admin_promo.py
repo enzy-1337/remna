@@ -141,7 +141,7 @@ def _cancel_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="❌ Отмена", callback_data=f"{prefix}:cancel"
+            text="❌ Отмена", callback_data=f"{prefix}:cancel", style="danger"
         )
     )
     return b.as_markup()
@@ -153,43 +153,60 @@ def _type_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="🏷 Скидка на покупку тарифа (%)",
             callback_data=f"{prefix}:type:discount_percent",
+            style="success",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="📊 Дополнительные ГБ",
             callback_data=f"{prefix}:type:extra_gb",
+            style="success",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="🖥 Дополнительные устройства",
             callback_data=f"{prefix}:type:extra_devices",
+            style="success",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="💰 Деньги на баланс",
             callback_data=f"{prefix}:type:balance_rub",
+            style="success",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="📈 % к первому пополнению (1 раз)",
             callback_data=f"{prefix}:type:topup_bonus_percent",
+            style="success",
         )
     )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:promos:page:0"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад", callback_data="admin:promos:page:0", style="danger"
+        )
+    )
     return b.as_markup()
 
 
 def _active_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="🟢 Активен", callback_data=f"{prefix}:active:true"),
-        InlineKeyboardButton(text="⚪️ Неактивен", callback_data=f"{prefix}:active:false"),
+        InlineKeyboardButton(
+            text="🟢 Активен", callback_data=f"{prefix}:active:true", style="success"
+        ),
+        InlineKeyboardButton(
+            text="⚪️ Неактивен", callback_data=f"{prefix}:active:false", style="primary"
+        ),
     )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:promos:page:0"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад", callback_data="admin:promos:page:0", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -199,34 +216,54 @@ def _edit_field_select_keyboard(promo_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="🎁 Награда",
             callback_data=f"admin:promos:editfield:{promo_id}:value",
+            style="primary",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="🏷 Тип награды",
             callback_data=f"admin:promos:editfield:{promo_id}:type",
+            style="primary",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="🔢 Лимит активаций",
             callback_data=f"admin:promos:editfield:{promo_id}:max_uses",
+            style="primary",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="📅 Срок действия",
             callback_data=f"admin:promos:editfield:{promo_id}:expires_at",
+            style="primary",
         )
     )
-    b.row(InlineKeyboardButton(text="⬅️ Назад к промокоду", callback_data=f"admin:promos:view:{promo_id}"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад к промокоду",
+            callback_data=f"admin:promos:view:{promo_id}",
+            style="danger",
+        )
+    )
     return b.as_markup()
 
 
 def _promo_view_back_keyboard(promo_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="↩️ Открыть промокод", callback_data=f"admin:promos:view:{promo_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:promos:page:0"))
+    b.row(
+        InlineKeyboardButton(
+            text="↩️ Открыть промокод",
+            callback_data=f"admin:promos:view:{promo_id}",
+            style="primary",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ К списку", callback_data="admin:promos:page:0", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -261,20 +298,48 @@ async def _render_promos_list(
 
     b = InlineKeyboardBuilder()
     for p in promos:
-        b.row(InlineKeyboardButton(text=_list_button_label(p), callback_data=f"admin:promos:view:{p.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text=_list_button_label(p),
+                callback_data=f"admin:promos:view:{p.id}",
+                style="primary",
+            )
+        )
 
     total_pages = max(1, (int(total) + PAGE_SIZE - 1) // PAGE_SIZE) if total else 1
     if int(total) > 9 and total_pages > 1:
-        left = InlineKeyboardButton(text="⬅️", callback_data="admin:promos:page:0")
-        right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{total_pages-1}")
+        left = InlineKeyboardButton(
+            text="⬅️", callback_data="admin:promos:page:0", style="primary"
+        )
+        right = InlineKeyboardButton(
+            text="➡️",
+            callback_data=f"admin:promos:page:{total_pages-1}",
+            style="primary",
+        )
         if page > 0:
-            left = InlineKeyboardButton(text="⬅️", callback_data=f"admin:promos:page:{page-1}")
+            left = InlineKeyboardButton(
+                text="⬅️", callback_data=f"admin:promos:page:{page-1}", style="primary"
+            )
         if page + 1 < total_pages:
-            right = InlineKeyboardButton(text="➡️", callback_data=f"admin:promos:page:{page+1}")
-        b.row(left, InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin:promos:noop"), right)
+            right = InlineKeyboardButton(
+                text="➡️", callback_data=f"admin:promos:page:{page+1}", style="primary"
+            )
+        b.row(
+            left,
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin:promos:noop"),
+            right,
+        )
 
-    b.row(InlineKeyboardButton(text="➕ Создать", callback_data="admin:promos:create"))
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    b.row(
+        InlineKeyboardButton(
+            text="➕ Создать", callback_data="admin:promos:create", style="success"
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
 
     await answer_callback_with_photo_screen(
         cq,
@@ -658,14 +723,21 @@ async def _render_promos_view(
     cap = join_lines(*lines)
 
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"admin:promos:edit:{promo.id}"))
+    b.row(
+        InlineKeyboardButton(
+            text="✏️ Редактировать",
+            callback_data=f"admin:promos:edit:{promo.id}",
+            style="primary",
+        )
+    )
     b.row(
         InlineKeyboardButton(
             text="🗑 Удалить",
             callback_data=f"admin:promos:delete:{promo.id}",
+            style="danger",
         )
     )
-    b.row(InlineKeyboardButton(text="⬅️ Список", callback_data=page_back))
+    b.row(InlineKeyboardButton(text="⬅️ Список", callback_data=page_back, style="danger"))
 
     await answer_callback_with_photo_screen(
         cq,
@@ -712,8 +784,13 @@ async def cb_promos_delete_ask(
         InlineKeyboardButton(
             text="✅ Да, удалить",
             callback_data=f"admin:promos:dodelete:{promo.id}",
+            style="danger",
         ),
-        InlineKeyboardButton(text="❌ Отмена", callback_data="admin:promos:view:" + str(promo.id)),
+        InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data="admin:promos:view:" + str(promo.id),
+            style="danger",
+        ),
     )
     await cq.answer()
     await answer_callback_with_photo_screen(

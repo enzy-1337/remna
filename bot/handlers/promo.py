@@ -57,7 +57,7 @@ async def cmd_promo(
 
 def _promo_cancel_keyboard() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="promo:cancel"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="promo:cancel", style="danger"))
     return b
 
 

@@ -50,13 +50,19 @@ _CID_PAYLOAD_PREFIX = "cid_"
 
 
 def _cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None:
-    """Inline-кнопка-«приписка» в стиле reels-бота: ❤️ @<bot_username>."""
+    """Inline-кнопка-«приписка» в стиле reels-бота: 💜 @<bot_username>."""
     uname = (bot_username or "").strip().lstrip("@")
     if not uname:
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"❤️ @{uname}", url=f"https://t.me/{uname}")],
+            [
+                InlineKeyboardButton(
+                    text=f"💜 @{uname}",
+                    url=f"https://t.me/{uname}",
+                    style="primary",
+                )
+            ],
         ]
     )
 
@@ -72,6 +78,7 @@ def _open_dm_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup |
                 InlineKeyboardButton(
                     text="📩 Открыть в личке",
                     url=f"https://t.me/{uname}?start={payload}",
+                    style="primary",
                 )
             ],
         ]

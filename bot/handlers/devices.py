@@ -73,9 +73,12 @@ def _devices_kb(
             InlineKeyboardButton(
                 text=hwid_device_title(d, i + 1),
                 callback_data=f"dev:rw:{i}:{ctx}",
+                style="primary",
             )
         )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
+    b.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx), style="danger")
+    )
     return b.as_markup()
 
 
@@ -91,7 +94,11 @@ async def _render_devices(
     if not sub:
         kb = (
             InlineKeyboardBuilder()
-            .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
+            .row(
+                InlineKeyboardButton(
+                    text="⬅️ Назад", callback_data=_devices_back_cb(ctx), style="danger"
+                )
+            )
             .as_markup()
         )
         return join_lines("🖥 " + bold("Устройства"), "", plain("Сначала оформите подписку или триал.")), kb
@@ -109,8 +116,16 @@ async def _render_devices(
         )
         kb = (
             InlineKeyboardBuilder()
-            .row(InlineKeyboardButton(text="🔄 Обновить", callback_data=_list_callback(ctx)))
-            .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_devices_back_cb(ctx)))
+            .row(
+                InlineKeyboardButton(
+                    text="🔄 Обновить", callback_data=_list_callback(ctx), style="primary"
+                )
+            )
+            .row(
+                InlineKeyboardButton(
+                    text="⬅️ Назад", callback_data=_devices_back_cb(ctx), style="danger"
+                )
+            )
             .as_markup()
         )
         return cap, kb
@@ -269,10 +284,14 @@ async def cb_dev_rw_pick(
 
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="📤 Только панель", callback_data=f"dev:unlk:{idx}:{ctx}"),
-        InlineKeyboardButton(text="📤 Панель − слот", callback_data=f"dev:unls:{idx}:{ctx}"),
+        InlineKeyboardButton(
+            text="📤 Только панель", callback_data=f"dev:unlk:{idx}:{ctx}", style="danger"
+        ),
+        InlineKeyboardButton(
+            text="📤 Панель − слот", callback_data=f"dev:unls:{idx}:{ctx}", style="danger"
+        ),
     )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_list_callback(ctx)))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_list_callback(ctx), style="danger"))
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,

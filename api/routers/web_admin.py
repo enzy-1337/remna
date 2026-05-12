@@ -53,7 +53,7 @@ from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.plan import Plan
-from shared.models.promo import PromoCode, PromoUsage
+from shared.models.promo import PromoCode, PromoCodeAllowedUser, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
@@ -1744,6 +1744,21 @@ def _promo_reward_caption(promo: PromoCode) -> str:
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
     return f"+{v}"
+
+
+_PROMO_TYPE_RU: dict[str, str] = {
+    "discount_percent": "Скидка на тариф (%)",
+    "balance_rub": "Деньги на баланс (₽)",
+    "bonus_rub": "Бонус на баланс (₽, устар.)",
+    "topup_bonus_percent": "% к первому пополнению",
+    "extra_gb": "Гигабайты",
+    "extra_devices": "Устройства",
+}
+
+
+def _promo_type_ru(t: str) -> str:
+    """Человеко-читаемое название типа промокода для web-admin."""
+    return _PROMO_TYPE_RU.get((t or "").strip(), t or "")
 
 
 def _web_admin_actor_label(request: Request) -> str:
@@ -7620,6 +7635,83 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
     )
 
 
+@router.get("/api/users-search")
+async def admin_api_users_search(request: Request, q: str = "", limit: int = 20) -> JSONResponse:
+    """Поиск пользователей для виджета chips: по id, telegram_id, @username, имени.
+
+    Возвращает: {"users": [{"id", "telegram_id", "username", "label", "label_html"}, ...]}.
+    """
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"users": [], "denied": True}, status_code=401)
+    try:
+        lim = max(1, min(50, int(limit)))
+    except (TypeError, ValueError):
+        lim = 20
+    needle = (q or "").strip()
+    async with await _session() as session:
+        if not needle:
+            stmt = select(User).order_by(desc(User.id)).limit(lim)
+        else:
+            cleaned = needle.lstrip("@").lstrip("#").strip()
+            digits_only = cleaned.isdigit()
+            ilike = f"%{cleaned}%"
+            conds = [
+                User.username.ilike(ilike),
+                User.first_name.ilike(ilike),
+                User.last_name.ilike(ilike),
+            ]
+            if digits_only:
+                try:
+                    n = int(cleaned)
+                    conds.extend([User.id == n, User.telegram_id == n])
+                except ValueError:
+                    pass
+            from sqlalchemy import or_ as _or  # локальный импорт чтобы не править шапку
+
+            stmt = (
+                select(User)
+                .where(_or(*conds))
+                .order_by(desc(User.id))
+                .limit(lim)
+            )
+        rows = list((await session.execute(stmt)).scalars().all())
+    out: list[dict] = []
+    for u in rows:
+        uid = int(u.id)
+        tg = int(u.telegram_id or 0)
+        un = (u.username or "").strip()
+        fn = (u.first_name or "").strip()
+        ln = (u.last_name or "").strip()
+        name = (fn + (" " + ln if ln else "")).strip()
+        label_main = f"@{un}" if un else (name or f"tg:{tg}")
+        label = f"{label_main} · #{uid}"
+        # HTML-версия — для подсветки иконки и второстепенной строки
+        sub_parts = []
+        if name and un:
+            sub_parts.append(_esc(name))
+        sub_parts.append(f"tg:{tg}")
+        sub_parts.append(f"#{uid}")
+        label_html = (
+            "<div class='flex flex-col'>"
+            f"<span class='font-medium'>{_esc(label_main)}</span>"
+            f"<span class='text-[11px] opacity-60'>{' · '.join(sub_parts)}</span>"
+            "</div>"
+        )
+        out.append(
+            {
+                "id": uid,
+                "telegram_id": tg,
+                "username": un or None,
+                "first_name": fn or None,
+                "last_name": ln or None,
+                "label": label,
+                "label_html": label_html,
+            }
+        )
+    return JSONResponse({"users": out})
+
+
 @router.get("/promos")
 async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     denied = _require_login(request)
@@ -7640,7 +7732,7 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/promos/{p.id}' tabindex='0' role='link' aria-label='Открыть промокод'>"
             f"<td><span class='link link-primary font-mono font-semibold'>{_esc(p.code)}</span></td>"
-            f"<td><code class='text-xs bg-base-300 px-1 rounded'>{_esc(p.type)}</code></td><td>{_esc(_promo_reward_caption(p))}</td>"
+            f"<td><span class='badge badge-ghost badge-sm'>{_esc(_promo_type_ru(p.type))}</span></td><td>{_esc(_promo_reward_caption(p))}</td>"
             f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else '∞')}</td>"
             f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{tw}'>{status}</td></tr>"
         )
@@ -7664,10 +7756,67 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     return _layout("Web-admin Promos", body, request=request)
 
 
-def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | None = None) -> str:
+def _user_chip_label(user_id: int, telegram_id: int, username: str | None, first_name: str | None, last_name: str | None) -> str:
+    """Короткая подпись для чипа выбранного пользователя."""
+    name = (first_name or "").strip() or (last_name or "").strip() or ""
+    if username:
+        head = f"@{username}"
+    elif name:
+        head = name
+    else:
+        head = f"tg:{telegram_id}"
+    return f"{head} · #{user_id}"
+
+
+def _promo_form(
+    *,
+    action: str,
+    promo: PromoCode | None = None,
+    error: str | None = None,
+    selected_users: list[dict] | None = None,
+) -> str:
     p = promo
     e = f"<div class='alert alert-error text-sm'>{_esc(error)}</div>" if error else ""
     ro = "readonly" if p else ""
+
+    selected_users = selected_users or []
+    chips_html_parts: list[str] = []
+    selected_ids: list[str] = []
+    for u in selected_users:
+        uid = int(u.get("id") or 0)
+        if uid <= 0:
+            continue
+        selected_ids.append(str(uid))
+        label = _user_chip_label(
+            user_id=uid,
+            telegram_id=int(u.get("telegram_id") or 0),
+            username=u.get("username"),
+            first_name=u.get("first_name"),
+            last_name=u.get("last_name"),
+        )
+        chips_html_parts.append(
+            f"<span class='badge badge-primary gap-1 py-3 pl-3 pr-1' data-allowed-user-chip data-user-id='{uid}'>"
+            f"<span class='text-xs'>{_esc(label)}</span>"
+            "<button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='Убрать'>"
+            "<i class='fa-solid fa-xmark text-[10px]' aria-hidden='true'></i></button>"
+            "</span>"
+        )
+    chips_initial_html = "".join(chips_html_parts)
+    selected_ids_csv = ",".join(selected_ids)
+
+    type_options = "".join(
+        f"<option value='{_esc(k)}' {'selected' if p and p.type == k else ''}>{_esc(v)}</option>"
+        for k, v in _PROMO_TYPE_RU.items()
+        if k != "bonus_rub"
+        # bonus_rub оставляем поддержку при редактировании старых, но не в выборе
+    )
+    # Если у текущего промокода тип bonus_rub — добавим его опцией, чтобы select остался валидным
+    if p is not None and p.type == "bonus_rub":
+        type_options = (
+            "<option value='bonus_rub' selected>Бонус на баланс (₽, устар.)</option>"
+            + type_options
+        )
+
     return f"""
     <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
     <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-2xl">
@@ -7676,21 +7825,21 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
         {e}
         <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
           <label class="form-control w-full"><span class="label-text font-medium">Код</span>
-            <input class="input input-bordered input-sm h-9 min-h-9 font-mono text-sm uppercase" name="code" value="{_esc(p.code if p else '')}" {ro} /></label>
+            <div class="join w-full">
+              <input id="promo-code-input" class="input input-bordered input-sm h-9 min-h-9 font-mono text-sm uppercase join-item w-full" name="code" value="{_esc(p.code if p else '')}" {ro} />
+              <button type="button" id="promo-code-dice" class="btn btn-primary btn-sm h-9 min-h-9 join-item gap-1.5" {'disabled' if p else ''} title="Сгенерировать случайный код" aria-label="Сгенерировать случайный код"><i class="fa-solid fa-dice" aria-hidden="true"></i>Случайный</button>
+            </div>
+          </label>
           <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="promo_type">
-            <option value="discount_percent" {'selected' if p and p.type == 'discount_percent' else ''}>discount_percent</option>
-            <option value="balance_rub" {'selected' if p and p.type == 'balance_rub' else ''}>balance_rub</option>
-            <option value="topup_bonus_percent" {'selected' if p and p.type == 'topup_bonus_percent' else ''}>topup_bonus_percent</option>
-            <option value="extra_gb" {'selected' if p and p.type == 'extra_gb' else ''}>extra_gb</option>
-            <option value="extra_devices" {'selected' if p and p.type == 'extra_devices' else ''}>extra_devices</option>
+            {type_options}
           </select></label>
           <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="value" value="{_esc(p.value if p else '')}" /></label>
-          <label class="form-control w-full"><span class="label-text font-medium">Фолбэк в ₽ (устарело, не используется)</span>
-            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="fallback_value_rub" value="{_esc(p.fallback_value_rub if p and p.fallback_value_rub is not None else '')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
-            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" /></label>
+            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" />
+            <span class="label-text-alt text-xs opacity-70 mt-1">Если ниже выбраны пользователи — лимит игнорируется, каждый из списка может активировать 1 раз.</span>
+          </label>
           <label class="form-control w-full"><span class="label-text font-medium">Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
           <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
@@ -7698,11 +7847,161 @@ def _promo_form(*, action: str, promo: PromoCode | None = None, error: str | Non
             <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
             <option value="false" {'selected' if p is not None and not p.is_active else ''}>нет</option>
           </select></label>
+
+          <div class="form-control w-full">
+            <span class="label-text font-medium">Доступно пользователям (опционально)</span>
+            <span class="label-text-alt text-xs opacity-70 mb-1">Если пусто — промокод доступен всем. Начните вводить @username, имя, telegram ID или ID в боте.</span>
+            <div id="allowed-users-chips" class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]">{chips_initial_html}</div>
+            <div class="relative">
+              <input id="allowed-users-search" type="text" autocomplete="off" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full" placeholder="Поиск пользователя…" />
+              <div id="allowed-users-dropdown" class="absolute left-0 right-0 top-full mt-1 z-[120] hidden max-h-72 overflow-auto rounded-lg border border-base-content/10 bg-base-100 shadow-xl"></div>
+            </div>
+            <input type="hidden" name="allowed_user_ids" id="allowed-user-ids" value="{_esc(selected_ids_csv)}" />
+          </div>
+
           <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
         </form>
       </div>
     </div>
     </div>
+    <script>(function(){{
+      // --- Генератор случайного кода (8 символов, A-Z и 0-9, без 0/O/1/I чтобы не путать) ---
+      var ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      var dice = document.getElementById('promo-code-dice');
+      var codeInput = document.getElementById('promo-code-input');
+      if (dice && codeInput && !dice.disabled) {{
+        dice.addEventListener('click', function(){{
+          var s = '';
+          var arr = (window.crypto && crypto.getRandomValues) ? new Uint32Array(8) : null;
+          if (arr) crypto.getRandomValues(arr);
+          for (var i = 0; i < 8; i++) {{
+            var idx = arr ? (arr[i] % ALPHABET.length) : Math.floor(Math.random() * ALPHABET.length);
+            s += ALPHABET.charAt(idx);
+          }}
+          codeInput.value = s;
+        }});
+      }}
+
+      // --- Виджет выбора пользователей (chips + autocomplete) ---
+      var chipsBox = document.getElementById('allowed-users-chips');
+      var searchInp = document.getElementById('allowed-users-search');
+      var dropdown = document.getElementById('allowed-users-dropdown');
+      var hiddenIds = document.getElementById('allowed-user-ids');
+      if (chipsBox && searchInp && dropdown && hiddenIds) {{
+        var selected = new Map();
+        chipsBox.querySelectorAll('[data-allowed-user-chip]').forEach(function(el){{
+          var id = el.getAttribute('data-user-id');
+          if (id) selected.set(String(id), el);
+        }});
+
+        function syncHidden() {{
+          hiddenIds.value = Array.from(selected.keys()).join(',');
+        }}
+        function bindRemoveButtons() {{
+          chipsBox.querySelectorAll('[data-allowed-user-remove]').forEach(function(btn){{
+            if (btn.dataset.bound) return;
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', function(){{
+              var chip = btn.closest('[data-allowed-user-chip]');
+              if (!chip) return;
+              var id = chip.getAttribute('data-user-id');
+              chip.remove();
+              if (id) selected.delete(String(id));
+              syncHidden();
+            }});
+          }});
+        }}
+        bindRemoveButtons();
+
+        function addUserChip(u) {{
+          var id = String(u.id);
+          if (selected.has(id)) return;
+          var label = u.label || ('#' + id);
+          var span = document.createElement('span');
+          span.className = 'badge badge-primary gap-1 py-3 pl-3 pr-1';
+          span.setAttribute('data-allowed-user-chip', '');
+          span.setAttribute('data-user-id', id);
+          span.innerHTML = "<span class='text-xs'></span><button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='Убрать'><i class='fa-solid fa-xmark text-[10px]' aria-hidden='true'></i></button>";
+          span.firstElementChild.textContent = label;
+          chipsBox.appendChild(span);
+          selected.set(id, span);
+          syncHidden();
+          bindRemoveButtons();
+        }}
+
+        function closeDropdown() {{
+          dropdown.classList.add('hidden');
+          dropdown.innerHTML = '';
+        }}
+        function renderResults(items) {{
+          if (!items || !items.length) {{
+            dropdown.innerHTML = "<div class='px-3 py-2 text-xs opacity-60'>Ничего не найдено</div>";
+            dropdown.classList.remove('hidden');
+            return;
+          }}
+          var html = '';
+          for (var i = 0; i < items.length; i++) {{
+            var u = items[i];
+            var disabled = selected.has(String(u.id));
+            html += "<button type='button' class='block w-full text-left px-3 py-2 hover:bg-base-200 text-sm" + (disabled ? " opacity-40 cursor-not-allowed" : "") + "' " +
+                    "data-pick-id='" + u.id + "' data-pick-label='" + (u.label || '').replace(/'/g, "&#39;") + "' " +
+                    (disabled ? "disabled" : "") + ">" + (u.label_html || u.label || '#' + u.id) + "</button>";
+          }}
+          dropdown.innerHTML = html;
+          dropdown.classList.remove('hidden');
+          dropdown.querySelectorAll('button[data-pick-id]').forEach(function(b){{
+            b.addEventListener('click', function(){{
+              var id = b.getAttribute('data-pick-id');
+              var lbl = b.getAttribute('data-pick-label');
+              if (id) addUserChip({{id: id, label: lbl}});
+              searchInp.value = '';
+              closeDropdown();
+              searchInp.focus();
+            }});
+          }});
+        }}
+
+        var searchTimer = null;
+        var activeReq = 0;
+        function runSearch(q) {{
+          var myReq = ++activeReq;
+          var url = '/admin/api/users-search?q=' + encodeURIComponent(q || '') + '&limit=20';
+          fetch(url, {{credentials: 'same-origin'}}).then(function(r){{
+            if (!r.ok) throw new Error('http ' + r.status);
+            return r.json();
+          }}).then(function(d){{
+            if (myReq !== activeReq) return;
+            renderResults(d.users || []);
+          }}).catch(function(){{
+            if (myReq !== activeReq) return;
+            dropdown.innerHTML = "<div class='px-3 py-2 text-xs text-error'>Ошибка поиска</div>";
+            dropdown.classList.remove('hidden');
+          }});
+        }}
+
+        searchInp.addEventListener('input', function(){{
+          var q = searchInp.value.trim();
+          if (searchTimer) clearTimeout(searchTimer);
+          if (q.length === 0) {{
+            searchTimer = setTimeout(function(){{ runSearch(''); }}, 120);
+            return;
+          }}
+          searchTimer = setTimeout(function(){{ runSearch(q); }}, 180);
+        }});
+        searchInp.addEventListener('focus', function(){{
+          if (searchInp.value.trim().length === 0) runSearch('');
+        }});
+        document.addEventListener('click', function(ev){{
+          if (ev.target === searchInp) return;
+          if (dropdown.contains(ev.target)) return;
+          closeDropdown();
+        }});
+        // Не отправлять форму, если фокус в поле поиска и нажат Enter — это попытка найти, а не сабмит
+        searchInp.addEventListener('keydown', function(ev){{
+          if (ev.key === 'Enter') {{ ev.preventDefault(); }}
+        }});
+      }}
+    }})();</script>
     """
 
 
@@ -7732,6 +8031,86 @@ async def admin_promos_new(request: Request) -> HTMLResponse:
     return _layout("New Promo", _promo_form(action="/admin/promos/new"), request=request, back_href="/admin/promos")
 
 
+def _parse_allowed_user_ids_csv(raw: str) -> list[int]:
+    """Парсит CSV id'ов пользователей (id в БД бота) в уникальный отсортированный список."""
+    if not raw:
+        return []
+    out: set[int] = set()
+    for piece in raw.split(","):
+        s = piece.strip()
+        if not s:
+            continue
+        try:
+            v = int(s)
+        except ValueError:
+            continue
+        if v > 0:
+            out.add(v)
+    return sorted(out)
+
+
+async def _load_promo_allowed_users(
+    session: AsyncSession, promo_id: int
+) -> list[dict]:
+    """Загружает выбранных пользователей промокода в виде словарей для шаблона."""
+    rows = (
+        await session.execute(
+            select(User)
+            .join(PromoCodeAllowedUser, PromoCodeAllowedUser.user_id == User.id)
+            .where(PromoCodeAllowedUser.promo_id == promo_id)
+            .order_by(User.id.asc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": int(u.id),
+            "telegram_id": int(u.telegram_id or 0),
+            "username": u.username,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+        }
+        for u in rows
+    ]
+
+
+async def _sync_promo_allowed_users(
+    session: AsyncSession, *, promo_id: int, user_ids: list[int]
+) -> tuple[list[int], list[int]]:
+    """Приводит allow-list промокода к указанному списку, возвращает (added, removed)."""
+    valid_ids: list[int] = []
+    if user_ids:
+        rows = (
+            await session.execute(
+                select(User.id).where(User.id.in_(user_ids))
+            )
+        ).scalars().all()
+        valid_ids = sorted({int(x) for x in rows})
+
+    current = set(
+        (
+            await session.execute(
+                select(PromoCodeAllowedUser.user_id).where(
+                    PromoCodeAllowedUser.promo_id == promo_id
+                )
+            )
+        ).scalars().all()
+    )
+    desired = set(valid_ids)
+    to_add = sorted(desired - current)
+    to_remove = sorted(current - desired)
+
+    for uid in to_add:
+        session.add(PromoCodeAllowedUser(promo_id=promo_id, user_id=uid))
+    if to_remove:
+        await session.execute(
+            PromoCodeAllowedUser.__table__.delete().where(
+                PromoCodeAllowedUser.promo_id == promo_id,
+                PromoCodeAllowedUser.user_id.in_(to_remove),
+            )
+        )
+    return to_add, to_remove
+
+
 @router.post("/promos/new")
 async def admin_promos_new_post(
     request: Request,
@@ -7742,6 +8121,7 @@ async def admin_promos_new_post(
     max_uses: str = Form("-"),
     expires_at: str = Form("-"),
     is_active: str = Form("true"),
+    allowed_user_ids: str = Form(""),
 ):
     denied = _require_login(request)
     if denied is not None:
@@ -7766,6 +8146,7 @@ async def admin_promos_new_post(
                 raise ValueError("Лимит должен быть > 0")
         exp = _parse_date_any(expires_at)
         active = is_active == "true"
+        allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
     except (ValueError, InvalidOperation) as e:
         return _layout(
             "New Promo Error",
@@ -7801,17 +8182,22 @@ async def admin_promos_new_post(
             created_by_user_id=admin_db_id,
         )
         session.add(promo)
+        await session.flush()
+        added, _removed = await _sync_promo_allowed_users(
+            session, promo_id=int(promo.id), user_ids=allow_ids
+        )
         await session.commit()
         await notify_admin(
             get_settings(),
             title="🎁 Промокод создан (web-admin)",
             lines=[
                 f"Код: {md_esc(promo.code)}",
-                f"Тип: {md_esc(promo.type)}",
+                f"Тип: {md_esc(_promo_type_ru(promo.type))}",
                 f"Награда: {md_esc(_promo_reward_caption(promo))}",
                 f"Срок (до): {md_esc(_fmt_expires(promo.expires_at))}",
                 f"Лимит: {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
                 f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
+                f"Привязан к: {md_esc(len(added) if added else 'все пользователи')}",
                 f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_create_web",
@@ -7845,18 +8231,39 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
                 .limit(300)
             )
         ).all()
+        allowed = await _load_promo_allowed_users(session, promo_id)
     usage_rows = "".join(
         f"<tr><td>{pu.id}</td><td><a href='/admin/users/{u.id}'>#{u.id}</a></td>"
         f"<td><code>{u.telegram_id}</code></td><td class='whitespace-nowrap text-xs'>{_fmt_dt_msk(pu.used_at)}</td></tr>"
         for pu, u in usages
     )
+
+    if allowed:
+        chips = "".join(
+            "<a class='badge badge-primary badge-lg gap-1 hover:underline' "
+            f"href='/admin/users/{int(u['id'])}'>"
+            f"<span class='text-xs'>{_esc(_user_chip_label(int(u['id']), int(u['telegram_id'] or 0), u.get('username'), u.get('first_name'), u.get('last_name')))}</span>"
+            "</a>"
+            for u in allowed
+        )
+        allowed_block = (
+            "<div class='card bg-base-100 border border-base-content/10 shadow-lg mt-4'><div class='card-body gap-3'>"
+            f"<h3 class='text-lg font-semibold'>Доступен только пользователям ({len(allowed)})</h3>"
+            f"<div class='flex flex-wrap gap-1.5'>{chips}</div>"
+            "</div></div>"
+        )
+        scope_caption = f"только {len(allowed)} польз."
+    else:
+        allowed_block = ""
+        scope_caption = "все пользователи"
+
     body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <h2 class="card-title text-2xl font-mono">Промокод <span class="text-primary">{_esc(promo.code)}</span></h2>
-        <p>Тип: <code class="bg-base-300 px-1.5 py-0.5 rounded text-sm">{_esc(promo.type)}</code> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
+        <p>Тип: <span class="badge badge-ghost">{_esc(_promo_type_ru(promo.type))}</span> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
         <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
-        <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b></p>
+        <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b> · Доступен: <b>{_esc(scope_caption)}</b></p>
         <div class="flex flex-wrap gap-2">
           <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
           <form method="post" action="/admin/promos/{promo.id}/delete" data-remna-confirm-msg="Удалить промокод?">
@@ -7865,6 +8272,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         </div>
       </div>
     </div>
+    {allowed_block}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold">История активаций ({len(usages)})</h3>
@@ -7883,16 +8291,21 @@ async def admin_promos_edit(request: Request, promo_id: int) -> HTMLResponse:
         return denied
     async with await _session() as session:
         promo = await session.get(PromoCode, promo_id)
-    if promo is None:
-        return _layout(
-            "Promo not found",
-            "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
-            request=request,
-            back_href="/admin/promos",
-        )
+        if promo is None:
+            return _layout(
+                "Promo not found",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
+                request=request,
+                back_href="/admin/promos",
+            )
+        selected_users = await _load_promo_allowed_users(session, promo_id)
     return _layout(
         "Edit Promo",
-        _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo),
+        _promo_form(
+            action=f"/admin/promos/{promo_id}/edit",
+            promo=promo,
+            selected_users=selected_users,
+        ),
         request=request,
         back_href=f"/admin/promos/{promo_id}",
     )
@@ -7908,6 +8321,7 @@ async def admin_promos_edit_post(
     max_uses: str = Form("-"),
     expires_at: str = Form("-"),
     is_active: str = Form("true"),
+    allowed_user_ids: str = Form(""),
 ):
     denied = _require_login(request)
     if denied is not None:
@@ -7922,7 +8336,7 @@ async def admin_promos_edit_post(
                 back_href="/admin/promos",
             )
         try:
-            if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
+            if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices", "bonus_rub"}:
                 raise ValueError("Неверный тип")
             val = Decimal(value.strip().replace(",", "."))
             if val <= 0:
@@ -7938,10 +8352,17 @@ async def admin_promos_edit_post(
                     raise ValueError("Лимит должен быть > 0")
             exp = _parse_date_any(expires_at)
             active = is_active == "true"
+            allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
         except (ValueError, InvalidOperation) as e:
+            selected_users = await _load_promo_allowed_users(session, promo_id)
             return _layout(
                 "Edit Promo Error",
-                _promo_form(action=f"/admin/promos/{promo_id}/edit", promo=promo, error=str(e)),
+                _promo_form(
+                    action=f"/admin/promos/{promo_id}/edit",
+                    promo=promo,
+                    error=str(e),
+                    selected_users=selected_users,
+                ),
                 request=request,
                 back_href=f"/admin/promos/{promo_id}",
             )
@@ -7952,23 +8373,37 @@ async def admin_promos_edit_post(
         before_max_uses = promo.max_uses
         before_expires_at = promo.expires_at
         before_is_active = promo.is_active
+        before_allowed = set(
+            (
+                await session.execute(
+                    select(PromoCodeAllowedUser.user_id).where(
+                        PromoCodeAllowedUser.promo_id == promo_id
+                    )
+                )
+            ).scalars().all()
+        )
         promo.type = promo_type
         promo.value = val
         promo.fallback_value_rub = None
         promo.max_uses = mu
         promo.expires_at = exp
         promo.is_active = active
+        added, removed = await _sync_promo_allowed_users(
+            session, promo_id=int(promo.id), user_ids=allow_ids
+        )
         await session.commit()
+        after_allowed = before_allowed.union(added).difference(removed)
         await notify_admin(
             get_settings(),
             title="✏️ Промокод изменён (web-admin)",
             lines=[
                 f"Код: {md_esc(promo.code)}",
-                f"Тип: {md_esc(before_type)} → {md_esc(promo.type)}",
+                f"Тип: {md_esc(_promo_type_ru(before_type))} → {md_esc(_promo_type_ru(promo.type))}",
                 f"Награда: {md_esc(before_value)} → {md_esc(promo.value)}",
                 f"Срок: {md_esc(_fmt_expires(before_expires_at))} → {md_esc(_fmt_expires(promo.expires_at))}",
                 f"Лимит: {md_esc('∞' if before_max_uses is None else before_max_uses)} → {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
                 f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
+                f"Привязан к: {md_esc(len(before_allowed) if before_allowed else 'все')} → {md_esc(len(after_allowed) if after_allowed else 'все')}",
                 f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_edit_web",

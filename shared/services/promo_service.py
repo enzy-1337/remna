@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
-from shared.models.promo import PromoCode, PromoUsage
+from shared.models.promo import PromoCode, PromoCodeAllowedUser, PromoUsage
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.md2 import bold, join_lines, plain
@@ -114,10 +114,34 @@ async def apply_promo_code_for_user_v2(
         return False, plain("Промокод неактивен."), None
     if promo.expires_at is not None and promo.expires_at <= now:
         return False, plain("Срок действия промокода истёк."), None
-    if promo.max_uses is not None and promo.used_count >= promo.max_uses:
-        return False, plain("Лимит активаций промокода исчерпан."), None
     if promo.type not in SUPPORTED_PROMO_TYPES:
         return False, plain("Этот тип промокода пока не поддерживается."), None
+
+    # Если у промокода есть allow-list — пользователь должен быть в нём.
+    # Когда allow-list задан, глобальный max_uses игнорируется (каждый из списка может 1 раз).
+    has_allowlist = (
+        await session.execute(
+            select(PromoCodeAllowedUser.id)
+            .where(PromoCodeAllowedUser.promo_id == promo.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    if has_allowlist:
+        in_list = (
+            await session.execute(
+                select(PromoCodeAllowedUser.id)
+                .where(
+                    PromoCodeAllowedUser.promo_id == promo.id,
+                    PromoCodeAllowedUser.user_id == user.id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if in_list is None:
+            return False, plain("Этот промокод доступен только избранным пользователям."), None
+    else:
+        if promo.max_uses is not None and promo.used_count >= promo.max_uses:
+            return False, plain("Лимит активаций промокода исчерпан."), None
 
     used = await session.execute(
         select(PromoUsage.id).where(

@@ -105,9 +105,17 @@ def _referrals_main_body(
 
 def _referrals_main_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="💸 История начислений", callback_data="ref:rewards"))
-    b.row(InlineKeyboardButton(text="📋 Список приглашённых", callback_data="ref:list"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    b.row(
+        InlineKeyboardButton(
+            text="💸 История начислений", callback_data="ref:rewards", style="primary"
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="📋 Список приглашённых", callback_data="ref:list", style="primary"
+        )
+    )
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main", style="danger"))
     return b.as_markup()
 
 
@@ -171,7 +179,11 @@ async def cb_ref_list(
             )
     body = join_lines("📋 " + bold("Приглашённые"), "", "\n".join(lines))
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ К рефералам", callback_data="menu:referrals", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(
         cq,
         caption=body,
@@ -217,7 +229,11 @@ async def cb_ref_rewards(
             )
         text = join_lines(*lines)
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ К рефералам", callback_data="menu:referrals"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ К рефералам", callback_data="menu:referrals", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(
         cq,
         caption=text,

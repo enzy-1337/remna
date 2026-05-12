@@ -61,14 +61,34 @@ def _parse_ints(data: str, prefix: str, n: int) -> tuple[int, ...] | None:
 def _presets_keyboard() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="1×30 дн · 15 ГБ", callback_data=_scenario_cb(30, 30, 15, 0, 0)),
-        InlineKeyboardButton(text="2×30 · 15 ГБ", callback_data=_scenario_cb(30, 60, 15, 0, 0)),
+        InlineKeyboardButton(
+            text="1×30 дн · 15 ГБ",
+            callback_data=_scenario_cb(30, 30, 15, 0, 0),
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="2×30 · 15 ГБ",
+            callback_data=_scenario_cb(30, 60, 15, 0, 0),
+            style="primary",
+        ),
     )
     b.row(
-        InlineKeyboardButton(text="1×7 дн · 5 ГБ", callback_data=_scenario_cb(7, 7, 5, 0, 0)),
-        InlineKeyboardButton(text="1×30 · 15 ГБ + опт.", callback_data=_scenario_cb(30, 30, 15, 0, 1)),
+        InlineKeyboardButton(
+            text="1×7 дн · 5 ГБ",
+            callback_data=_scenario_cb(7, 7, 5, 0, 0),
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="1×30 · 15 ГБ + опт.",
+            callback_data=_scenario_cb(30, 30, 15, 0, 1),
+            style="primary",
+        ),
     )
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     return b
 
 
@@ -86,9 +106,23 @@ def _plans_keyboard(
         label = f"{p.name[:28]} — {p.price_rub} ₽"
         if len(label) > 64:
             label = f"{p.name[:20]}… {p.price_rub}₽"
-        b.row(InlineKeyboardButton(text=label, callback_data=_compare_cb(p.id, period_days, device_days, gb, mob, opt)))
-    b.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+        b.row(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=_compare_cb(p.id, period_days, device_days, gb, mob, opt),
+                style="primary",
+            )
+        )
+    b.row(
+        InlineKeyboardButton(
+            text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     return b
 
 
@@ -224,8 +258,18 @@ async def cb_calc_scenario_admin(
         ).as_markup()
     else:
         nb = InlineKeyboardBuilder()
-        nb.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-        nb.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+        nb.row(
+            InlineKeyboardButton(
+                text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+            )
+        )
+        nb.row(
+            InlineKeyboardButton(
+                text="⬅️ Аналитика",
+                callback_data="admin:section:analytics",
+                style="danger",
+            )
+        )
         kb = nb.as_markup()
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
 
@@ -304,6 +348,14 @@ async def cb_calc_compare_admin(
         verdict,
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="↩️ Другой сценарий", callback_data=_MENU))
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    b.row(
+        InlineKeyboardButton(
+            text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)

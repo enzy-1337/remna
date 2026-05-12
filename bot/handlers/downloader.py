@@ -67,7 +67,11 @@ def _build_cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"❤️ @{uname}", url=f"https://t.me/{uname}")],
+            [
+                InlineKeyboardButton(
+                    text=f"💜 @{uname}", url=f"https://t.me/{uname}", style="primary"
+                )
+            ],
         ]
     )
 
@@ -268,7 +272,7 @@ async def handle_download_link(
                     sent_user_photos = await message.answer_media_group(media)
                     delivered_size = sum(int(p.stat().st_size) for p in video.photo_paths[:10])
                     if kb is not None:
-                        await message.answer(plain("❤️ Поддержать бота"), reply_markup=kb)
+                        await message.answer(plain("💜 Поддержать бота"), reply_markup=kb)
                 else:
                     send_path, send_size, was_compressed = await _maybe_compress_for_telegram(
                         video_path=video.path,

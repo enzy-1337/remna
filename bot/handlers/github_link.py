@@ -34,8 +34,12 @@ _GITHUB_URL_RE = re.compile(
 def _github_link_keyboard(*, has_linked: bool) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if has_linked:
-        b.row(InlineKeyboardButton(text="🗑 Отвязать GitHub", callback_data="github:unlink"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="github:cancel"))
+        b.row(
+            InlineKeyboardButton(
+                text="🗑 Отвязать GitHub", callback_data="github:unlink", style="danger"
+            )
+        )
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="github:cancel", style="danger"))
     return b
 
 

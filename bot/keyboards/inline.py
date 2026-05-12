@@ -12,12 +12,14 @@ def channel_required_keyboard(channel_username: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="📢 Подписаться на канал",
             url=f"https://t.me/{username}",
+            style="primary",
         )
     )
     builder.row(
         InlineKeyboardButton(
             text="✅ Я подписался",
             callback_data="channel:check",
+            style="success",
         )
     )
     return builder.as_markup()
@@ -37,28 +39,31 @@ def main_menu_keyboard(
             InlineKeyboardButton(
                 text="🎁 Активировать триал (3 дня / 1 ГБ)",
                 callback_data="trial:activate",
+                style="success",
             )
         )
     builder.row(
-        InlineKeyboardButton(text="🔑 Моя подписка", callback_data="menu:subscription"),
-        InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
+        InlineKeyboardButton(text="🔑 Моя подписка", callback_data="menu:subscription", style="primary"),
+        InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance", style="primary"),
     )
     builder.row(
-        InlineKeyboardButton(text="🖥️ Устройства", callback_data="menu:devices"),
-        InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
+        InlineKeyboardButton(text="🖥️ Устройства", callback_data="menu:devices", style="primary"),
+        InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals", style="primary"),
     )
     builder.row(
-        InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"),
-        InlineKeyboardButton(text="📖 Инструкции", callback_data="menu:instructions"),
+        InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo", style="primary"),
+        InlineKeyboardButton(text="📖 Инструкции", callback_data="menu:instructions", style="primary"),
     )
-    builder.row(InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"))
+    builder.row(InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info", style="primary"))
     return builder.as_markup()
 
 
 def submenu_back_keyboard() -> InlineKeyboardMarkup:
     """Только «⬅️ Главное меню» для заглушек разделов."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main"))
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main", style="danger")
+    )
     return builder.as_markup()
 
 
@@ -66,34 +71,47 @@ def topup_amounts_keyboard() -> InlineKeyboardMarkup:
     """Быстрые суммы пополнения: сетка 100|200, 300|500, затем свои строки."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="10 ₽", callback_data="topup:amt:10"),
-        InlineKeyboardButton(text="100 ₽", callback_data="topup:amt:100"),
+        InlineKeyboardButton(text="10 ₽", callback_data="topup:amt:10", style="success"),
+        InlineKeyboardButton(text="100 ₽", callback_data="topup:amt:100", style="success"),
     )
     builder.row(
-        InlineKeyboardButton(text="200 ₽", callback_data="topup:amt:200"),
-        InlineKeyboardButton(text="300 ₽", callback_data="topup:amt:300"),
+        InlineKeyboardButton(text="200 ₽", callback_data="topup:amt:200", style="success"),
+        InlineKeyboardButton(text="300 ₽", callback_data="topup:amt:300", style="success"),
     )
     builder.row(
-        InlineKeyboardButton(text="500 ₽", callback_data="topup:amt:500"),
-        InlineKeyboardButton(text="1000 ₽", callback_data="topup:amt:1000"),
+        InlineKeyboardButton(text="500 ₽", callback_data="topup:amt:500", style="success"),
+        InlineKeyboardButton(text="1000 ₽", callback_data="topup:amt:1000", style="success"),
     )
-    builder.row(InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom"))
-    builder.row(InlineKeyboardButton(text="🧾 История зачислений", callback_data="topup:history"))
-    builder.row(InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main"))
+    builder.row(
+        InlineKeyboardButton(text="✏️ Другая сумма", callback_data="topup:custom", style="success")
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🧾 История зачислений", callback_data="topup:history", style="primary"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Профиль", callback_data="menu:main", style="danger")
+    )
     return builder.as_markup()
 
 
 def topup_invoice_keyboard(pay_url: str, *, txn_id: int) -> InlineKeyboardMarkup:
     """После создания счёта: оплата по URL, ручная проверка и возврат к балансу."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💳 Открыть страницу оплаты", url=pay_url))
+    builder.row(
+        InlineKeyboardButton(text="💳 Открыть страницу оплаты", url=pay_url, style="success")
+    )
     builder.row(
         InlineKeyboardButton(
             text="🔎 Проверить зачисление",
             callback_data=f"topup:check:{txn_id}",
+            style="primary",
         )
     )
-    builder.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
+    builder.row(
+        InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance", style="danger")
+    )
     return builder.as_markup()
 
 
@@ -104,13 +122,17 @@ def topup_providers_keyboard(amount_rub: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="💳 Platega",
             callback_data=f"topup:prov:platega:{amount_rub}",
+            style="success",
         )
     )
     builder.row(
         InlineKeyboardButton(
             text="🪙 CryptoBot (Крипта)",
             callback_data=f"topup:prov:cryptobot:{amount_rub}",
+            style="success",
         )
     )
-    builder.row(InlineKeyboardButton(text="⬅️ К суммам", callback_data="topup:back_amt"))
+    builder.row(
+        InlineKeyboardButton(text="⬅️ К суммам", callback_data="topup:back_amt", style="danger")
+    )
     return builder.as_markup()

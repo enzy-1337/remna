@@ -39,6 +39,38 @@ class PromoCode(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    allowed_users: Mapped[list["PromoCodeAllowedUser"]] = relationship(
+        "PromoCodeAllowedUser",
+        back_populates="promo",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class PromoCodeAllowedUser(Base):
+    """Опциональный белый список пользователей для промокода.
+
+    Если для промокода есть хоть одна запись — активировать его смогут только
+    указанные пользователи. Если записей нет — промокод доступен всем (старое
+    поведение сохраняется).
+    """
+
+    __tablename__ = "promo_code_allowed_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    promo_id: Mapped[int] = mapped_column(
+        ForeignKey("promo_codes.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    promo: Mapped["PromoCode"] = relationship(
+        "PromoCode", back_populates="allowed_users"
+    )
 
 
 class PromoUsage(Base):

@@ -32,10 +32,14 @@ router = Router(name="menu")
 def _service_info_keyboard(support_url: str | None) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if support_url:
-        b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url))
+        b.row(InlineKeyboardButton(text="💬 Поддержка", url=support_url, style="primary"))
     else:
-        b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+        b.row(
+            InlineKeyboardButton(
+                text="💬 Поддержка", callback_data="menu:support", style="primary"
+            )
+        )
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main", style="danger"))
     return b
 
 

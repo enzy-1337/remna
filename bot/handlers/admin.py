@@ -89,24 +89,50 @@ def _is_admin(tg_id: int | None) -> bool:
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="👤 Раздел пользователей", callback_data="admin:section:users"),
-        InlineKeyboardButton(text="📊 Раздел аналитики", callback_data="admin:section:analytics"),
+        InlineKeyboardButton(
+            text="👤 Раздел пользователей",
+            callback_data="admin:section:users",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="📊 Раздел аналитики",
+            callback_data="admin:section:analytics",
+            style="primary",
+        ),
     )
-    b.row(InlineKeyboardButton(text="👨‍💼 Админ-профиль", callback_data="admin:section:profile"))
-    b.row(InlineKeyboardButton(text="📋 Продажа тарифов в боте", callback_data="admin:tariffs_shop"))
-    b.row(InlineKeyboardButton(text="⛔ Factory reset", callback_data="admin:reset:start"))
-    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main"))
+    b.row(
+        InlineKeyboardButton(
+            text="👨‍💼 Админ-профиль", callback_data="admin:section:profile", style="primary"
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="📋 Продажа тарифов в боте",
+            callback_data="admin:tariffs_shop",
+            style="primary",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="⛔ Factory reset", callback_data="admin:reset:start", style="danger"
+        )
+    )
+    b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main", style="danger"))
     return b.as_markup()
 
 
 def _admin_users_section_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
-        InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0"),
+        InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0", style="primary"),
+        InlineKeyboardButton(text="⏱ Подписки", callback_data="admin:subs:0", style="primary"),
     )
-    b.row(InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
+    b.row(InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:find", style="primary"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад в админ-панель", callback_data="admin:panel", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -114,26 +140,43 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
     s = get_settings()
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
-        InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
+        InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics", style="primary"),
+        InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web", style="primary"),
     )
     b.row(
-        InlineKeyboardButton(text="🧮 Калькулятор перехода legacy", callback_data="admin:transition_calc"),
-        InlineKeyboardButton(text="📊 Калькулятор PAYG", callback_data="admin:calc_payg"),
+        InlineKeyboardButton(
+            text="🧮 Калькулятор перехода legacy",
+            callback_data="admin:transition_calc",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="📊 Калькулятор PAYG", callback_data="admin:calc_payg", style="primary"
+        ),
     )
     b.row(
         InlineKeyboardButton(
             text="🔁 Конвертировать подписки в PAYG",
             callback_data="admin:mass_convert_payg",
+            style="primary",
         )
     )
     b.row(
-        InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin:promos:page:0"),
-        InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
+        InlineKeyboardButton(
+            text="🎁 Промокоды", callback_data="admin:promos:page:0", style="primary"
+        ),
+        InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast", style="primary"),
     )
     if not (s.public_site_url or "").strip():
-        b.row(InlineKeyboardButton(text="ℹ️ Web-Admin не настроен", callback_data="admin:noop"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
+        b.row(
+            InlineKeyboardButton(
+                text="ℹ️ Web-Admin не настроен", callback_data="admin:noop", style="primary"
+            )
+        )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад в админ-панель", callback_data="admin:panel", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -148,17 +191,28 @@ def _has_active_web_admin_session(user: User) -> bool:
 
 def _admin_profile_section_keyboard(user: User) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github"))
+    b.row(InlineKeyboardButton(text="🔗 GitHub", callback_data="menu:github", style="primary"))
     enabled = bool(user.web_admin_totp_enabled and (user.web_admin_totp_secret or "").strip())
     b.row(
         InlineKeyboardButton(
             text="🔐 Отключить Google Auth" if enabled else "🔐 Подключить Google Auth",
             callback_data="admin:profile:totp:disable" if enabled else "admin:profile:totp:enable",
+            style="danger" if enabled else "success",
         )
     )
     if _has_active_web_admin_session(user):
-        b.row(InlineKeyboardButton(text="🚪 Отключить web-admin сессию", callback_data="admin:profile:web_session:disable"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin:panel"))
+        b.row(
+            InlineKeyboardButton(
+                text="🚪 Отключить web-admin сессию",
+                callback_data="admin:profile:web_session:disable",
+                style="danger",
+            )
+        )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад в админ-панель", callback_data="admin:panel", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -168,21 +222,33 @@ def _admin_web_keyboard() -> InlineKeyboardMarkup:
     admin_url = f"{root}/admin" if root else ""
     b = InlineKeyboardBuilder()
     if admin_url:
-        b.row(InlineKeyboardButton(text="🏠 Главная", url=admin_url))
+        b.row(InlineKeyboardButton(text="🏠 Главная", url=admin_url, style="primary"))
         b.row(
-            InlineKeyboardButton(text="👥 Пользователи", url=f"{admin_url}/users"),
-            InlineKeyboardButton(text="⏱ Подписки", url=f"{admin_url}/subscriptions"),
+            InlineKeyboardButton(
+                text="👥 Пользователи", url=f"{admin_url}/users", style="primary"
+            ),
+            InlineKeyboardButton(
+                text="⏱ Подписки", url=f"{admin_url}/subscriptions", style="primary"
+            ),
         )
         b.row(
-            InlineKeyboardButton(text="🎁 Промокоды", url=f"{admin_url}/promos"),
-            InlineKeyboardButton(text="📋 Тарифы", url=f"{admin_url}/tariffs"),
+            InlineKeyboardButton(text="🎁 Промокоды", url=f"{admin_url}/promos", style="primary"),
+            InlineKeyboardButton(text="📋 Тарифы", url=f"{admin_url}/tariffs", style="primary"),
         )
-        b.row(InlineKeyboardButton(text="📢 Рассылка", url=f"{admin_url}/broadcast"))
         b.row(
-            InlineKeyboardButton(text="🎫 Тикеты", url=f"{admin_url}/tickets"),
-            InlineKeyboardButton(text="⚙️ Настройки", url=f"{admin_url}/settings"),
+            InlineKeyboardButton(
+                text="📢 Рассылка", url=f"{admin_url}/broadcast", style="primary"
+            )
         )
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+        b.row(
+            InlineKeyboardButton(text="🎫 Тикеты", url=f"{admin_url}/tickets", style="primary"),
+            InlineKeyboardButton(text="⚙️ Настройки", url=f"{admin_url}/settings", style="primary"),
+        )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     return b.as_markup()
 
 
@@ -297,15 +363,25 @@ async def _render_admin_subs_screen(
     b = InlineKeyboardBuilder()
     # Фильтры
     b.row(
-        InlineKeyboardButton(text="Все", callback_data=_subs_cb(0, "all", ar)),
-        InlineKeyboardButton(text="<24ч", callback_data=_subs_cb(0, "exp24", ar)),
-        InlineKeyboardButton(text="<3ч", callback_data=_subs_cb(0, "exp3", ar)),
-        InlineKeyboardButton(text="Trial", callback_data=_subs_cb(0, "trial", ar)),
+        InlineKeyboardButton(text="Все", callback_data=_subs_cb(0, "all", ar), style="primary"),
+        InlineKeyboardButton(
+            text="<24ч", callback_data=_subs_cb(0, "exp24", ar), style="primary"
+        ),
+        InlineKeyboardButton(text="<3ч", callback_data=_subs_cb(0, "exp3", ar), style="primary"),
+        InlineKeyboardButton(
+            text="Trial", callback_data=_subs_cb(0, "trial", ar), style="primary"
+        ),
     )
     b.row(
-        InlineKeyboardButton(text="Авто: любой", callback_data=_subs_cb(0, scope, "all")),
-        InlineKeyboardButton(text="Авто: вкл", callback_data=_subs_cb(0, scope, "on")),
-        InlineKeyboardButton(text="Авто: выкл", callback_data=_subs_cb(0, scope, "off")),
+        InlineKeyboardButton(
+            text="Авто: любой", callback_data=_subs_cb(0, scope, "all"), style="primary"
+        ),
+        InlineKeyboardButton(
+            text="Авто: вкл", callback_data=_subs_cb(0, scope, "on"), style="primary"
+        ),
+        InlineKeyboardButton(
+            text="Авто: выкл", callback_data=_subs_cb(0, scope, "off"), style="primary"
+        ),
     )
     for sub, u in rows:
         exp = sub.expires_at
@@ -317,25 +393,37 @@ async def _render_admin_subs_screen(
             nm = nm[:15] + "…"
         ar_emoji = "🔄" if sub.auto_renew else "⏸"
         btn_text = f"{_sub_status_emoji(sub.status)}{ar_emoji} #{sub.id} до {exp_s} · {nm}"
-        b.row(InlineKeyboardButton(text=btn_text[:64], callback_data=f"admin:u:{u.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text=btn_text[:64], callback_data=f"admin:u:{u.id}", style="primary"
+            )
+        )
 
     total_pages = max(1, math.ceil(total / PAGE_SIZE)) if total else 1
     cur_page = int(page) + 1
     page_label = f"{cur_page}/{total_pages}"
     placeholder = InlineKeyboardButton(text="·", callback_data="admin:subs:noop")
     left_btn = (
-        InlineKeyboardButton(text="⬅️", callback_data=_subs_cb(int(page) - 1, scope, ar))
+        InlineKeyboardButton(
+            text="⬅️", callback_data=_subs_cb(int(page) - 1, scope, ar), style="primary"
+        )
         if int(page) > 0
         else placeholder
     )
     mid_btn = InlineKeyboardButton(text=page_label, callback_data="admin:subs:noop")
     right_btn = (
-        InlineKeyboardButton(text="➡️", callback_data=_subs_cb(int(page) + 1, scope, ar))
+        InlineKeyboardButton(
+            text="➡️", callback_data=_subs_cb(int(page) + 1, scope, ar), style="primary"
+        )
         if offset + len(rows) < total
         else placeholder
     )
     b.row(left_btn, mid_btn, right_btn)
-    b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Пользователи", callback_data="admin:section:users", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(*lines),
@@ -577,7 +665,11 @@ async def msg_admin_profile_totp_disable_code(
 
 def _admin_reset_cancel_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⬅️ Отмена сброса", callback_data="admin:reset:cancel"))
+    kb.row(
+        InlineKeyboardButton(
+            text="⬅️ Отмена сброса", callback_data="admin:reset:cancel", style="danger"
+        )
+    )
     return kb.as_markup()
 
 
@@ -692,24 +784,36 @@ async def _render_admin_users_list_screen(
     ]
     b = InlineKeyboardBuilder()
     for u in rows:
-        b.row(InlineKeyboardButton(text=_list_button_label(u), callback_data=f"admin:u:{u.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text=_list_button_label(u), callback_data=f"admin:u:{u.id}", style="primary"
+            )
+        )
     total_pages = max(1, math.ceil(total / PAGE_SIZE)) if total else 1
     cur_page = page + 1
     page_label = f"{cur_page}/{total_pages}"
     placeholder = InlineKeyboardButton(text="·", callback_data="admin:users:noop")
     left_btn = (
-        InlineKeyboardButton(text="⬅️", callback_data=f"admin:users:{page - 1}")
+        InlineKeyboardButton(
+            text="⬅️", callback_data=f"admin:users:{page - 1}", style="primary"
+        )
         if page > 0
         else placeholder
     )
     mid_btn = InlineKeyboardButton(text=page_label, callback_data="admin:users:noop")
     right_btn = (
-        InlineKeyboardButton(text="➡️", callback_data=f"admin:users:{page + 1}")
+        InlineKeyboardButton(
+            text="➡️", callback_data=f"admin:users:{page + 1}", style="primary"
+        )
         if offset + len(rows) < total
         else placeholder
     )
     b.row(left_btn, mid_btn, right_btn)
-    b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Пользователи", callback_data="admin:section:users", style="danger"
+        )
+    )
 
     await answer_callback_with_photo_screen(
         cq,
@@ -776,9 +880,19 @@ async def _build_user_card(
 
     b = InlineKeyboardBuilder()
     if u.is_blocked:
-        b.row(InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"admin:unblock:{u.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text="✅ Разблокировать",
+                callback_data=f"admin:unblock:{u.id}",
+                style="success",
+            )
+        )
     else:
-        b.row(InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"admin:block:{u.id}"))
+        b.row(
+            InlineKeyboardButton(
+                text="🚫 Заблокировать", callback_data=f"admin:block:{u.id}", style="danger"
+            )
+        )
 
     root = (get_settings().public_site_url or "").strip().rstrip("/")
     if root:
@@ -786,6 +900,7 @@ async def _build_user_card(
             InlineKeyboardButton(
                 text="🌐 Профиль в Web-Admin",
                 url=f"{root}/admin/users/{u.id}",
+                style="primary",
             )
         )
 
@@ -796,6 +911,7 @@ async def _build_user_card(
                 InlineKeyboardButton(
                     text="⏹ Отключить подписку",
                     callback_data=f"admin:sd:{u.id}:{sub.id}",
+                    style="danger",
                 )
             )
         elif sub.status == "cancelled":
@@ -803,12 +919,14 @@ async def _build_user_card(
                 InlineKeyboardButton(
                     text="▶️ Включить подписку",
                     callback_data=f"admin:se:{u.id}:{sub.id}",
+                    style="success",
                 )
             )
         b.row(
             InlineKeyboardButton(
                 text="⏳ Продлить подписку",
                 callback_data=f"admin:ad:{u.id}:{sub.id}",
+                style="success",
             )
         )
 
@@ -816,16 +934,19 @@ async def _build_user_card(
         InlineKeyboardButton(
             text="💳 Добавить баланс",
             callback_data=f"admin:ab:{u.id}",
+            style="success",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="🔎 Проверить подписку в Remnawave",
             callback_data=f"admin:rwcheck:{u.id}",
+            style="primary",
         ),
         InlineKeyboardButton(
             text="🧷 Привязать подписку вручную",
             callback_data=f"admin:mlink:{u.id}",
+            style="primary",
         ),
     )
     next_mode = "hybrid" if u.billing_mode == "legacy" else "legacy"
@@ -833,12 +954,14 @@ async def _build_user_card(
         InlineKeyboardButton(
             text=f"🧾 Billing: переключить в {next_mode}",
             callback_data=f"admin:bm:{u.id}",
+            style="primary",
         )
     )
     b.row(
         InlineKeyboardButton(
             text="🧹 Обнулить баланс",
             callback_data=f"admin:rb:{u.id}",
+            style="danger",
         )
     )
 
@@ -847,10 +970,13 @@ async def _build_user_card(
             InlineKeyboardButton(
                 text="🗑 Удалить пользователя",
                 callback_data=f"admin:dask:{u.id}",
+                style="danger",
             )
         )
 
-    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0"))
+    b.row(
+        InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0", style="danger")
+    )
     return join_lines(*lines), b.as_markup()
 
 
@@ -917,9 +1043,14 @@ async def _render_admin_tariffs_shop_screen(cq: CallbackQuery, db_user: User) ->
         InlineKeyboardButton(
             text=("⏸ Выключить продажу тарифов" if en else "▶️ Включить продажу тарифов"),
             callback_data="admin:tariffs_toggle_do",
+            style="danger" if en else "success",
         )
     )
-    b.row(InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="admin:panel"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Админ-панель", callback_data="admin:panel", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)
 
 
@@ -992,7 +1123,11 @@ async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> N
         )
     await cq.answer()
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    kb.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(*lines),
@@ -1194,8 +1329,12 @@ async def cb_admin_metrics(
         plain("topups completed: ") + bold(str(topups_24h)),
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:metrics"))
-    b.row(InlineKeyboardButton(text="⬅️ Аналитика", callback_data="admin:section:analytics"))
+    b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:metrics", style="primary"))
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
+        )
+    )
     await cq.answer()
     await answer_callback_with_photo_screen(
         cq,
@@ -1282,8 +1421,12 @@ async def cb_admin_delete_user_ask(
     )
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin:dyes:{uid}"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin:u:{uid}"),
+        InlineKeyboardButton(
+            text="✅ Да, удалить", callback_data=f"admin:dyes:{uid}", style="danger"
+        ),
+        InlineKeyboardButton(
+            text="❌ Отмена", callback_data=f"admin:u:{uid}", style="danger"
+        ),
     )
     await answer_callback_with_photo_screen(
         cq,
@@ -1443,14 +1586,26 @@ async def _find_rw_user_by_tg_or_username(
 def _admin_months_quick_markup(user_id: int, sub_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="1 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:1"),
-        InlineKeyboardButton(text="3 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:3"),
+        InlineKeyboardButton(
+            text="1 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:1", style="success"
+        ),
+        InlineKeyboardButton(
+            text="3 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:3", style="success"
+        ),
     )
     kb.row(
-        InlineKeyboardButton(text="6 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:6"),
-        InlineKeyboardButton(text="12 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:12"),
+        InlineKeyboardButton(
+            text="6 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:6", style="success"
+        ),
+        InlineKeyboardButton(
+            text="12 мес.", callback_data=f"admin:am:{user_id}:{sub_id}:12", style="success"
+        ),
     )
-    kb.row(InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data="admin:noop"))
+    kb.row(
+        InlineKeyboardButton(
+            text="⌨️ Ввести вручную", callback_data="admin:noop", style="primary"
+        )
+    )
     return kb.as_markup()
 
 
@@ -2203,7 +2358,9 @@ async def cb_admin_find_start(
     await state.set_state(AdminFindUserStates.waiting_telegram_id)
     settings = get_settings()
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:find_cancel"))
+    b.row(
+        InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:find_cancel", style="danger")
+    )
     sent = await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
@@ -2347,9 +2504,16 @@ async def msg_admin_find_telegram_id(
                 InlineKeyboardButton(
                     text=f"👤 #{u.id} {nm}"[:64],
                     callback_data=f"admin:u:{u.id}",
+                    style="primary",
                 )
             )
-        b.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
+        b.row(
+            InlineKeyboardButton(
+                text="⬅️ Пользователи",
+                callback_data="admin:section:users",
+                style="danger",
+            )
+        )
         sent = await send_profile_screen(
             message.bot,
             chat_id=message.chat.id,
@@ -2402,8 +2566,16 @@ async def msg_admin_find_telegram_id(
         *extra,
     ]
     adm = InlineKeyboardBuilder()
-    adm.row(InlineKeyboardButton(text="🛠 Карточка", callback_data=f"admin:u:{u.id}"))
-    adm.row(InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:section:users"))
+    adm.row(
+        InlineKeyboardButton(
+            text="🛠 Карточка", callback_data=f"admin:u:{u.id}", style="primary"
+        )
+    )
+    adm.row(
+        InlineKeyboardButton(
+            text="⬅️ Пользователи", callback_data="admin:section:users", style="danger"
+        )
+    )
     if message.bot is None:
         return
     sent2 = await send_profile_screen(
@@ -2474,9 +2646,15 @@ async def cb_admin_reset_start(
     )
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="✅ Продолжить к проверкам", callback_data="admin:reset:proceed"),
+        InlineKeyboardButton(
+            text="✅ Продолжить к проверкам",
+            callback_data="admin:reset:proceed",
+            style="danger",
+        ),
     )
-    b.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:reset:cancel"))
+    b.row(
+        InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin:reset:cancel", style="danger")
+    )
     await cq.answer()
     await answer_callback_with_photo_screen(
         cq,
@@ -2696,14 +2874,26 @@ async def msg_admin_reset_step_telegram_id(
 
 def _broadcast_input_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast_cancel"))
+    kb.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад", callback_data="admin:broadcast_cancel", style="danger"
+        )
+    )
     return kb.as_markup()
 
 
 def _broadcast_confirm_markup() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✅ Отправить всем", callback_data="admin:broadcast_go"))
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:broadcast_cancel"))
+    kb.row(
+        InlineKeyboardButton(
+            text="✅ Отправить всем", callback_data="admin:broadcast_go", style="success"
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад", callback_data="admin:broadcast_cancel", style="danger"
+        )
+    )
     return kb.as_markup()
 
 

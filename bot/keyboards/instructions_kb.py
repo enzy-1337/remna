@@ -19,20 +19,32 @@ def build_instructions_markup(
     pc = (settings.instruction_telegraph_pc_url or "").strip()
     if ph and pc:
         b.row(
-            InlineKeyboardButton(text="📱 Телефон (Telegra.ph)", url=ph),
-            InlineKeyboardButton(text="💻 Компьютер (Telegra.ph)", url=pc),
+            InlineKeyboardButton(text="📱 Телефон (Telegra.ph)", url=ph, style="primary"),
+            InlineKeyboardButton(text="💻 Компьютер (Telegra.ph)", url=pc, style="primary"),
         )
     else:
         if ph:
-            b.row(InlineKeyboardButton(text="📱 Телефон (Telegra.ph)", url=ph))
+            b.row(InlineKeyboardButton(text="📱 Телефон (Telegra.ph)", url=ph, style="primary"))
         if pc:
-            b.row(InlineKeyboardButton(text="💻 Компьютер (Telegra.ph)", url=pc))
+            b.row(InlineKeyboardButton(text="💻 Компьютер (Telegra.ph)", url=pc, style="primary"))
     if not ph and not pc:
         if settings.instruction_android_url:
-            b.row(InlineKeyboardButton(text="🤖 Android", url=settings.instruction_android_url))
+            b.row(
+                InlineKeyboardButton(
+                    text="🤖 Android", url=settings.instruction_android_url, style="primary"
+                )
+            )
         if settings.instruction_ios_url:
-            b.row(InlineKeyboardButton(text="🍎 iOS", url=settings.instruction_ios_url))
+            b.row(
+                InlineKeyboardButton(
+                    text="🍎 iOS", url=settings.instruction_ios_url, style="primary"
+                )
+            )
         if settings.instruction_macos_url:
-            b.row(InlineKeyboardButton(text="💻 macOS", url=settings.instruction_macos_url))
-    b.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))
+            b.row(
+                InlineKeyboardButton(
+                    text="💻 macOS", url=settings.instruction_macos_url, style="primary"
+                )
+            )
+    b.row(InlineKeyboardButton(text=back_text, callback_data=back_callback, style="danger"))
     return b.as_markup()

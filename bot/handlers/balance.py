@@ -249,7 +249,9 @@ async def cb_topup_history(
     await cq.answer()
     rows = await _history_lines(session, db_user.id, limit=20)
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance"))
+    kb.row(
+        InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance", style="danger")
+    )
     await _edit_or_send_balance(cq, caption=_history_caption(rows), reply_markup=kb.as_markup())
 
 
@@ -287,7 +289,9 @@ async def cb_topup_custom(
     if cq.message is not None:
         await state.update_data(topup_prompt_message_id=cq.message.message_id)
     cancel_kb = InlineKeyboardBuilder()
-    cancel_kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="topup:cancel_fsm"))
+    cancel_kb.row(
+        InlineKeyboardButton(text="⬅️ Отмена", callback_data="topup:cancel_fsm", style="danger")
+    )
     await _edit_or_send_balance(
         cq,
         caption=join_lines(
