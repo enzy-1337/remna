@@ -12,8 +12,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from shared.config import get_settings
-from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
 from tickets.config import config
 from tickets.router import tickets_router
 from tickets.scheduler import TicketScheduler
@@ -46,19 +44,22 @@ def main() -> None:
         await scheduler.start()
         try:
             settings = get_settings()
+            chat_id = settings.admin_log_chat_id
+            if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
+                return
+            thread_id = settings.admin_log_topic_boot or settings.admin_log_topic_id
             boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
-            sent = await notify_admin_plain(
-                settings,
+            await bot.send_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
                 text=f"🛟 Бот поддержки запущен\n{boot_ts}",
-                topic=AdminLogTopic.BOOT,
-                event_type="tickets_bot_startup",
+                parse_mode=None,
             )
-            if sent:
-                logging.getLogger(__name__).info(
-                    "Уведомление о запуске бота поддержки отправлено в админ-чат (тема BOOT)."
-                )
+            logging.getLogger(__name__).info(
+                "Уведомление о запуске бота поддержки отправлено от имени самого бота (тема BOOT)."
+            )
         except Exception:
-            logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление для бота поддержки")
+            logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление от tickets-бота")
 
     async def _on_shutdown(*_args, **_kwargs) -> None:
         await scheduler.stop()
