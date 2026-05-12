@@ -52,7 +52,7 @@ def main() -> None:
             await bot.send_message(
                 chat_id=chat_id,
                 message_thread_id=thread_id,
-                text=f"🛟 Бот поддержки запущен\n{boot_ts}",
+                text=f"🛟 Support bot запущен\n{boot_ts}",
                 parse_mode=None,
             )
             logging.getLogger(__name__).info(
