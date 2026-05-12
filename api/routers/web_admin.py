@@ -8499,7 +8499,7 @@ def _admin_plan_form(
     act_yes = p is None or p.is_active
     act_no = p is not None and not p.is_active
     dd = str(p.duration_days) if p else "30"
-    pr = str(p.price_rub) if p else "0"
+    pr = str(p.price_rub) if p else "179"
     dsc = str(p.discount_percent) if p else "0"
     tgb = "" if p is None or p.traffic_limit_gb is None else str(p.traffic_limit_gb)
     dlim = "" if p is None or p.device_limit is None else str(p.device_limit)
