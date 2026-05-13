@@ -5,8 +5,8 @@
 Поведение:
 - /start в личке -> "Имя / Тэг / Юзер ID" (ID копируется тапом).
 - /start в личке c deep-link payload `cid_<chatid>` -> добавляет «Чат ID» из ссылки.
-- /start в группе/супергруппе/канале -> сообщение пользователя удаляется,
-  ID этого чата отправляется в личные сообщения. Если бот не может писать в ЛС —
+- /start и /id в группе/супергруппе/канале (без аргументов и без реплая) -> меню «куда отправить»;
+  затем ID этого чата можно получить в группу и/или в ЛС. Если бот не может писать в ЛС —
   даёт кнопку с deep-link на @<bot>?start=cid_<chatid>.
 - При добавлении бота в чат -> ничего не отправляет.
 - При старте процесса -> BOOT-уведомление в админ-лог (ADMIN_LOG_CHAT_ID / ADMIN_LOG_TOPIC_BOOT).
@@ -43,18 +43,21 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from idbot.config import IdBotSettings, get_idbot_settings  # noqa: E402
+from idbot.group_id_prompt import (  # noqa: E402
+    REPLY_DEST_CALLBACK_PREFIX,
+    display_name,
+    parse_reply_destination_cb,
+    send_group_id_destination_prompt,
+)
 from idbot.id_card import cta_keyboard, format_user_telegram_card  # noqa: E402
 from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
-from shared.md2 import bold, italic, join_lines, plain  # noqa: E402
+from shared.md2 import bold, join_lines, plain  # noqa: E402
 
 logger = logging.getLogger("idbot")
 
 router = Router()
 
 _CID_PAYLOAD_PREFIX = "cid_"
-# Префикс callback_data для меню выбора места ответа в группе.
-# Формат: "idbot:r:<G|D|B>:<user_id>".  G=group, D=dm, B=both.
-_CB_REPLY_PREFIX = "idbot:r:"
 
 
 def _open_dm_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup | None:
@@ -75,56 +78,6 @@ def _open_dm_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup |
     )
 
 
-def _destination_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Меню выбора: куда отправить ID-ответ в группе."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="💬 В группу",
-                    callback_data=f"{_CB_REPLY_PREFIX}G:{user_id}",
-                    style="primary",
-                ),
-                InlineKeyboardButton(
-                    text="📩 В личку",
-                    callback_data=f"{_CB_REPLY_PREFIX}D:{user_id}",
-                    style="primary",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🌐 И туда, и туда",
-                    callback_data=f"{_CB_REPLY_PREFIX}B:{user_id}",
-                    style="success",
-                ),
-            ],
-        ]
-    )
-
-
-def _parse_reply_cb(data: str) -> tuple[str, int] | None:
-    """Разбор callback_data меню выбора: ('G'|'D'|'B', target_user_id)."""
-    if not data or not data.startswith(_CB_REPLY_PREFIX):
-        return None
-    rest = data[len(_CB_REPLY_PREFIX) :]
-    parts = rest.split(":", 1)
-    if len(parts) != 2:
-        return None
-    kind, uid_s = parts
-    if kind not in ("G", "D", "B"):
-        return None
-    try:
-        return kind, int(uid_s)
-    except ValueError:
-        return None
-
-
-def _display_name(first_name: str | None, last_name: str | None) -> str:
-    parts = [(first_name or "").strip(), (last_name or "").strip()]
-    full = " ".join(p for p in parts if p)
-    return full or "—"
-
-
 def _parse_chat_payload(args: str | None) -> int | None:
     raw = (args or "").strip()
     if not raw.startswith(_CID_PAYLOAD_PREFIX):
@@ -142,7 +95,7 @@ async def cmd_start_private(message: Message, command: CommandObject) -> None:
     tg = message.from_user
     if tg is None:
         return
-    name = _display_name(tg.first_name, tg.last_name)
+    name = display_name(tg.first_name, tg.last_name)
     kb = cta_keyboard(settings.bot_username)
 
     chat_id_from_payload = _parse_chat_payload(command.args)
@@ -164,34 +117,7 @@ async def cmd_start_group(message: Message) -> None:
     if message.chat.type == ChatType.PRIVATE:
         return  # подстраховка: приватный кейс ловит cmd_start_private
 
-    tg = message.from_user
-    if tg is None or tg.is_bot:
-        return
-
-    bot = message.bot
-    name = _display_name(tg.first_name, tg.last_name)
-    mention_md = bold(f"@{tg.username}") if tg.username else bold(name)
-    prompt = join_lines(
-        mention_md + plain(", куда отправить ваш ID?"),
-        italic("Выбор доступен только вам."),
-    )
-    kb = _destination_keyboard(tg.id)
-
-    try:
-        await message.delete()
-    except Exception:
-        logger.debug("idbot: не удалось удалить /start в чате %s", message.chat.id)
-
-    try:
-        await bot.send_message(
-            chat_id=message.chat.id,
-            text=prompt,
-            reply_markup=kb,
-            message_thread_id=message.message_thread_id,
-            disable_notification=True,
-        )
-    except Exception:
-        logger.exception("idbot: не удалось отправить меню выбора в чат %s", message.chat.id)
+    await send_group_id_destination_prompt(message)
 
 
 async def _send_fallback_with_deeplink(
@@ -222,10 +148,10 @@ async def _send_fallback_with_deeplink(
         logger.debug("idbot: не удалось отправить fallback-уведомление в чат %s", chat_id)
 
 
-@router.callback_query(F.data.startswith(_CB_REPLY_PREFIX))
+@router.callback_query(F.data.startswith(REPLY_DEST_CALLBACK_PREFIX))
 async def cb_choose_destination(cq: CallbackQuery) -> None:
     """Обработка кнопок «В группу / В личку / И туда, и туда»."""
-    parsed = _parse_reply_cb(cq.data or "")
+    parsed = parse_reply_destination_cb(cq.data or "")
     if parsed is None:
         await cq.answer()
         return
@@ -243,7 +169,7 @@ async def cb_choose_destination(cq: CallbackQuery) -> None:
 
     settings = get_idbot_settings()
     bot = cq.bot
-    name = _display_name(clicker.first_name, clicker.last_name)
+    name = display_name(clicker.first_name, clicker.last_name)
     cta_kb = cta_keyboard(settings.bot_username)
 
     # Текст для группы и для ЛС: тот же блок с Чат ID — для пользователя это самое полезное.

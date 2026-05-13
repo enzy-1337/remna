@@ -1243,9 +1243,10 @@ def _layout(
     var nav=e.target&&e.target.closest&&e.target.closest('a[href]');
     if(nav){
       var href=(nav.getAttribute('href')||'').trim();
+      var htmxNav=nav.hasAttribute('hx-get')||nav.hasAttribute('hx-post')||nav.hasAttribute('hx-put')||nav.hasAttribute('hx-patch')||nav.hasAttribute('hx-delete');
       if(href && !href.startsWith('#') && !nav.hasAttribute('data-no-loading')){
         if(!(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) && nav.getAttribute('target')!=='_blank'){
-          window.remnaShowLoading&&window.remnaShowLoading();
+          if(!htmxNav){window.remnaShowLoading&&window.remnaShowLoading();}
         }
       }
     }
@@ -3983,7 +3984,6 @@ async def admin_status(request: Request) -> HTMLResponse:
       <div id="status-card-db" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>База данных</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
       <div id="status-card-redis" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-bolt text-primary mr-2" aria-hidden="true"></i>Redis</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
     </div>
-    <div id="status-nodes" class="mt-4"></div>
     <script>
     (function(){
       function esc(s){return String(s||'').replace(/[&<>\"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]||ch;});}
@@ -3993,9 +3993,6 @@ async def admin_status(request: Request) -> HTMLResponse:
         var st=ok?'Онлайн':'Ошибка';
         var lat=it.latency?('<p class="text-xs opacity-60 mt-1">'+esc(it.latency)+'</p>'):'';
         return '<div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="'+esc(it.icon)+' text-primary mr-2" aria-hidden="true"></i>'+esc(it.title)+'</h3><span class="badge '+badge+' badge-sm">'+st+'</span></div><p class="text-sm opacity-90 break-words">'+esc(it.detail)+'</p>'+lat+'</div></div>';
-      }
-      function timeoutNodesHtml(){
-        return '<div class="card bg-base-100 border border-error/40 shadow-lg"><div class="card-body"><h3 class="card-title text-lg text-error"><i class="fa-solid fa-server text-error mr-2" aria-hidden="true"></i>Ноды Remnawave</h3><div class="overflow-x-auto rounded-lg border border-error/30"><table class="table table-sm"><thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead><tbody><tr class="bg-error/10"><td>—</td><td><span class="badge badge-error badge-sm">TIMEOUT</span></td><td>—</td><td>Проверка узлов не успела завершиться</td></tr></tbody></table></div></div></div>';
       }
       function fetchTimeout(url, ms){
         const ctrl = new AbortController();
@@ -4027,22 +4024,9 @@ async def admin_status(request: Request) -> HTMLResponse:
           machine.innerHTML = '<div class="alert alert-error"><span>Отчет о машине: timeout</span></div>';
         }
       }
-      async function loadNodes(){
-        const nodes=document.getElementById('status-nodes');
-        if(!nodes) return;
-        try{
-          const r = await fetchTimeout('/admin/status/nodes', 20000);
-          const j = await r.json();
-          if(!r.ok || !j){ throw new Error((j&&j.error)||('HTTP '+r.status)); }
-          nodes.innerHTML = j.nodes_html || timeoutNodesHtml();
-        }catch(_e){
-          nodes.innerHTML = timeoutNodesHtml();
-        }
-      }
       function load(){
         loadMachine();
         ['panel','bot','tickets_bot','db','redis'].forEach(loadOneService);
-        loadNodes();
       }
       load();
       setInterval(load, 10000);
@@ -4162,69 +4146,6 @@ async def admin_status_machine(request: Request) -> JSONResponse:
     return JSONResponse({"machine_html": machine_html})
 
 
-@router.get("/status/nodes")
-async def admin_status_nodes(request: Request) -> JSONResponse:
-    denied = _require_login(request)
-    if denied is not None:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    settings = get_settings()
-    rw = RemnaWaveClient(settings)
-    try:
-        rows, catalog_ms, list_err = await rw.list_nodes_with_latency(ping_each=True)
-    except Exception:
-        rows, catalog_ms, list_err = [], None, "timeout"
-    if not rows:
-        nodes_html = f"""
-        <div class="card bg-base-100 border border-error/40 shadow-lg">
-          <div class="card-body">
-            <h3 class="card-title text-lg text-error"><i class="fa-solid fa-server text-error mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
-            <div class="overflow-x-auto rounded-lg border border-error/30">
-              <table class="table table-sm">
-                <thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead>
-                <tbody><tr class="bg-error/10"><td>—</td><td><span class="badge badge-error badge-sm">TIMEOUT</span></td><td>—</td><td>{_esc(str(list_err or "timeout"))}</td></tr></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        """
-        return JSONResponse({"nodes_html": nodes_html})
-    body_rows: list[str] = []
-    for n in rows:
-        st = str(n.get("status") or "UNKNOWN").upper()
-        pms = n.get("ping_ms")
-        timeout_node = pms is None
-        row_cls = "bg-error/10" if timeout_node else ""
-        badge = "badge-error" if timeout_node else ("badge-success" if st in {"ACTIVE", "ONLINE"} else "badge-warning")
-        ping_text = "timeout" if timeout_node else f"{pms} мс"
-        note = str(n.get("ping_note") or ("timeout" if timeout_node else "ok"))
-        body_rows.append(
-            "<tr class='" + row_cls + "'>"
-            + f"<td>{_esc(str(n.get('name') or '—'))}</td>"
-            + f"<td><span class='badge {badge} badge-sm'>{_esc(st if not timeout_node else 'TIMEOUT')}</span></td>"
-            + f"<td>{_esc(ping_text)}</td>"
-            + f"<td>{_esc(note[:160])}</td>"
-            + "</tr>"
-        )
-    subtitle = f"Каталог нод: {catalog_ms} мс" if catalog_ms is not None else "Каталог нод: —"
-    nodes_html = f"""
-    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
-      <div class="card-body">
-        <div class="flex items-start justify-between gap-2">
-          <h3 class="card-title text-lg"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Ноды Remnawave</h3>
-          <span class="text-xs opacity-60">{_esc(subtitle)}</span>
-        </div>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10">
-          <table class="table table-sm">
-            <thead><tr><th>Нода</th><th>Статус</th><th>Пинг</th><th>Диагностика</th></tr></thead>
-            <tbody>{''.join(body_rows)}</tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-    """
-    return JSONResponse({"nodes_html": nodes_html})
-
-
 @router.get("/status/data")
 async def admin_status_data(request: Request) -> JSONResponse:
     denied = _require_login(request)
@@ -4233,7 +4154,6 @@ async def admin_status_data(request: Request) -> JSONResponse:
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
-    node_rows, nodes_catalog_ms, nodes_list_err = await rw.list_nodes_with_latency(ping_each=True)
     panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
     async with httpx.AsyncClient(timeout=12.0) as tg_client:

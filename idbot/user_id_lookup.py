@@ -12,6 +12,7 @@ from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Chat, Message, User as TgUser
 
 from idbot.config import get_idbot_settings
+from idbot.group_id_prompt import send_group_id_destination_prompt
 from idbot.id_card import cta_keyboard, format_group_chat_peer_card, format_user_telegram_card
 from shared.md2 import code, esc, join_lines, plain
 
@@ -104,6 +105,22 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
     bot = message.bot
     assert bot is not None
 
+    if message.chat.type != ChatType.PRIVATE:
+        tg = message.from_user
+        if tg is None or tg.is_bot:
+            return
+        if message.reply_to_message and message.reply_to_message.from_user:
+            await _answer_from_tg_user(message, message.reply_to_message.from_user)
+            return
+        arg = (command.args or "").strip()
+        if arg.startswith("@"):
+            arg = arg[1:]
+        if arg.strip():
+            await _lookup_username(message, bot, arg)
+            return
+        await send_group_id_destination_prompt(message)
+        return
+
     if message.reply_to_message and message.reply_to_message.from_user:
         await _answer_from_tg_user(message, message.reply_to_message.from_user)
         return
@@ -117,7 +134,7 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
         await _lookup_username(message, bot, arg)
         return
 
-    if message.chat.type == ChatType.PRIVATE and message.from_user:
+    if message.from_user:
         await _answer_from_tg_user(message, message.from_user)
         return
 
