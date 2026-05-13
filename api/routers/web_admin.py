@@ -22,7 +22,7 @@ from decimal import Decimal, InvalidOperation
 from secrets import token_urlsafe
 from types import SimpleNamespace
 from urllib.parse import quote as url_quote
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from uuid import UUID
 
 import httpx
@@ -99,6 +99,7 @@ from shared.services.subscription_service import (
     admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
+    get_admin_manageable_subscription,
     get_base_subscription_plan,
     monthly_extra_devices_rub_preview,
     remove_hwid_device_from_panel,
@@ -340,7 +341,68 @@ def _esc_attr(v: object) -> str:
     return html.escape(str(v), quote=True)
 
 
-def _pagination_bar(*, page: int, total_pages: int, base_path: str, query_extra: dict[str, str]) -> str:
+_WAUTH_POST_LOGIN_PATH_KEY = "wauth_post_login_path"
+
+
+def _safe_admin_next_path(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s.startswith("/") or s.startswith("//"):
+        return None
+    if not s.startswith("/admin"):
+        return None
+    if s.startswith("/admin/login"):
+        return None
+    s = s.split("#", 1)[0]
+    return s[:2048] if len(s) > 2048 else s
+
+
+def _remember_admin_next_from_query(request: Request) -> None:
+    raw = (request.query_params.get("next") or "").strip()
+    if not raw:
+        return
+    if raw.startswith("http://") or raw.startswith("https://"):
+        try:
+            p = urlparse(raw)
+            raw = (p.path or "") + (("?" + p.query) if p.query else "")
+        except Exception:
+            return
+    safe = _safe_admin_next_path(raw)
+    if safe:
+        request.session[_WAUTH_POST_LOGIN_PATH_KEY] = safe
+
+
+def _login_success_destination(request: Request, *, explicit: str | None = None) -> str:
+    if explicit:
+        request.session.pop(_WAUTH_POST_LOGIN_PATH_KEY, None)
+        return explicit
+    raw = request.session.pop(_WAUTH_POST_LOGIN_PATH_KEY, None)
+    if isinstance(raw, str):
+        safe = _safe_admin_next_path(raw)
+        if safe:
+            return safe
+    return "/admin/dashboard"
+
+
+def _admin_login_url_with_next(request: Request) -> str:
+    path = request.url.path or ""
+    q = request.url.query or ""
+    cand = path + (("?" + q) if q else "")
+    safe = _safe_admin_next_path(cand)
+    if not safe:
+        return "/admin/login"
+    return "/admin/login?next=" + url_quote(safe, safe="")
+
+
+def _pagination_bar(
+    *,
+    page: int,
+    total_pages: int,
+    base_path: str,
+    query_extra: dict[str, str],
+    htmx_target: str | None = None,
+) -> str:
     """Центр: «1 | ‹ | текущая | › | N»."""
 
     def _url(p: int) -> str:
@@ -358,7 +420,13 @@ def _pagination_bar(*, page: int, total_pages: int, base_path: str, query_extra:
                 f"aria-disabled='true'>{_esc(label)}</span>"
             )
         tw = "btn btn-primary btn-sm h-9 min-h-9" if primary else "btn btn-ghost btn-sm h-9 min-h-9"
-        return f"<a class='{tw}' href='{_esc(href)}'>{_esc(label)}</a>"
+        hx = ""
+        if htmx_target and not disabled:
+            hx = (
+                f" hx-get=\"{_esc_attr(href)}\" hx-target=\"{_esc_attr(htmx_target)}\""
+                ' hx-swap="innerHTML" hx-push-url="true"'
+            )
+        return f"<a class='{tw}' href='{_esc(href)}'{hx}>{_esc(label)}</a>"
 
     if total_pages <= 1:
         return "<div class='flex justify-center py-3'><span class='text-sm opacity-60'>Страница 1 из 1</span></div>"
@@ -1552,7 +1620,7 @@ def _is_logged(request: Request) -> bool:
 
 def _require_login(request: Request) -> RedirectResponse | None:
     if not _is_logged(request):
-        return RedirectResponse("/admin/login", status_code=303)
+        return RedirectResponse(_admin_login_url_with_next(request), status_code=303)
     return None
 
 
@@ -1743,7 +1811,7 @@ async def _resolve_2fa_user_from_auth(session: AsyncSession, auth: dict) -> User
 async def _finalize_login_with_2fa(
     request: Request,
     *,
-    success_redirect: str = "/admin/dashboard",
+    success_redirect: str | None = None,
 ) -> RedirectResponse:
     auth = _auth_data(request)
     if not auth:
@@ -1768,7 +1836,7 @@ async def _finalize_login_with_2fa(
             method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
             used_totp=False,
         )
-    return RedirectResponse(success_redirect, status_code=303)
+    return RedirectResponse(_login_success_destination(request, explicit=success_redirect), status_code=303)
 
 
 def _promo_reward_caption(promo: PromoCode) -> str:
@@ -2161,6 +2229,7 @@ def _jwt_payload_unverified(token: str) -> dict:
 
 @router.get("/login")
 async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
+    _remember_admin_next_from_query(request)
     pending_2fa = isinstance(request.session.get("wauth_pending"), dict)
     show_2fa = pending_2fa or (request.query_params.get("totp") == "1")
     totp_err = request.query_params.get("err") == "totp"
@@ -2189,7 +2258,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         if not valid:
             _clear_web_admin_session(request)
         else:
-            return RedirectResponse("/admin/dashboard", status_code=303)
+            return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
     tg_href = "/admin/login/telegram/start"
     if link_mode:
         tg_href += "?link=1"
@@ -2484,7 +2553,7 @@ async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> Redi
         used_totp=True,
     )
     _clear_pending_2fa(request)
-    return RedirectResponse("/admin/dashboard", status_code=303)
+    return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
 
 
 @router.get("/login/telegram/widget")
@@ -2595,7 +2664,7 @@ async def admin_login_telegram_widget(
                 avatar_url=tg_photo,
                 username=tg_username,
             )
-            return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
+            return await _finalize_login_with_2fa(request)
 
     payload = {
         "id": id.strip(),
@@ -2678,7 +2747,7 @@ async def admin_login_telegram_widget(
         username=payload["username"],
     )
     request.session["wauth_login_kind"] = "telegram"
-    return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
+    return await _finalize_login_with_2fa(request)
 
 
 @router.get("/login/github/start")
@@ -2816,7 +2885,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
             github_login=login,
             github_avatar_url=gh_avatar,
         )
-        return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
+        return await _finalize_login_with_2fa(request)
     _set_wauth_github(
         request,
         login=login,
@@ -2826,7 +2895,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
     )
     request.session["wauth_login_kind"] = "github"
     request.session["wauth"]["github_id"] = gh_id
-    return await _finalize_login_with_2fa(request, success_redirect="/admin/dashboard")
+    return await _finalize_login_with_2fa(request)
 
 
 @router.post("/logout")
@@ -5295,6 +5364,7 @@ async def admin_users(
     denied = _require_login(request)
     if denied is not None:
         return denied
+    want_partial = (request.headers.get("hx-request") or "").strip().lower() == "true"
     needle = q.strip()
     sub_f = (sub or "").strip().lower()
     blk_f = (blocked or "").strip()
@@ -5307,9 +5377,10 @@ async def admin_users(
     page = max(1, page)
     cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f, dev_slots_f)
     now_m = time.monotonic()
-    cached_users = _USERS_HTML_CACHE.get(cache_key)
-    if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
-        return _layout("Web-admin Users", cached_users[1], request=request)
+    if not want_partial:
+        cached_users = _USERS_HTML_CACHE.get(cache_key)
+        if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
+            return _layout("Web-admin Users", cached_users[1], request=request)
     if len(_USERS_HTML_CACHE) > 128:
         stale_keys = [k for k, v in _USERS_HTML_CACHE.items() if now_m - v[0] >= _USERS_HTML_TTL_SEC]
         for k in stale_keys:
@@ -5489,6 +5560,7 @@ async def admin_users(
             "sort": sort_f,
             "dev_slots": dev_slots_f,
         },
+        htmx_target="#remna-users-results",
     )
     sub_opts = (
         '<option value=""'
@@ -5580,10 +5652,18 @@ async def admin_users(
         sel = " selected" if dev_slots_f == str(dv) else ""
         dev_opts_parts.append(f"<option value='{dv}'{sel}>{dv} слот.</option>")
     dev_opts = "".join(dev_opts_parts)
+    users_results_inner = (
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        f"{pager}"
+    )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
-        "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2'>"
+        "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2' "
+        "hx-get='/admin/users' hx-target='#remna-users-results' hx-swap='innerHTML' hx-push-url='true' "
+        "hx-trigger='submit, change from:select, keyup changed delay:320ms from:#us-q'>"
         f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, имя'/>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
         f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
@@ -5603,27 +5683,17 @@ async def admin_users(
         f"<select id='us-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
         "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/users' title='Сбросить все фильтры'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>Сбросить</a>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
-        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
-        f"{pager}</div></div>"
-        "<script>(function(){"
-        "var form=document.getElementById('us-form'); if(!form)return;"
-        "var q=document.getElementById('us-q'); var sub=document.getElementById('us-sub'); var blk=document.getElementById('us-blocked'); var risk=document.getElementById('us-risk');"
-        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var usage=document.getElementById('us-usage'); var sort=document.getElementById('us-sort'); var dev=document.getElementById('us-dev');"
-        "var timer=null;"
-        "function submitLater(ms){ if(timer)clearTimeout(timer); timer=setTimeout(function(){ form.submit(); }, ms); }"
-        "if(q){ q.addEventListener('input', function(){ submitLater(320); }); q.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); form.submit(); } }); }"
-        "if(sub)sub.addEventListener('change', function(){ form.submit(); });"
-        "if(blk)blk.addEventListener('change', function(){ form.submit(); });"
-        "if(risk)risk.addEventListener('change', function(){ form.submit(); });"
-        "if(bill)bill.addEventListener('change', function(){ form.submit(); });"
-        "if(gh)gh.addEventListener('change', function(){ form.submit(); });"
-        "if(usage)usage.addEventListener('change', function(){ form.submit(); });"
-        "if(dev)dev.addEventListener('change', function(){ form.submit(); });"
-        "if(sort)sort.addEventListener('change', function(){ form.submit(); });"
-        "})();</script>"
+        "<div id='remna-users-results'>"
+        f"{users_results_inner}"
+        "</div>"
+        "<script src='https://unpkg.com/htmx.org@1.9.12' crossorigin='anonymous'></script>"
+        "</div></div>"
     )
+    if want_partial:
+        return HTMLResponse(
+            users_results_inner,
+            headers={"Cache-Control": "private, no-store"},
+        )
     _USERS_HTML_CACHE[cache_key] = (time.monotonic(), body)
     return _layout("Web-admin Users", body, request=request)
 
@@ -5780,7 +5850,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 )
             )
         ).scalar_one()
-        active_sub = await get_active_subscription(session, user.id)
+        active_sub = await get_admin_manageable_subscription(session, user.id)
         n_db_dev_active = await count_devices(session, active_sub.id) if active_sub else 0
         bill_anchor = billing_today(settings)
         spend_from = bill_anchor - timedelta(days=2)
@@ -5996,9 +6066,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b></p>"
             if fa is not None:
                 conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Первое подключение: <b>{_fmt_dt_msk(fa)}</b></p>"
+        snap_title = "Активная подписка"
+        if exp is not None and exp <= now_utc:
+            snap_title = "Подписка (срок истёк)"
         sub_summary_html = f"""
     <div class="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-base-200/90 to-base-100 p-4 shadow-md backdrop-blur-sm">
-      <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">Активная подписка</h3>
+      <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">{_esc(snap_title)}</h3>
       <div class="grid gap-3 text-sm sm:grid-cols-2">
         <p>Тариф: <b>{_esc(plan_name or '—')}</b> · <span class="badge badge-{st_badge} badge-sm">{_esc(active_snap['status'])}</span></p>
         <p>Трафик: {traffic_line}</p>
@@ -6150,15 +6223,26 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         exp_chk = active_snap["expires_at"]
         if exp_chk is not None and exp_chk.tzinfo is None:
             exp_chk = exp_chk.replace(tzinfo=UTC)
-        if exp_chk is not None and exp_chk > now_check:
-            ar_on = active_snap["auto_renew"]
-            nxt = "0" if ar_on else "1"
-            lbl = "Выключить авто-продление" if ar_on else "Включить авто-продление"
-            tip = "После срока списание не произойдёт." if ar_on else "За ~1 ч до конца — попытка продлить с баланса."
-            mgmt_html = f"""
+        expired_notice = ""
+        if exp_chk is None:
+            expired_notice = (
+                '<div class="alert alert-warning text-sm mb-3"><span>У записи нет даты окончания — '
+                "добавление дней может быть недоступно до появления срока.</span></div>"
+            )
+        elif exp_chk <= now_check:
+            expired_notice = (
+                '<div class="alert alert-warning text-sm mb-3"><span><b>Срок подписки истёк.</b> '
+                "Ниже можно добавить дни (отсчёт от сегодня) и изменить лимит слотов устройств.</span></div>"
+            )
+        ar_on = active_snap["auto_renew"]
+        nxt = "0" if ar_on else "1"
+        lbl = "Выключить авто-продление" if ar_on else "Включить авто-продление"
+        tip = "После срока списание не произойдёт." if ar_on else "За ~1 ч до конца — попытка продлить с баланса."
+        mgmt_html = f"""
     <div class="card bg-base-100 border border-warning/35 shadow-lg">
       <div class="card-body gap-4">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-sliders text-warning mr-2" aria-hidden="true"></i>Управление подпиской</h3>
+        {expired_notice}
         <form method="post" action="/admin/users/{user_id}/subscription/auto-renew" class="flex flex-wrap items-center gap-3">
           <input type="hidden" name="enabled" value="{nxt}"/>
           <button type="submit" class="btn btn-outline btn-warning btn-sm h-9 min-h-9">{_esc(lbl)}</button>
@@ -8186,7 +8270,7 @@ def _promo_form(
             <span class="label-text font-medium">Срок действия</span>
             <span class="label-text-alt text-xs opacity-70 mb-1">Выберите дату в календаре или отметьте «без срока». Пустая дата без галочки тоже означает без ограничения по времени.</span>
             <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-              <input type="date" id="promo-expires-date" name="expires_at_date" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full max-w-[12rem]" value="{_esc(_promo_expires_date_input_value(p) if p else '')}" {'disabled' if (p is not None and p.expires_at is None) else ''} />
+              <input type="date" id="promo-expires-date" name="expires_at_date" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full max-w-[12rem]" value="{_esc(_promo_expires_date_input_value(p.expires_at if p else None))}" {'disabled' if (p is not None and p.expires_at is None) else ''} />
               <label class="label cursor-pointer justify-start gap-2 py-0 w-fit">
                 <input type="checkbox" name="expires_unlimited" value="1" class="checkbox checkbox-sm" {'checked' if (p is not None and p.expires_at is None) else ''} onchange="document.getElementById('promo-expires-date').disabled=this.checked;if(this.checked)document.getElementById('promo-expires-date').value=''" />
                 <span class="label-text text-sm">Без срока</span>

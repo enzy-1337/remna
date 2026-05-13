@@ -43,8 +43,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from idbot.config import IdBotSettings, get_idbot_settings  # noqa: E402
+from idbot.id_card import cta_keyboard, format_user_telegram_card  # noqa: E402
 from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
-from shared.md2 import bold, code, esc, italic, join_lines, plain  # noqa: E402
+from shared.md2 import bold, italic, join_lines, plain  # noqa: E402
 
 logger = logging.getLogger("idbot")
 
@@ -54,24 +55,6 @@ _CID_PAYLOAD_PREFIX = "cid_"
 # Префикс callback_data для меню выбора места ответа в группе.
 # Формат: "idbot:r:<G|D|B>:<user_id>".  G=group, D=dm, B=both.
 _CB_REPLY_PREFIX = "idbot:r:"
-
-
-def _cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None:
-    """Inline-кнопка-«приписка» в стиле reels-бота: 💜 @<bot_username>."""
-    uname = (bot_username or "").strip().lstrip("@")
-    if not uname:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💜 @{uname}",
-                    url=f"https://t.me/{uname}",
-                    style="primary",
-                )
-            ],
-        ]
-    )
 
 
 def _open_dm_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup | None:
@@ -142,52 +125,6 @@ def _display_name(first_name: str | None, last_name: str | None) -> str:
     return full or "—"
 
 
-def _header_line(*, has_chat: bool) -> str:
-    """Жирный заголовок сообщения; меняется в зависимости от контекста."""
-    title = "Информация о чате" if has_chat else "Ваш Telegram"
-    return "🪪 " + bold(title)
-
-
-def _format_user_lines(*, name: str, username: str | None, user_id: int) -> list[str]:
-    tag = f"@{username}" if username else "—"
-    # Пробел НЕ внутри bold — иначе у Telegram изредка не распознаётся сущность.
-    return [
-        plain("👤 ") + bold("Имя") + plain(": ") + esc(name),
-        plain("🏷 ") + bold("Тэг") + plain(": ") + esc(tag),
-        plain("🆔 ") + bold("Юзер ID") + plain(": ") + code(str(user_id)),
-    ]
-
-
-def _format_chat_line(chat_id: int) -> str:
-    return plain("💬 ") + bold("Чат ID") + plain(": ") + code(str(chat_id))
-
-
-def _hint_copy_line() -> str:
-    # Маленькая подсказка курсивом — намёк, что моноширинный ID копируется тапом.
-    return italic("Тапните по ID, чтобы скопировать.")
-
-
-def _private_text(*, name: str, username: str | None, user_id: int) -> str:
-    return join_lines(
-        _header_line(has_chat=False),
-        "",
-        *_format_user_lines(name=name, username=username, user_id=user_id),
-        "",
-        _hint_copy_line(),
-    )
-
-
-def _group_text(*, name: str, username: str | None, user_id: int, chat_id: int) -> str:
-    return join_lines(
-        _header_line(has_chat=True),
-        "",
-        *_format_user_lines(name=name, username=username, user_id=user_id),
-        _format_chat_line(chat_id),
-        "",
-        _hint_copy_line(),
-    )
-
-
 def _parse_chat_payload(args: str | None) -> int | None:
     raw = (args or "").strip()
     if not raw.startswith(_CID_PAYLOAD_PREFIX):
@@ -206,18 +143,18 @@ async def cmd_start_private(message: Message, command: CommandObject) -> None:
     if tg is None:
         return
     name = _display_name(tg.first_name, tg.last_name)
-    kb = _cta_keyboard(settings.bot_username)
+    kb = cta_keyboard(settings.bot_username)
 
     chat_id_from_payload = _parse_chat_payload(command.args)
     if chat_id_from_payload is not None:
-        text = _group_text(
+        text = format_user_telegram_card(
             name=name,
             username=tg.username,
             user_id=tg.id,
             chat_id=chat_id_from_payload,
         )
     else:
-        text = _private_text(name=name, username=tg.username, user_id=tg.id)
+        text = format_user_telegram_card(name=name, username=tg.username, user_id=tg.id)
     await message.answer(text, reply_markup=kb)
 
 
@@ -307,10 +244,10 @@ async def cb_choose_destination(cq: CallbackQuery) -> None:
     settings = get_idbot_settings()
     bot = cq.bot
     name = _display_name(clicker.first_name, clicker.last_name)
-    cta_kb = _cta_keyboard(settings.bot_username)
+    cta_kb = cta_keyboard(settings.bot_username)
 
     # Текст для группы и для ЛС: тот же блок с Чат ID — для пользователя это самое полезное.
-    id_text = _group_text(
+    id_text = format_user_telegram_card(
         name=name,
         username=clicker.username,
         user_id=clicker.id,

@@ -152,6 +152,21 @@ async def get_active_subscription(session: AsyncSession, user_id: int) -> Subscr
     return await get_active_subscription_at(session, user_id, datetime.now(timezone.utc))
 
 
+async def get_admin_manageable_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
+    """Подписка active/trial для админ-UI: сначала неистёкшая, иначе последняя active/trial (можно продлить дни/слоты)."""
+    sub = await get_active_subscription(session, user_id)
+    if sub is not None:
+        return sub
+    r = await session.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id, Subscription.status.in_(("active", "trial")))
+        .order_by(Subscription.id.desc())
+        .limit(1)
+    )
+    return r.scalar_one_or_none()
+
+
 async def count_devices(session: AsyncSession, subscription_id: int) -> int:
     r = await session.execute(
         select(func.count()).select_from(Device).where(Device.subscription_id == subscription_id)

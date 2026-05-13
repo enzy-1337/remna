@@ -17,6 +17,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from datetime import UTC, datetime, timedelta, timezone
+from urllib.parse import quote as url_quote
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
@@ -84,8 +85,15 @@ class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
                                     await session.commit()
                                     request.session["wauth_session_exp"] = int(new_exp.timestamp())
                 if invalid:
+                    path = request.url.path or ""
+                    q = request.url.query or ""
+                    cand = path + (("?" + q) if q else "")
+                    next_q = ""
+                    if cand.startswith("/admin") and not cand.startswith("/admin/login") and not cand.startswith("//"):
+                        cand = cand.split("#", 1)[0][:2048]
+                        next_q = "?next=" + url_quote(cand, safe="")
                     request.session.clear()
-                    return RedirectResponse("/admin/login", status_code=303)
+                    return RedirectResponse("/admin/login" + next_q, status_code=303)
         return await call_next(request)
 
 

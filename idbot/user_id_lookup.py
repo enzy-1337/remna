@@ -11,7 +11,9 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Chat, Message, User as TgUser
 
-from shared.md2 import bold, code, esc, join_lines, plain
+from idbot.config import get_idbot_settings
+from idbot.id_card import cta_keyboard, format_group_chat_peer_card, format_user_telegram_card
+from shared.md2 import code, esc, join_lines, plain
 
 logger = logging.getLogger("idbot.id_lookup")
 
@@ -44,23 +46,17 @@ def _full_name(user: TgUser | None) -> str:
     return " ".join(p for p in parts if p).strip() or "—"
 
 
-def _caption_for_user(uid: int, *, username: str | None, full_name: str) -> str:
-    lines: list[str] = [
-        plain("Telegram ID: ") + code(str(uid)),
-        plain("Имя: ") + bold(esc(full_name)),
-    ]
-    if username:
-        lines.append(plain("Username: ") + bold("@" + esc(username)))
-    return join_lines(*lines)
+def _reply_markup():
+    return cta_keyboard(get_idbot_settings().bot_username)
 
 
 async def _answer_from_tg_user(message: Message, user: TgUser) -> None:
-    cap = _caption_for_user(
-        user.id,
+    cap = format_user_telegram_card(
+        name=_full_name(user),
         username=user.username,
-        full_name=_full_name(user),
+        user_id=user.id,
     )
-    await message.answer(cap)
+    await message.answer(cap, reply_markup=_reply_markup())
 
 
 async def _answer_from_chat(message: Message, chat: Chat) -> None:
@@ -69,17 +65,16 @@ async def _answer_from_chat(message: Message, chat: Chat) -> None:
     un = chat.username
     if ct == ChatType.PRIVATE:
         fn = " ".join(x for x in [chat.first_name or "", chat.last_name or ""] if x).strip() or "—"
-        cap = _caption_for_user(uid, username=un, full_name=fn)
+        cap = format_user_telegram_card(name=fn, username=un, user_id=uid)
     else:
         title = chat.title or chat.full_name or "—"
-        cap = join_lines(
-            plain("Telegram ID: ") + code(str(uid)),
-            plain("Название: ") + bold(esc(title)),
-            plain("Тип: ") + bold(esc(str(ct))),
+        cap = format_group_chat_peer_card(
+            chat_id=uid,
+            title=title,
+            chat_type=str(ct),
+            username=un,
         )
-        if un:
-            cap = join_lines(cap, plain("Username: ") + bold("@" + esc(un)))
-    await message.answer(cap)
+    await message.answer(cap, reply_markup=_reply_markup())
 
 
 async def _lookup_username(message: Message, bot: Bot, username_without_at: str) -> None:
@@ -122,7 +117,7 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
         await _lookup_username(message, bot, arg)
         return
 
-    if message.chat.type == "private" and message.from_user:
+    if message.chat.type == ChatType.PRIVATE and message.from_user:
         await _answer_from_tg_user(message, message.from_user)
         return
 
