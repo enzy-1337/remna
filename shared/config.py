@@ -206,11 +206,15 @@ class Settings(BaseSettings):
     remnawave_default_squad_uuid: str | None = Field(
         default=None,
         validation_alias="REMNAWAVE_DEFAULT_SQUAD_UUID",
+        description="Устарело для activeInternalSquads: всем выдаётся sub-opt (см. optimized_route_service).",
     )
     remnawave_optimized_squad_uuid: str | None = Field(
         default=None,
         validation_alias="REMNAWAVE_OPTIMIZED_SQUAD_UUID",
-        description="Squad «оптимизированного маршрута» (вкл. у пользователя в боте при гибридном биллинге)",
+        description=(
+            "Необязательно: переопределить UUID internal squad sub-opt для панели; "
+            "если пусто — используется встроенный SUB_OPT_INTERNAL_SQUAD_UUID."
+        ),
     )
     remnawave_cookie: str | None = Field(
         default=None,

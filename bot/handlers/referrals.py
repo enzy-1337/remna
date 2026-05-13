@@ -107,12 +107,12 @@ def _referrals_main_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="💸 История начислений", callback_data="ref:rewards", style="primary"
+            text="💸 История начислений", callback_data="ref:rewards"
         )
     )
     b.row(
         InlineKeyboardButton(
-            text="📋 Список приглашённых", callback_data="ref:list", style="primary"
+            text="📋 Список приглашённых", callback_data="ref:list"
         )
     )
     b.row(InlineKeyboardButton(text="⬅️ В профиль", callback_data="menu:main", style="danger"))

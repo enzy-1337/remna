@@ -19,7 +19,6 @@ def profile_main_keyboard(
             InlineKeyboardButton(
                 text="💳 Оплатить 10 ₽",
                 callback_data="topup:amt:10",
-                style="success",
             )
         )
     if show_trial:
@@ -27,26 +26,25 @@ def profile_main_keyboard(
             InlineKeyboardButton(
                 text="🎁 Активировать триал",
                 callback_data="trial:activate",
-                style="success",
             )
         )
     b.row(
         InlineKeyboardButton(
-            text="🔑 Моя подписка", callback_data="menu:sub_main", style="primary"
+            text="🔑 Моя подписка", callback_data="menu:sub_main"
         )
     )
     b.row(
-        InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals", style="primary"),
-        InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance", style="primary"),
+        InlineKeyboardButton(text="👥 Рефералы", callback_data="menu:referrals"),
+        InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
     )
     b.row(
-        InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo", style="primary"),
-        InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:info", style="primary"),
+        InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"),
+        InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:info"),
     )
     if is_admin:
         b.row(
             InlineKeyboardButton(
-                text="🛠 Админ-панель", callback_data="admin:panel", style="primary"
+                text="🛠 Админ-панель", callback_data="admin:panel"
             )
         )
     return b.as_markup()

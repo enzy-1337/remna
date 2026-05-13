@@ -36,6 +36,7 @@ from shared.services.subscription_service import (
     TRIAL_PLAN_NAME,
     calculate_discounted_plan_price,
     get_active_subscription,
+    get_base_subscription_plan,
     list_paid_plans,
     plan_tariff_button_label,
     plan_tariff_button_label_with_discount,
@@ -81,37 +82,37 @@ def _sub_main_keyboard(
         if subscription_url:
             b.row(
                 InlineKeyboardButton(text="📎 Подключиться", url=subscription_url, style="success"),
-                InlineKeyboardButton(text="🔳 QR-код", callback_data="sub:qr", style="primary"),
+                InlineKeyboardButton(text="🔳 QR-код", callback_data="sub:qr"),
             )
         b.row(
-            InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices", style="primary"),
-            InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr", style="primary"),
+            InlineKeyboardButton(text="🖥 Устройства", callback_data="sub:devices"),
+            InlineKeyboardButton(text="📖 Инструкции", callback_data="sub:instr"),
         )
         if show_tariffs:
             if show_billing_detail:
                 b.row(
-                    InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans", style="success"),
+                    InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
                     InlineKeyboardButton(
-                        text="📊 Детализация", callback_data="sub:detail:menu", style="primary"
+                        text="📊 Детализация", callback_data="sub:detail:menu"
                     ),
                 )
             else:
                 b.row(
                     InlineKeyboardButton(
-                        text="📋 Тарифы", callback_data="sub:plans", style="success"
+                        text="📋 Тарифы", callback_data="sub:plans"
                     )
                 )
         elif show_billing_detail:
             b.row(
                 InlineKeyboardButton(
-                    text="📊 Детализация", callback_data="sub:detail:menu", style="primary"
+                    text="📊 Детализация", callback_data="sub:detail:menu"
                 )
             )
         if show_optimized_toggle:
             label = "🛰 Оптим. маршрут: вкл" if optimized_on else "🛰 Оптим. маршрут: выкл"
             b.row(
                 InlineKeyboardButton(
-                    text=label[:64], callback_data="sub:opt_route:toggle", style="primary"
+                    text=label[:64], callback_data="sub:opt_route:toggle"
                 )
             )
         if show_reissue_subscription:
@@ -119,7 +120,6 @@ def _sub_main_keyboard(
                 InlineKeyboardButton(
                     text="🔑 Перевыпустить ключи подключения",
                     callback_data="sub:reissue:ask",
-                    style="primary",
                 )
             )
         if show_renewal_controls:
@@ -127,19 +127,18 @@ def _sub_main_keyboard(
                 InlineKeyboardButton(
                     text="🔄 Продление подписки",
                     callback_data="sub:renewal_menu",
-                    style="success",
                 )
             )
     else:
         if show_tariffs:
             b.row(
-                InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans", style="success"),
-                InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance", style="primary"),
+                InlineKeyboardButton(text="📋 Тарифы", callback_data="sub:plans"),
+                InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
             )
         else:
             b.row(
                 InlineKeyboardButton(
-                    text="💰 Баланс", callback_data="menu:balance", style="primary"
+                    text="💰 Баланс", callback_data="menu:balance"
                 )
             )
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main", style="danger"))
@@ -178,17 +177,16 @@ async def _sub_main_markup(
 def _detail_menu_keyboard(*, show_tariff_tab: bool) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="📅 За сегодня", callback_data="sub:detail:today", style="primary")
+        InlineKeyboardButton(text="📅 За сегодня", callback_data="sub:detail:today")
     )
     b.row(
-        InlineKeyboardButton(text="🗓 За месяц", callback_data="sub:detail:month", style="primary")
+        InlineKeyboardButton(text="🗓 За месяц", callback_data="sub:detail:month")
     )
     if show_tariff_tab:
         b.row(
             InlineKeyboardButton(
                 text="💎 Тариф / абонемент",
                 callback_data="sub:detail:tariff:menu",
-                style="primary",
             )
         )
     b.row(
@@ -203,12 +201,12 @@ def _detail_tariff_menu_keyboard() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="📅 Тариф: сегодня", callback_data="sub:detail:tariff:today", style="primary"
+            text="📅 Тариф: сегодня", callback_data="sub:detail:tariff:today"
         )
     )
     b.row(
         InlineKeyboardButton(
-            text="🗓 Тариф: месяц", callback_data="sub:detail:tariff:month", style="primary"
+            text="🗓 Тариф: месяц", callback_data="sub:detail:tariff:month"
         )
     )
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="sub:detail:menu", style="danger"))
@@ -356,7 +354,6 @@ async def _render_tariff_list(
             InlineKeyboardButton(
                 text=label[:64],
                 callback_data=f"sub:buy:{p.id}",
-                style="success",
             )
         )
     back_cb = "menu:sub_main" if has_act else "menu:main"
@@ -547,7 +544,7 @@ async def cb_opt_route_toggle(
         return
     if not optimized_route_panel_ready(settings):
         await cq.answer(
-            "Не заданы REMNAWAVE_DEFAULT_SQUAD_UUID и REMNAWAVE_OPTIMIZED_SQUAD_UUID в настройках сервера.",
+            "Переключение недоступно в режиме REMNAWAVE_STUB.",
             show_alert=True,
         )
         return
@@ -648,7 +645,6 @@ async def cb_buy_plan(
         InlineKeyboardButton(
             text="✅ Подтвердить",
             callback_data=f"sub:buyconfirm:{pid}:{token}",
-            style="success",
         )
     )
     b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data="sub:plans", style="danger"))
@@ -731,13 +727,12 @@ async def cb_buy_plan_confirm(
         return
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data="sub:plans", style="danger"))
-    b.row(InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance", style="primary"))
+    b.row(InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"))
     has_act = await get_active_subscription(session, db_user.id) is not None
     b.row(
         InlineKeyboardButton(
             text="🔑 Подписка",
             callback_data="menu:sub_main" if has_act else "menu:main",
-            style="primary",
         )
     )
     await answer_callback_with_photo_screen(
@@ -803,8 +798,8 @@ async def cb_renewal_menu(
     if not sub:
         await cq.answer("Нет активной подписки.", show_alert=True)
         return
-    plan = await session.get(Plan, sub.plan_id) if sub.plan_id else None
-    monthly_price = str(plan.price_rub) if plan is not None else "—"
+    base_plan = await get_base_subscription_plan(session)
+    monthly_price = str(base_plan.price_rub) if base_plan is not None else "—"
     auto_text = "включено ✅" if sub.auto_renew else "выключено ⏸"
     tariffs_enabled = await tariff_purchases_enabled(get_settings())
     cap = join_lines(
@@ -825,13 +820,15 @@ async def cb_renewal_menu(
     if tariffs_enabled:
         b.row(
             InlineKeyboardButton(
-                text="💳 Продлить подписку", callback_data="sub:extend", style="success"
+                text="💳 Продлить подписку", callback_data="sub:extend"
             )
         )
         toggle_text = "⏸ Выключить автопродление" if sub.auto_renew else "▶️ Включить автопродление"
         b.row(
             InlineKeyboardButton(
-                text=toggle_text, callback_data="sub:renewal_toggle", style="primary"
+                text=toggle_text,
+                callback_data="sub:renewal_toggle",
+                style="success" if sub.auto_renew else "danger",
             )
         )
     b.row(

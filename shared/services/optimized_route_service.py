@@ -7,23 +7,27 @@ from shared.integrations.remnawave import RemnaWaveClient
 from shared.models.user import User
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 
+# Internal squad «sub-opt» в Remnawave: выдаётся всем в `activeInternalSquads`
+# (раньше для «обычного» маршрута использовался REMNAWAVE_DEFAULT_SQUAD_UUID / «sub»).
+SUB_OPT_INTERNAL_SQUAD_UUID = "e614816c-de57-49f5-b93f-c6e2cbe8ef56"
+
 
 def remnawave_squads_for_db_user(settings: Settings, user: User) -> list[str] | None:
-    """Список `activeInternalSquads` для панели по флагу пользователя и .env."""
-    opt = (settings.remnawave_optimized_squad_uuid or "").strip()
-    dft = (settings.remnawave_default_squad_uuid or "").strip()
-    if user.optimized_route_enabled and opt:
-        return [opt]
-    if dft:
-        return [dft]
-    return None
+    """Список `activeInternalSquads`: один squad sub-opt для всех.
+
+    Переключатель «оптимизированный маршрут» у пользователя влияет только на надбавку
+    за ГБ в биллинге, не на состав сквада. Опционально: переопределение через
+    REMNAWAVE_OPTIMIZED_SQUAD_UUID в .env.
+    """
+    env_opt = (settings.remnawave_optimized_squad_uuid or "").strip()
+    if env_opt:
+        return [env_opt]
+    return [SUB_OPT_INTERNAL_SQUAD_UUID]
 
 
 def optimized_route_panel_ready(settings: Settings) -> bool:
-    """Для переключения в боте нужны оба UUID (обычный и оптимизированный squad)."""
-    return bool((settings.remnawave_default_squad_uuid or "").strip()) and bool(
-        (settings.remnawave_optimized_squad_uuid or "").strip()
-    )
+    """Можно переключать надбавку за оптимизированный маршрут (сквад в коде / .env)."""
+    return not settings.remnawave_stub
 
 
 async def sync_user_optimized_route_to_panel(

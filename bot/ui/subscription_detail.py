@@ -21,7 +21,6 @@ from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
 from shared.services.billing_v2.balance_runway_service import compute_balance_runway
 from shared.services.billing_v2.detail_service import user_has_tariff_subscription_charges
-from shared.services.optimized_route_service import optimized_route_panel_ready
 from shared.services.subscription_service import TRIAL_PLAN_NAME, count_devices, get_active_subscription
 
 logger = logging.getLogger(__name__)
@@ -156,9 +155,9 @@ async def build_subscription_detail_caption(
             )
         else:
             opt_route_lines.append(plain("🛰 Маршрут: ") + bold("обычный"))
-        if not optimized_route_panel_ready(settings):
+        if settings.remnawave_stub:
             opt_route_lines.append(
-                italic("Переключение в боте: задайте оба UUID squad в .env панели.")
+                italic("REMNAWAVE_STUB: сквад в панели не синхронизируется.")
             )
         if not settings.billing_traffic_rw_meter_enabled:
             opt_route_lines.append(

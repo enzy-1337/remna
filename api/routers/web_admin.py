@@ -177,6 +177,34 @@ def _fmt_dt_msk(dt: datetime | None) -> str:
     return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
 
 
+def _fmt_relative_ru(dt: datetime | None, *, now: datetime | None = None) -> str:
+    """Человекочитаемое «N часов назад» для ленты пополнений (UTC)."""
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    if now is None:
+        now = datetime.now(UTC)
+    else:
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+    sec = int((now - dt).total_seconds())
+    if sec < 0:
+        return _fmt_dt_msk(dt)
+    if sec < 60:
+        return "только что"
+    if sec < 3600:
+        m = sec // 60
+        return f"{m} мин назад"
+    if sec < 86400:
+        h = sec // 3600
+        return f"{h} ч назад"
+    if sec < 86400 * 14:
+        d = sec // 86400
+        return f"{d} дн назад"
+    return _fmt_dt_msk(dt)
+
+
 _AVATAR_CACHE: dict[int, tuple[float, bytes, str]] = {}
 _AVATAR_TTL_SEC = 3600.0
 _avatar_fetch_locks: dict[int, asyncio.Lock] = {}
@@ -955,6 +983,7 @@ def _layout(
       </div>
       <nav class="flex min-h-0 flex-1 flex-col items-center gap-[5px] overflow-y-auto overflow-x-hidden px-[10px] pt-[5px] pb-[10px] group-hover/sidebar:items-stretch">
         {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
+        {_sidebar_nav_item("/admin/topups", "fa-solid fa-money-bill-transfer", "Пополнения", cur)}
         {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
         {_sidebar_nav_item("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
@@ -987,6 +1016,7 @@ def _layout(
       <aside class="absolute left-0 top-0 flex h-full w-[min(20rem,90vw)] flex-col gap-1 overflow-y-auto border-r border-base-content/10 bg-base-300 py-14 pl-2 pr-2 shadow-2xl" aria-label="Меню админки">
         <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-3 z-10" data-remna-mnav-close aria-label="Закрыть"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
         {_mob_drawer_link("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
+        {_mob_drawer_link("/admin/topups", "fa-solid fa-money-bill-transfer", "Пополнения", cur)}
         {_mob_drawer_link("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
         {_mob_drawer_link("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
         {_mob_drawer_link("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
@@ -4450,6 +4480,82 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     """
     _DASHBOARD_HTML_CACHE = (time.monotonic(), body)
     return _layout("Web-admin Dashboard", body, request=request)
+
+
+@router.get("/topups")
+async def admin_topups_history(request: Request, limit: int = 200) -> HTMLResponse:
+    """Лента пополнений баланса (topup + ручные начисления админом)."""
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    try:
+        lim = max(10, min(500, int(limit)))
+    except (TypeError, ValueError):
+        lim = 200
+    now = datetime.now(UTC)
+    async with await _session() as session:
+        rows = (
+            await session.execute(
+                select(Transaction, User)
+                .join(User, User.id == Transaction.user_id)
+                .where(
+                    Transaction.status == "completed",
+                    Transaction.type.in_(("topup", "admin_balance_add")),
+                    Transaction.amount > 0,
+                )
+                .order_by(desc(Transaction.created_at))
+                .limit(lim)
+            )
+        ).all()
+
+    def _type_label(t: str) -> str:
+        if t == "topup":
+            return "Пополнение"
+        if t == "admin_balance_add":
+            return "Начисление админом"
+        return t
+
+    body_rows: list[str] = []
+    for txn, u in rows:
+        rel = _fmt_relative_ru(txn.created_at, now=now)
+        amt = txn.amount
+        try:
+            amt_s = str(int(amt)) if amt == amt.to_integral_value() else str(amt)
+        except Exception:
+            amt_s = str(amt)
+        un = (u.username or "").strip()
+        name_bits = " ".join(x for x in ((u.first_name or "").strip(), (u.last_name or "").strip()) if x)
+        who = f"@{un}" if un else (name_bits or f"#{u.id}")
+        prov = (txn.payment_provider or "").strip() or "—"
+        body_rows.append(
+            f"<tr class='border-b border-base-content/10 hover:bg-base-200/40'>"
+            f"<td class='whitespace-nowrap text-xs opacity-80'>{_esc(rel)}</td>"
+            f"<td class='text-sm'><a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(who)}</a>"
+            f"<span class='text-xs opacity-60 ml-1'>#{u.id} · tg:{u.telegram_id}</span></td>"
+            f"<td class='font-mono font-semibold text-success'>+{_esc(amt_s)} ₽</td>"
+            f"<td class='text-xs'><span class='badge badge-ghost badge-sm'>{_esc(_type_label(txn.type))}</span></td>"
+            f"<td class='text-xs opacity-70'>{_esc(prov)}</td>"
+            f"<td class='text-xs whitespace-nowrap opacity-60'>{_esc(_fmt_dt_msk(txn.created_at))}</td>"
+            f"</tr>"
+        )
+
+    table = (
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'>"
+        "<div class='card-body gap-4'>"
+        "<div class='flex flex-wrap items-center justify-between gap-2'>"
+        "<h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-money-bill-transfer text-primary mr-2' aria-hidden='true'></i>"
+        "История пополнений</h2>"
+        "<span class='text-xs opacity-60'>Последние записи: пополнения через платежи и ручные начисления из админки</span>"
+        "</div>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
+        "<table class='table table-zebra table-sm'>"
+        "<thead><tr>"
+        "<th>Когда</th><th>Пользователь</th><th>Сумма</th><th>Тип</th><th>Провайдер / источник</th><th>Дата МСК</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(body_rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Записей пока нет</td></tr>'}</tbody>"
+        "</table></div></div></div>"
+    )
+    return _layout("История пополнений", table, request=request)
 
 
 @router.get("/tickets")

@@ -73,7 +73,6 @@ def _devices_kb(
             InlineKeyboardButton(
                 text=hwid_device_title(d, i + 1),
                 callback_data=f"dev:rw:{i}:{ctx}",
-                style="primary",
             )
         )
     b.row(
@@ -118,7 +117,7 @@ async def _render_devices(
             InlineKeyboardBuilder()
             .row(
                 InlineKeyboardButton(
-                    text="🔄 Обновить", callback_data=_list_callback(ctx), style="primary"
+                    text="🔄 Обновить", callback_data=_list_callback(ctx)
                 )
             )
             .row(
