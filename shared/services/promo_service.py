@@ -14,7 +14,7 @@ from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.promo import PromoCode, PromoCodeAllowedUser, PromoUsage
 from shared.models.transaction import Transaction
 from shared.models.user import User
-from shared.md2 import bold, join_lines, plain
+from shared.md2 import bold, plain
 
 # bonus_rub — устаревший тип: начисление на основной баланс (как balance_rub)
 SUPPORTED_PROMO_TYPES = {
@@ -212,15 +212,11 @@ async def apply_promo_code_for_user_v2(
             return False, plain("Вы уже использовали этот промокод."), None
         return (
             True,
-            join_lines(
-                plain("✅ Промокод применён!"),
-                plain("Бонус +"),
-                bold(str(percent)),
-                plain("% начислится на "),
-                bold("первое пополнение"),
-                plain(" после активации."),
-                plain("Бонус сработает один раз."),
-            ),
+            plain("✅ Промокод применён! Бонус +")
+            + bold(str(percent))
+            + plain("% начислится на ")
+            + bold("первое пополнение")
+            + plain(" после активации. Бонус сработает один раз."),
             {"code": promo.code, "type": promo.type, "value": str(percent)},
         )
 
@@ -235,12 +231,9 @@ async def apply_promo_code_for_user_v2(
             return False, plain("Вы уже использовали этот промокод."), None
         return (
             True,
-            join_lines(
-                plain("✅ Промокод применён!"),
-                plain("Скидка "),
-                bold(str(percent)),
-                plain("% будет применена к следующей покупке тарифа."),
-            ),
+            plain("✅ Промокод применён! Скидка ")
+            + bold(str(percent))
+            + plain("% будет применена к следующей покупке тарифа."),
             {"code": promo.code, "type": promo.type, "value": str(percent)},
         )
 
@@ -272,7 +265,7 @@ async def apply_promo_code_for_user_v2(
             )
         )
         await session.flush()
-        return True, join_lines(plain("✅ Начислено "), bold(str(gb)), plain(" ГБ.")), {"code": promo.code, "type": promo.type, "value": str(gb)}
+        return True, plain("✅ Начислено ") + bold(str(gb)) + plain(" ГБ."), {"code": promo.code, "type": promo.type, "value": str(gb)}
 
     if promo.type == "extra_devices":
         from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
@@ -311,7 +304,7 @@ async def apply_promo_code_for_user_v2(
         await session.flush()
         return (
             True,
-            join_lines(plain("✅ Добавлено слотов устройств: "), bold(str(add_slots))),
+            plain("✅ Добавлено слотов устройств: ") + bold(str(add_slots)),
             {"code": promo.code, "type": promo.type, "value": str(add_slots)},
         )
 
