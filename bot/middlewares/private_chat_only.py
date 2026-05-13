@@ -44,10 +44,27 @@ def _chat_id_from_update(update: Update) -> int | None:
     return None
 
 
+def _is_id_command_text(text: str | None) -> bool:
+    """Команда `/id` или `/id@BotName` (без учёта регистра префикса)."""
+    if not text:
+        return False
+    line = text.strip()
+    if not line.startswith("/"):
+        return False
+    first_word = line.split()[0]
+    return first_word.split("@", 1)[0].lower() == "/id"
+
+
 class PrivateChatOnlyMiddleware(BaseMiddleware):
-    def __init__(self, *, allowed_chat_ids: set[int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        allowed_chat_ids: set[int] | None = None,
+        allow_id_command_in_groups: bool = True,
+    ) -> None:
         super().__init__()
         self._allowed_chat_ids = {int(x) for x in (allowed_chat_ids or set())}
+        self._allow_id_command_in_groups = allow_id_command_in_groups
 
     async def __call__(
         self,
@@ -63,6 +80,15 @@ class PrivateChatOnlyMiddleware(BaseMiddleware):
         ctype = _chat_type_from_update(event)
         if ctype is not None and ctype != "private":
             chat_id = _chat_id_from_update(event)
+            msg = event.message
+            if (
+                self._allow_id_command_in_groups
+                and ctype in ("group", "supergroup")
+                and msg
+                and msg.text
+                and _is_id_command_text(msg.text)
+            ):
+                return await handler(event, data)
             if chat_id is not None and chat_id in self._allowed_chat_ids:
                 return await handler(event, data)
             return None

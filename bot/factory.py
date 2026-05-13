@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 
 from bot.handlers.admin import router as admin_router
 from bot.handlers.admin_promo import router as admin_promo_router
@@ -24,6 +24,7 @@ from bot.handlers.promo import router as promo_router
 from bot.handlers.referrals import router as referrals_router
 from bot.handlers.start import router as start_router
 from bot.handlers.subscription import router as subscription_router
+from bot.handlers.user_id import router as user_id_router
 from bot.middlewares.channel_sub import ChannelSubscriptionMiddleware
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
@@ -66,6 +67,7 @@ def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
     dp.include_router(github_link_router)
     dp.include_router(menu_router)
     dp.include_router(start_router)
+    dp.include_router(user_id_router)
     dp.include_router(fallback_router)
 
 
@@ -77,8 +79,18 @@ async def create_bot_and_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher
     await bot.set_my_commands(
         commands=[
             BotCommand(command="start", description="Перезапустить бота"),
+            BotCommand(command="id", description="Узнать Telegram ID"),
         ],
         scope=BotCommandScopeAllPrivateChats(),
+    )
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(
+                command="id",
+                description="Ответьте на сообщение или: /id @username",
+            ),
+        ],
+        scope=BotCommandScopeAllGroupChats(),
     )
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)

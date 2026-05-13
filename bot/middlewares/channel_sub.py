@@ -43,10 +43,15 @@ def _member_is_subscribed(member) -> bool:
 
 
 def _is_allowed_without_subscription(update: Update) -> bool:
-    """До подписки в хендлеры попадает только /start (колбэк channel:check — в middleware)."""
+    """До подписки: /start, утилита /id (в т.ч. в группах)."""
     if update.message and update.message.text:
         parts = update.message.text.split(maxsplit=1)
-        if parts and parts[0].startswith("/start"):
+        if not parts:
+            return False
+        head = parts[0].split("@", 1)[0].lower()
+        if head.startswith("/start"):
+            return True
+        if head == "/id":
             return True
     return False
 
