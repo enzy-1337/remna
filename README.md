@@ -128,13 +128,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-org>/<your-repo>/<bran
 
 Универсальный сценарий подъёма: **`scripts/docker-stack-start.sh`** — выполняет `docker compose down --remove-orphans` (контейнеры и сеть проекта без `-v`), затем `postgres` + `redis` → **`migrate`** → остальные сервисы (**включая `idbot`**).
 
-Одна команда-обёртка **`scripts/flux_init.sh`** (алиас на VPS: `flux_init`): без аргументов — то же, что `docker-stack-start.sh`; `--edit` — открыть в `$EDITOR` файлы загрузки (`docker-stack-start.sh`, `bot-entrypoint.sh`, `start.sh`, `.env.example`, `docker-compose.yml`).
+**Интерактивное меню** (запуск, остановка, логи, миграции, настройка systemd): **`./flux_init`** или **`scripts/flux_init.sh`** — открывает то же меню, что `deploy/remna-manager.sh` (пункты 1–13), без лишних шагов при повторных запусках. **`flux_init --full`** — с выбором языка и проверкой обновлений. **`flux_init --stack`** — только неинтерактивный подъём (`docker-stack-start.sh`). **`flux_init --edit`** — правка ключевых файлов и `deploy/remna-manager.sh`.
 
 ```bash
-chmod +x scripts/docker-stack-start.sh scripts/flux_init.sh
-./scripts/docker-stack-start.sh
-# или:
-./scripts/flux_init.sh
+chmod +x scripts/docker-stack-start.sh scripts/flux_init.sh flux_init
+./scripts/docker-stack-start.sh    # только подъём стека
+./flux_init                         # меню управления
 ```
 
 Его же вызывает пункт **11)** в `deploy/remna-manager.sh` при настройке systemd.
@@ -178,7 +177,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/remna-bot
 ExecStart=/opt/remna-bot/scripts/docker-stack-start.sh
-# (эквивалентно: /opt/remna-bot/scripts/flux_init.sh)
 ExecStop=-/usr/bin/docker compose down --remove-orphans
 RemainAfterExit=yes
 TimeoutStartSec=0
@@ -187,8 +185,10 @@ TimeoutStartSec=0
 WantedBy=multi-user.target
 EOF
 
-chmod +x /opt/remna-bot/scripts/docker-stack-start.sh /opt/remna-bot/scripts/flux_init.sh
+chmod +x /opt/remna-bot/scripts/docker-stack-start.sh /opt/remna-bot/scripts/flux_init.sh /opt/remna-bot/flux_init
 ```
+
+Готовый шаблон unit (с комментариями): **`deploy/systemd/remna-bot.service.example`**.
 
 Активируйте автозапуск:
 

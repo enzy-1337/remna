@@ -1,0 +1,23 @@
+# Пример unit для автоподъёма стека после reboot.
+# Установка: скопируйте в /etc/systemd/system/remna-bot.service и поправьте пути,
+# либо используйте пункт 11 в меню flux_init / deploy/remna-manager.sh.
+#
+# Важно: ExecStart — scripts/docker-stack-start.sh (неинтерактивно).
+# Интерактивное меню запуск/стоп: /opt/remna-bot/scripts/flux_init.sh или ./flux_init
+
+[Unit]
+Description=Remna Bot stack (Docker Compose) — boot via docker-stack-start.sh
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/remna-bot
+ExecStart=/opt/remna-bot/scripts/docker-stack-start.sh
+ExecStop=-/usr/bin/docker compose down --remove-orphans
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

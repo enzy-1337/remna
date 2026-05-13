@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
-# flux_init — одна команда для подъёма стека и доступа к «файлам загрузки»
-# (скрипты старта Docker, entrypoint, start.sh, пример .env).
+# flux_init — запуск интерактивного меню управления стеком (deploy/remna-manager.sh)
+# и вспомогательные режимы.
 #
-# Использование:
-#   ./scripts/flux_init.sh              — то же, что scripts/docker-stack-start.sh (postgres → migrate → все сервисы)
-#   ./scripts/flux_init.sh --edit       — открыть файлы загрузки в $EDITOR (или nano)
-#   ./scripts/flux_init.sh --list       — только список путей
-#
-# Удобный alias (добавьте в ~/.bashrc на VPS):
+# Рекомендуемый alias на VPS (~/.bashrc):
 #   alias flux_init='/opt/remna-bot/scripts/flux_init.sh'
+# или из корня репозитория: ./flux_init
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
-
+MANAGER="$ROOT/deploy/remna-manager.sh"
 STACK_START="$ROOT/scripts/docker-stack-start.sh"
 
 LOAD_FILES=(
@@ -23,7 +18,19 @@ LOAD_FILES=(
   "$ROOT/start.sh"
   "$ROOT/.env.example"
   "$ROOT/docker-compose.yml"
+  "$MANAGER"
 )
+
+_run_menu() {
+  if [[ ! -f "$MANAGER" ]]; then
+    echo "flux_init: не найден $MANAGER" >&2
+    exit 1
+  fi
+  chmod +x "$MANAGER" 2>/dev/null || true
+  export APP_DIR="$ROOT"
+  # Быстрый вход: сразу меню (запуск/остановка/логи/systemd и т.д.)
+  exec bash "$MANAGER" flux-menu
+}
 
 case "${1:-}" in
   --edit|-e)
@@ -37,32 +44,38 @@ case "${1:-}" in
     fi
     "${EDITOR:-nano}" "${paths[@]}"
     ;;
-  --list|-l)
-    for f in "${LOAD_FILES[@]}"; do
-      [[ -f "$f" ]] && printf '%s\n' "$f"
-    done
-    ;;
-  --help|-h)
-    cat <<'EOF'
-flux_init — подъём Docker-стека и работа с файлами загрузки.
-
-  ./scripts/flux_init.sh           Поднять стек: postgres → redis → migrate → bot, api, tickets-bot, downloader-bot, idbot
-  ./scripts/flux_init.sh --edit    Открыть существующие файлы загрузки в $EDITOR
-  ./scripts/flux_init.sh --list    Список путей к этим файлам
-  ./scripts/flux_init.sh --help    Эта справка
-
-На сервере удобно добавить в ~/.bashrc:
-  alias flux_init='/opt/remna-bot/scripts/flux_init.sh'
-EOF
-    ;;
-  "")
+  --stack|--up|-s)
     if [[ ! -x "$STACK_START" ]]; then
       chmod +x "$STACK_START" 2>/dev/null || true
     fi
     exec bash "$STACK_START"
     ;;
+  --full|-f)
+    chmod +x "$MANAGER" 2>/dev/null || true
+    export APP_DIR="$ROOT"
+    exec bash "$MANAGER"
+    ;;
+  --help|-h)
+    cat <<'EOF'
+flux_init — меню управления Docker-стеком (Remna).
+
+  flux_init                  Интерактивное меню: запуск, остановка, логи, миграции, systemd…
+  flux_init --full           Полный сценарий manager: выбор языка + проверка обновлений + меню
+  flux_init --stack          Только подъём стека (scripts/docker-stack-start.sh)
+  flux_init --edit           Открыть в $EDITOR ключевые файлы загрузки и deploy/remna-manager.sh
+
+Переменные:
+  FLUX_LANG=ru|en            Язык меню при быстром входе (по умолчанию ru)
+
+Пример alias:
+  alias flux_init='/opt/remna-bot/scripts/flux_init.sh'
+EOF
+    ;;
+  "")
+    _run_menu
+    ;;
   *)
-    echo "flux_init: неизвестный аргумент «$1». См. ./scripts/flux_init.sh --help" >&2
+    echo "flux_init: неизвестный аргумент «$1». См. flux_init --help" >&2
     exit 1
     ;;
 esac

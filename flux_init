@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Обёртка в корне репозитория: ./flux_init → scripts/flux_init.sh
+exec "$(cd "$(dirname "$0")" && pwd)/scripts/flux_init.sh" "$@"

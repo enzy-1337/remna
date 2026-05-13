@@ -40,7 +40,7 @@ msg() {
         updates_found) echo "Доступны обновления." ;;
         updates_not_found) echo "Обновлений нет." ;;
         offer_update) echo "Обновить сейчас? (y/n):" ;;
-        menu_title) echo "===== Меню управления Remna =====" ;;
+        menu_title) echo "===== Меню управления Remna · flux_init =====" ;;
         menu_install) echo "1) Установить систему (первый запуск)" ;;
         menu_update) echo "2) Обновить систему" ;;
         menu_start) echo "3) Запустить стек" ;;
@@ -93,7 +93,7 @@ msg() {
         updates_found) echo "Updates are available." ;;
         updates_not_found) echo "No updates found." ;;
         offer_update) echo "Update now? (y/n):" ;;
-        menu_title) echo "===== Remna Control Menu =====" ;;
+        menu_title) echo "===== Remna Control Menu · flux_init =====" ;;
         menu_install) echo "1) Install system (first run)" ;;
         menu_update) echo "2) Update system" ;;
         menu_start) echo "3) Start stack" ;;
@@ -414,10 +414,18 @@ setup_systemd_autostart() {
   fi
   chmod +x "$starter" 2>/dev/null || $SUDO chmod +x "$starter"
 
+  local flux="$APP_DIR/scripts/flux_init.sh"
+  if [[ -f "$flux" ]]; then
+    chmod +x "$flux" 2>/dev/null || $SUDO chmod +x "$flux"
+  fi
+  if [[ -f "$APP_DIR/flux_init" ]]; then
+    chmod +x "$APP_DIR/flux_init" 2>/dev/null || $SUDO chmod +x "$APP_DIR/flux_init"
+  fi
+
   local unit_path="/etc/systemd/system/$SERVICE_NAME"
   $SUDO tee "$unit_path" >/dev/null <<EOF
 [Unit]
-Description=Remna Bot Docker Compose Stack
+Description=Remna Bot stack (Docker Compose) — boot via docker-stack-start.sh
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -425,10 +433,13 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=$APP_DIR
+# Неинтерактивный подъём после reboot (все сервисы, включая idbot).
 ExecStart=$starter
+# Остановка стека при остановке unit (опционально).
 ExecStop=-/usr/bin/docker compose down --remove-orphans
 RemainAfterExit=yes
 TimeoutStartSec=0
+# Интерактивное меню на сервере (запуск/стоп/логи/systemd): ./scripts/flux_init.sh или ./flux_init
 
 [Install]
 WantedBy=multi-user.target
@@ -524,5 +535,19 @@ main() {
   preflight_auto
   menu_loop
 }
+
+# Быстрый вход из flux_init: сразу меню без выбора языка и без preflight.
+# Задаётся APP_DIR из окружения (scripts/flux_init.sh экспортирует каталог репозитория).
+if [[ "${1:-}" == "flux-menu" ]]; then
+  shift || true
+  APP_DIR="${APP_DIR:-$DEFAULT_APP_DIR}"
+  if ! [[ -f "$APP_DIR/$DOCKER_COMPOSE_FILE" ]]; then
+    echo "flux-menu: не найден $APP_DIR/$DOCKER_COMPOSE_FILE — задайте APP_DIR=/path/to/remna-bot" >&2
+    exit 1
+  fi
+  LANG_CHOICE="${FLUX_LANG:-ru}"
+  menu_loop
+  exit 0
+fi
 
 main "$@"
