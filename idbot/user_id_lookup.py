@@ -1,21 +1,21 @@
-"""Команда /id и упоминание @username в личке — показать Telegram ID."""
+"""Команда /id и упоминание @username в личке — узнать Telegram ID (для ID-бота)."""
 
 from __future__ import annotations
 
 import logging
 import re
+
 from aiogram import Bot, Router
 from aiogram.enums import ChatType, MessageEntityType
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject
-from aiogram.filters import Filter
+from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Chat, Message, User as TgUser
 
 from shared.md2 import bold, code, esc, join_lines, plain
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("idbot.id_lookup")
 
-router = Router(name="user_id")
+router = Router(name="id_lookup")
 
 _USERNAME_RE = re.compile(r"^@([a-zA-Z][a-zA-Z0-9_]{4,31})$")
 

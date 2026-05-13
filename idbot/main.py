@@ -29,10 +29,12 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
     Message,
 )
 
@@ -41,6 +43,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from idbot.config import IdBotSettings, get_idbot_settings  # noqa: E402
+from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
 from shared.md2 import bold, code, esc, italic, join_lines, plain  # noqa: E402
 
 logger = logging.getLogger("idbot")
@@ -379,11 +382,24 @@ async def cb_choose_destination(cq: CallbackQuery) -> None:
 async def _on_startup(bot: Bot, settings: IdBotSettings) -> None:
     try:
         await bot.set_my_commands(
-            commands=[BotCommand(command="start", description="Показать ваш Telegram ID")],
+            commands=[
+                BotCommand(command="start", description="Показать ваш Telegram ID"),
+                BotCommand(command="id", description="Узнать ID по @username или ответу"),
+            ],
             scope=BotCommandScopeAllPrivateChats(),
         )
+        await bot.set_my_commands(
+            commands=[
+                BotCommand(
+                    command="id",
+                    description="Ответьте на сообщение или /id @username",
+                ),
+            ],
+            scope=BotCommandScopeAllGroupChats(),
+        )
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except Exception:
-        logger.exception("idbot: set_my_commands failed")
+        logger.exception("idbot: set_my_commands / menu button failed")
 
     chat_id = settings.admin_log_chat_id
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
@@ -421,6 +437,7 @@ async def _run() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
+    dp.include_router(id_lookup_router)
 
     await _on_startup(bot, settings)
 

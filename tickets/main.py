@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, MenuButtonCommands
 
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
@@ -41,6 +42,14 @@ def main() -> None:
     scheduler = TicketScheduler(bot)
 
     async def _on_startup(*_args, **_kwargs) -> None:
+        try:
+            await bot.set_my_commands(
+                [BotCommand(command="start", description="Поддержка и тикеты")],
+                scope=BotCommandScopeAllPrivateChats(),
+            )
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception:
+            log.exception("support bot: set_my_commands / menu button failed")
         await scheduler.start()
         try:
             settings = get_settings()
