@@ -61,6 +61,7 @@ from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_p
 from shared.services.subscription_service import (
     admin_convert_monthly_subscriptions_to_payg_balance,
     get_base_subscription_plan,
+    resolve_legacy_transition_base_month_rub,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,30 +89,26 @@ def _is_admin(tg_id: int | None) -> bool:
 
 async def admin_panel_keyboard() -> InlineKeyboardMarkup:
     settings = get_settings()
-    tariffs_on = await tariff_purchases_enabled(settings)
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
             text="👤 Раздел пользователей",
             callback_data="admin:section:users",
-            style="primary",
         ),
         InlineKeyboardButton(
             text="📊 Раздел аналитики",
             callback_data="admin:section:analytics",
-            style="primary",
         ),
     )
     b.row(
         InlineKeyboardButton(
-            text="👨‍💼 Админ-профиль", callback_data="admin:section:profile", style="primary"
+            text="👨‍💼 Админ-профиль", callback_data="admin:section:profile"
         )
     )
     b.row(
         InlineKeyboardButton(
             text="📋 Продажа тарифов в боте",
             callback_data="admin:tariffs_shop",
-            style="success" if tariffs_on else "danger",
         )
     )
     b.row(
@@ -145,21 +142,26 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📈 Метрики (24ч)", callback_data="admin:metrics"),
         InlineKeyboardButton(text="🌐 Web-Admin", callback_data="admin:web"),
     )
-    b.row(
+    row_legacy_payg: list[InlineKeyboardButton] = [
         InlineKeyboardButton(
             text="🧮 Калькулятор перехода legacy",
             callback_data="admin:transition_calc",
         ),
-        InlineKeyboardButton(
-            text="📊 Калькулятор PAYG", callback_data="admin:calc_payg"
-        ),
-    )
-    b.row(
-        InlineKeyboardButton(
-            text="🔁 Конвертировать подписки в PAYG",
-            callback_data="admin:mass_convert_payg",
+    ]
+    if s.billing_v2_enabled:
+        row_legacy_payg.append(
+            InlineKeyboardButton(
+                text="📊 Калькулятор PAYG", callback_data="admin:calc_payg"
+            ),
         )
-    )
+    b.row(*row_legacy_payg)
+    if s.billing_v2_enabled:
+        b.row(
+            InlineKeyboardButton(
+                text="🔁 Конвертировать подписки в PAYG",
+                callback_data="admin:mass_convert_payg",
+            )
+        )
     b.row(
         InlineKeyboardButton(
             text="🎁 Промокоды", callback_data="admin:promos:page:0"
@@ -222,7 +224,10 @@ def _admin_web_keyboard() -> InlineKeyboardMarkup:
     admin_url = f"{root}/admin" if root else ""
     b = InlineKeyboardBuilder()
     if admin_url:
-        b.row(InlineKeyboardButton(text="🏠 Главная", url=admin_url))
+        b.row(
+            InlineKeyboardButton(text="🏠 Главная", url=admin_url),
+            InlineKeyboardButton(text="💳 Пополнения", url=f"{admin_url}/topups"),
+        )
         b.row(
             InlineKeyboardButton(
                 text="👥 Пользователи", url=f"{admin_url}/users"
@@ -1078,7 +1083,11 @@ async def cb_admin_tariffs_toggle_do(cq: CallbackQuery, db_user: User | None) ->
 
 
 @router.callback_query(F.data == "admin:transition_calc")
-async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> None:
+async def cb_admin_transition_calc(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
     if cq.from_user is None or not _is_admin(cq.from_user.id):
         await cq.answer("Нет доступа.", show_alert=True)
         return
@@ -1086,7 +1095,7 @@ async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> N
         await cq.answer("Сначала /start", show_alert=True)
         return
     s = get_settings()
-    base = s.billing_transition_base_month_rub
+    base = await resolve_legacy_transition_base_month_rub(session, s)
     fee = s.billing_transition_fee_percent
     sample_days = (7, 15, 30, 45)
     lines: list[str | object] = [
@@ -1096,25 +1105,28 @@ async def cb_admin_transition_calc(cq: CallbackQuery, db_user: User | None) -> N
         + bold(str(base))
         + plain(" ₽ × (1 − ")
         + bold(str(fee))
-        + plain("%). Автоначисления нет."),
+        + plain(
+            "%). База месяца — минимальный активный тариф ~30 дней из БД; если таких нет — "
+        )
+        + code("BILLING_TRANSITION_BASE_MONTH_RUB")
+        + plain(". Автоначисления нет."),
         "",
     ]
     for d in sample_days:
-        c = transition_credit_for_remaining_legacy_rub(s, remaining_days=d)
+        c = transition_credit_for_remaining_legacy_rub(
+            s, remaining_days=d, base_month_rub=base
+        )
         lines.append(plain(f"{d} → ") + bold(str(c)) + plain(" ₽"))
     root = (s.public_site_url or "").strip().rstrip("/")
     if root:
-        lines.extend(
-            [
-                "",
-                plain("Любое значение: раздел "),
-                link("Тарифы", f"{root}/admin/tariffs"),
-                plain(" в web-admin."),
-            ]
+        lines.append(
+            plain("Любое значение: раздел ")
+            + link("Тарифы", f"{root}/admin/tariffs")
+            + plain(" в web-admin.")
         )
     else:
         lines.append(
-            join_lines("", plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «остаток срока»."))
+            plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «остаток срока».")
         )
     await cq.answer()
     kb = InlineKeyboardBuilder()

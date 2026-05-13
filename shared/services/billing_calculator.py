@@ -71,15 +71,25 @@ def estimate_pay_per_use_30d_rub(
     }
 
 
-def transition_credit_for_remaining_legacy_rub(settings: Settings, *, remaining_days: int) -> Decimal:
+def transition_credit_for_remaining_legacy_rub(
+    settings: Settings,
+    *,
+    remaining_days: int,
+    base_month_rub: Decimal | None = None,
+) -> Decimal:
     """
     Инструмент для админов: остаток старой подписки в днях → сумма на баланс.
-    Берётся доля от базовой цены месяца (конфиг), минус комиссия % (конфиг).
+    Берётся доля от базовой цены месяца (по умолчанию из конфига), минус комиссия % (конфиг).
+    ``base_month_rub`` — ориентир «цена календарного месяца» (например минимальный активный тариф ~30 дн.).
     """
     d = max(0, int(remaining_days))
     if d <= 0:
         return Decimal("0")
-    base = settings.billing_transition_base_month_rub
+    base = (
+        base_month_rub
+        if base_month_rub is not None
+        else settings.billing_transition_base_month_rub
+    )
     fee_pct = settings.billing_transition_fee_percent
     prop = (Decimal(d) / Decimal("30")) * base
     net = prop * (Decimal("100") - fee_pct) / Decimal("100")

@@ -83,6 +83,15 @@ class TransitionCreditTests(unittest.TestCase):
         s = _settings()
         self.assertEqual(transition_credit_for_remaining_legacy_rub(s, remaining_days=0), Decimal("0"))
 
+    def test_override_base_month(self) -> None:
+        s = _settings(billing_transition_base_month_rub=Decimal("999"))
+        self.assertEqual(
+            transition_credit_for_remaining_legacy_rub(
+                s, remaining_days=30, base_month_rub=Decimal("179")
+            ),
+            Decimal("161.10"),
+        )
+
 
 class PlanFieldsTests(unittest.TestCase):
     def test_defaults(self) -> None:

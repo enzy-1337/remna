@@ -35,6 +35,7 @@ from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     TRIAL_PLAN_NAME,
     calculate_discounted_plan_price,
+    default_one_month_tariff_price_rub,
     get_active_subscription,
     get_base_subscription_plan,
     list_paid_plans,
@@ -799,7 +800,11 @@ async def cb_renewal_menu(
         await cq.answer("Нет активной подписки.", show_alert=True)
         return
     base_plan = await get_base_subscription_plan(session)
-    monthly_price = str(base_plan.price_rub) if base_plan is not None else "—"
+    month_tariff = await default_one_month_tariff_price_rub(session)
+    if month_tariff is not None:
+        monthly_price = str(month_tariff.quantize(Decimal("0.01")))
+    else:
+        monthly_price = str(base_plan.price_rub) if base_plan is not None else "—"
     auto_text = "включено ✅" if sub.auto_renew else "выключено ⏸"
     tariffs_enabled = await tariff_purchases_enabled(get_settings())
     cap = join_lines(
@@ -828,7 +833,6 @@ async def cb_renewal_menu(
             InlineKeyboardButton(
                 text=toggle_text,
                 callback_data="sub:renewal_toggle",
-                style="success" if sub.auto_renew else "danger",
             )
         )
     b.row(

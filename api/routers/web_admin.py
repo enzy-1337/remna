@@ -103,6 +103,7 @@ from shared.services.subscription_service import (
     monthly_extra_devices_rub_preview,
     remove_hwid_device_from_panel,
     remove_device_slot,
+    resolve_legacy_transition_base_month_rub,
     set_subscription_auto_renew,
     unlink_hwid_device_keep_slots,
 )
@@ -8801,18 +8802,19 @@ def _parse_plan_opt_int(raw: str) -> int | None:
     return int(t)
 
 
-def _admin_tariff_transition_card(settings: Settings, tdays: str) -> str:
+def _admin_tariff_transition_card(settings: Settings, tdays: str, *, base_month: Decimal) -> str:
     tip = ""
     try:
         d = int((tdays or "").strip())
         if d > 0:
-            cred = transition_credit_for_remaining_legacy_rub(settings, remaining_days=d)
-            base = settings.billing_transition_base_month_rub
+            cred = transition_credit_for_remaining_legacy_rub(
+                settings, remaining_days=d, base_month_rub=base_month
+            )
             fee = settings.billing_transition_fee_percent
             tip = f"""
             <div class="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm">
               <p><b>Остаток срока:</b> {_esc(d)}</p>
-              <p>База месяца: <b>{_esc(base)} ₽</b> · комиссия: <b>{_esc(fee)}%</b></p>
+              <p>База месяца: <b>{_esc(base_month)} ₽</b> · комиссия: <b>{_esc(fee)}%</b></p>
               <p class="text-lg font-semibold mt-2">Рекомендуемый кредит на баланс: <span class="text-primary">{_esc(cred)} ₽</span></p>
               <p class="text-xs opacity-70 mt-1">Только для ориентира, автоначисления нет.</p>
             </div>
@@ -8823,7 +8825,7 @@ def _admin_tariff_transition_card(settings: Settings, tdays: str) -> str:
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-calculator text-primary mr-2" aria-hidden="true"></i>Калькулятор перехода с legacy</h3>
-        <p class="text-sm opacity-80">Остаток старой подписки по сроку → сумма на баланс после вычета комиссии (переменные <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>, <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>).</p>
+        <p class="text-sm opacity-80">Остаток старой подписки по сроку → сумма на баланс после вычета комиссии. База месяца: минимальный активный тариф ~30 дней из БД; если нет — <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>. Комиссия: <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>.</p>
         <form method="get" class="flex flex-wrap items-end gap-2">
           <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Остаток срока</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="tdays" value="{_esc((tdays or '').strip())}" placeholder="30"/></label>
@@ -8979,6 +8981,7 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         "</div></div>"
     )
     async with await _session() as session:
+        dyn_base = await resolve_legacy_transition_base_month_rub(session, settings)
         plans = list(
             (await session.execute(select(Plan).order_by(Plan.sort_order.asc(), Plan.id.asc()))).scalars().all()
         )
@@ -8999,7 +9002,7 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
             f"<td class='whitespace-nowrap text-xs' title='устройства {dev}, ГБ {gb}'>{_esc(est['total_rub'])} ₽</td>"
             f"<td>{pl.sort_order}</td></tr>"
         )
-    trans = _admin_tariff_transition_card(settings, tdays)
+    trans = _admin_tariff_transition_card(settings, tdays, base_month=dyn_base)
     create_modal = _modal_shell(
         modal_id="tariff-create-modal",
         title="Новый тариф",

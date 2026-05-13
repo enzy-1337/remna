@@ -109,6 +109,27 @@ async def list_paid_plans(session: AsyncSession) -> list[Plan]:
     return list(r.scalars().all())
 
 
+async def default_one_month_tariff_price_rub(session: AsyncSession) -> Decimal | None:
+    """
+    Минимальная цена активного платного тарифа со сроком ~1 календарный месяц (28–35 дн.).
+    Для экрана продления и кредита legacy→hybrid вместо фиксированной базы только из .env.
+    """
+    plans = await list_paid_plans(session)
+    monthlies = [p for p in plans if 28 <= int(p.duration_days) <= 35]
+    if not monthlies:
+        return None
+    best = min(monthlies, key=lambda p: (p.price_rub, p.sort_order, p.id))
+    return best.price_rub
+
+
+async def resolve_legacy_transition_base_month_rub(session: AsyncSession, settings: Settings) -> Decimal:
+    """База ₽/мес для кредита legacy: тариф ~1 мес из БД или BILLING_TRANSITION_BASE_MONTH_RUB."""
+    d = await default_one_month_tariff_price_rub(session)
+    if d is not None:
+        return d
+    return settings.billing_transition_base_month_rub
+
+
 async def get_active_subscription_at(
     session: AsyncSession, user_id: int, at: datetime
 ) -> Subscription | None:
@@ -975,6 +996,8 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
     if not rows:
         return 0, 0, Decimal("0")
 
+    base_m = await resolve_legacy_transition_base_month_rub(session, settings)
+
     # Берём последнюю запись на пользователя.
     latest_by_user: dict[int, tuple[Subscription, User, Plan]] = {}
     for sub, user, plan in rows:
@@ -990,7 +1013,9 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
         duration_days = int(plan.duration_days or 0)
         if duration_days < 30:
             continue
-        credit = transition_credit_for_remaining_legacy_rub(settings, remaining_days=duration_days)
+        credit = transition_credit_for_remaining_legacy_rub(
+            settings, remaining_days=duration_days, base_month_rub=base_m
+        )
         if credit > 0:
             user.balance += credit
             total_credit += credit
@@ -1010,7 +1035,7 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
                         "plan_id": plan.id,
                         "plan_duration_days": duration_days,
                         "payg_subscription_days": int(settings.billing_payg_subscription_days),
-                        "base_month_rub": str(settings.billing_transition_base_month_rub),
+                        "base_month_rub": str(base_m),
                         "fee_percent": str(settings.billing_transition_fee_percent),
                     },
                 )

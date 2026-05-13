@@ -64,24 +64,20 @@ def _presets_keyboard() -> InlineKeyboardBuilder:
         InlineKeyboardButton(
             text="1×30 дн · 15 ГБ",
             callback_data=_scenario_cb(30, 30, 15, 0, 0),
-            style="primary",
         ),
         InlineKeyboardButton(
             text="2×30 · 15 ГБ",
             callback_data=_scenario_cb(30, 60, 15, 0, 0),
-            style="primary",
         ),
     )
     b.row(
         InlineKeyboardButton(
             text="1×7 дн · 5 ГБ",
             callback_data=_scenario_cb(7, 7, 5, 0, 0),
-            style="primary",
         ),
         InlineKeyboardButton(
             text="1×30 · 15 ГБ + опт.",
             callback_data=_scenario_cb(30, 30, 15, 0, 1),
-            style="primary",
         ),
     )
     b.row(
@@ -110,12 +106,11 @@ def _plans_keyboard(
             InlineKeyboardButton(
                 text=label,
                 callback_data=_compare_cb(p.id, period_days, device_days, gb, mob, opt),
-                style="primary",
             )
         )
     b.row(
         InlineKeyboardButton(
-            text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+            text="↩️ Другой сценарий", callback_data=_MENU
         )
     )
     b.row(
@@ -260,7 +255,7 @@ async def cb_calc_scenario_admin(
         nb = InlineKeyboardBuilder()
         nb.row(
             InlineKeyboardButton(
-                text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+                text="↩️ Другой сценарий", callback_data=_MENU
             )
         )
         nb.row(
@@ -350,7 +345,7 @@ async def cb_calc_compare_admin(
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="↩️ Другой сценарий", callback_data=_MENU, style="primary"
+            text="↩️ Другой сценарий", callback_data=_MENU
         )
     )
     b.row(
