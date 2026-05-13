@@ -126,11 +126,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-org>/<your-repo>/<bran
 - **`RESTART_POLICY=no`** — чтобы после reboot контейнеры **не стартовали сами**, пока их не поднимет `compose` через unit (или вручную). В `.env.example` это уже прописано с комментарием.
 - Внутри Docker для БД/Redis в контейнере используйте хост **`postgres`** / **`redis`**, а не `localhost` в `DATABASE_URL` / `REDIS_URL`, иначе миграции и сервисы не достучатся до БД по DNS.
 
-Универсальный сценарий подъёма: **`scripts/docker-stack-start.sh`** — выполняет `docker compose down --remove-orphans` (контейнеры и сеть проекта без `-v`), затем `postgres` + `redis` → **`migrate`** → остальные сервисы.
+Универсальный сценарий подъёма: **`scripts/docker-stack-start.sh`** — выполняет `docker compose down --remove-orphans` (контейнеры и сеть проекта без `-v`), затем `postgres` + `redis` → **`migrate`** → остальные сервисы (**включая `idbot`**).
+
+Одна команда-обёртка **`scripts/flux_init.sh`** (алиас на VPS: `flux_init`): без аргументов — то же, что `docker-stack-start.sh`; `--edit` — открыть в `$EDITOR` файлы загрузки (`docker-stack-start.sh`, `bot-entrypoint.sh`, `start.sh`, `.env.example`, `docker-compose.yml`).
 
 ```bash
-chmod +x scripts/docker-stack-start.sh
+chmod +x scripts/docker-stack-start.sh scripts/flux_init.sh
 ./scripts/docker-stack-start.sh
+# или:
+./scripts/flux_init.sh
 ```
 
 Его же вызывает пункт **11)** в `deploy/remna-manager.sh` при настройке systemd.
@@ -174,6 +178,7 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/remna-bot
 ExecStart=/opt/remna-bot/scripts/docker-stack-start.sh
+# (эквивалентно: /opt/remna-bot/scripts/flux_init.sh)
 ExecStop=-/usr/bin/docker compose down --remove-orphans
 RemainAfterExit=yes
 TimeoutStartSec=0
@@ -182,7 +187,7 @@ TimeoutStartSec=0
 WantedBy=multi-user.target
 EOF
 
-chmod +x /opt/remna-bot/scripts/docker-stack-start.sh
+chmod +x /opt/remna-bot/scripts/docker-stack-start.sh /opt/remna-bot/scripts/flux_init.sh
 ```
 
 Активируйте автозапуск:
@@ -214,7 +219,7 @@ docker compose logs postgres --tail=80
 Ожидаемое состояние:
 
 - `remna-bot.service` — `active (exited)` (это нормально для `Type=oneshot` + `RemainAfterExit=yes`);
-- `postgres`, `redis`, `bot`, `tickets-bot`, `downloader-bot` — `Up`;
+- `postgres`, `redis`, `bot`, `api`, `tickets-bot`, `downloader-bot`, `idbot` — `Up`;
 - в логах нет `network ... not found`.
 
 #### 4) Регламент после обновлений Docker/Compose
