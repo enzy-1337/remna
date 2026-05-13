@@ -21,6 +21,7 @@ from shared.integrations.rw_traffic import extract_connected_devices_from_rw_use
 from shared.md2 import bold, code, esc, join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
 from shared.services.subscription_service import (
+    MIN_DEVICES,
     get_active_subscription,
     remove_hwid_device_from_panel,
     unlink_hwid_device_keep_slots,
@@ -144,7 +145,7 @@ async def _render_devices(
         "",
         slots_line,
         "",
-        plain("Нажмите устройство, чтобы посмотреть детали и ") + bold("отвязать") + plain("."),
+        plain("Нажмите устройство, чтобы посмотреть детали: ") + bold("отвязать") + plain(" только с панели или ") + bold("удалить слот") + plain(" с подписки (если доступно)."),
     )
     return lines, _devices_kb(
         devices,
@@ -260,6 +261,13 @@ async def cb_dev_rw_pick(
         await cq.answer("Устройство не найдено", show_alert=True)
         return
 
+    sub = await get_active_subscription(session, db_user.id)
+    if not sub:
+        await cq.answer("Нет активной подписки.", show_alert=True)
+        return
+
+    can_remove_paid_slot = int(sub.devices_count) > MIN_DEVICES
+
     d = devices[idx]
     hwid = str(d.get("hwid") or "")
     plat = esc(str(d.get("platform") or "—"))
@@ -284,13 +292,97 @@ async def cb_dev_rw_pick(
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
-            text="📤 Только панель", callback_data=f"dev:unlk:{idx}:{ctx}", style="danger"
-        ),
-        InlineKeyboardButton(
-            text="📤 Панель − слот", callback_data=f"dev:unls:{idx}:{ctx}", style="danger"
+            text="Отвязать устройство",
+            callback_data=f"dev:unlk:{idx}:{ctx}",
+            style="danger",
         ),
     )
+    if can_remove_paid_slot:
+        b.row(
+            InlineKeyboardButton(
+                text="Удалить слот",
+                callback_data=f"dev:unlsask:{idx}:{ctx}",
+                style="danger",
+            ),
+        )
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_list_callback(ctx), style="danger"))
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=settings,
+    )
+
+
+@router.callback_query(F.data.startswith("dev:unlsask:"))
+async def cb_dev_rw_unlink_slot_confirm(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    parts = cq.data.split(":")
+    try:
+        idx = int(parts[2])
+        ctx = parts[3] if len(parts) > 3 else CTX_MAIN
+    except (IndexError, ValueError):
+        await cq.answer("Ошибка", show_alert=True)
+        return
+
+    settings = get_settings()
+    sub = await get_active_subscription(session, db_user.id)
+    if not sub or int(sub.devices_count) <= MIN_DEVICES:
+        await cq.answer(
+            "Удалить слот нельзя: в подписке минимум два устройства.",
+            show_alert=True,
+        )
+        return
+
+    _uinf, devices, err = await _fetch_panel_hwid_context(db_user, settings)
+    if err or not devices or idx < 0 or idx >= len(devices):
+        await cq.answer("Список устройств недоступен", show_alert=True)
+        return
+
+    d = devices[idx]
+    hwid = str(d.get("hwid") or "")
+    plat = esc(str(d.get("platform") or "—"))
+    osv = esc(str(d.get("osVersion") or "—"))
+    model = esc(str(d.get("deviceModel") or "—"))
+    agent = esc(str(d.get("userAgent") or "—"))
+    created = esc(format_rw_device_datetime_local(str(d.get("createdAt") or "")))
+    updated = esc(format_rw_device_datetime_local(str(d.get("updatedAt") or "")))
+    next_slots = int(sub.devices_count) - 1
+
+    cap = join_lines(
+        "🖥 " + bold("Удаление слота"),
+        "",
+        plain("HWID: ") + code(hwid),
+        plain("Платформа: ") + plat,
+        plain("Версия ОС: ") + osv,
+        plain("Модель: ") + model,
+        plain("Агент: ") + agent,
+        plain("Подключен в первые: ") + created,
+        plain("Обновлён: ") + updated,
+        "",
+        bold("Удалить слот с подписки?"),
+        "",
+        plain("Слот будет полностью снят с подписки. Деньги за него не возвращаются."),
+        "",
+        plain("После удаления слотов в подписке останется: ") + bold(str(next_slots)) + plain("."),
+    )
+
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(
+            text="✅ Да, удалить слот",
+            callback_data=f"dev:unls:{idx}:{ctx}",
+            style="danger",
+        ),
+    )
+    b.row(InlineKeyboardButton(text="↩️ Отмена", callback_data=f"dev:rw:{idx}:{ctx}", style="danger"))
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
@@ -372,6 +464,13 @@ async def cb_dev_rw_unlink_and_slot(
         ctx = parts[3] if len(parts) > 3 else CTX_MAIN
     except (IndexError, ValueError):
         await cq.answer("Ошибка", show_alert=True)
+        return
+    sub = await get_active_subscription(session, db_user.id)
+    if not sub or int(sub.devices_count) <= MIN_DEVICES:
+        await cq.answer(
+            "Удалить слот нельзя: в подписке минимум два устройства.",
+            show_alert=True,
+        )
         return
     await _cb_dev_rw_unlink_impl(
         cq, session, db_user, ctx=ctx, idx=idx, is_bot_admin=is_bot_admin, decrease_slot=True

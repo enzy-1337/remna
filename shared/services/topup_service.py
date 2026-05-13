@@ -279,7 +279,9 @@ async def apply_balance_credit_followups(
 
     welcome_gb = int(settings.billing_first_topup_welcome_gb)
     if (
-        first_balance_event
+        settings.billing_v2_enabled
+        and user.billing_mode == "hybrid"
+        and first_balance_event
         and not had_active_sub_before_payg
         and settings.billing_first_topup_welcome_enabled
         and welcome_gb > 0

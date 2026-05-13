@@ -93,12 +93,14 @@ from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_
 from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
+    MIN_DEVICES,
     admin_convert_monthly_subscriptions_to_payg_balance,
     admin_disable_subscription_record,
     admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
     get_base_subscription_plan,
+    monthly_extra_devices_rub_preview,
     remove_hwid_device_from_panel,
     remove_device_slot,
     set_subscription_auto_renew,
@@ -1052,12 +1054,12 @@ def _layout(
           <input type="hidden" name="hwid" id="remna-hwid-field" value="" />
           <input type="hidden" name="mode" id="remna-hwid-mode" value="keep_slots" />
           <div>
-            <button type="submit" class="btn btn-outline btn-primary w-full" data-remna-hwid-mode="keep_slots">Только с панели</button>
-            <p class="text-xs opacity-60 mt-1">Снимет HWID с Remnawave; оплаченные слоты не меняются.</p>
+            <button type="submit" class="btn btn-outline btn-primary w-full" data-remna-hwid-mode="keep_slots">Отвязать устройство</button>
+            <p class="text-xs opacity-60 mt-1">Снимет HWID с Remnawave; оплаченные слоты в подписке не меняются.</p>
           </div>
-          <div>
-            <button type="submit" class="btn btn-error w-full" data-remna-hwid-mode="decrease_slot">Отвязать и убрать слот</button>
-            <p class="text-xs opacity-60 mt-1">Минус один оплаченный слот и обновление лимита в панели.</p>
+          <div id="remna-hwid-decrease-wrap" class="hidden">
+            <button type="submit" class="btn btn-error w-full" data-remna-hwid-mode="decrease_slot">Удалить слот</button>
+            <p class="text-xs opacity-60 mt-1">Слот полностью снимается с подписки; деньги не возвращаются. Недоступно, если в подписке уже минимум два слота.</p>
           </div>
         </form>
       </div>
@@ -1215,6 +1217,8 @@ def _layout(
     function remnaCloseHwid(){
       var o=document.getElementById('remna-hwid-overlay');
       if(o){o.classList.add('hidden');o.classList.remove('flex');}
+      var dec=document.getElementById('remna-hwid-decrease-wrap');
+      if(dec)dec.classList.add('hidden');
     }
     function remnaCloseSlot(){
       var o=document.getElementById('remna-slot-overlay');
@@ -1378,6 +1382,11 @@ def _layout(
         if(hf)hf.value=hwid;
         var hd=document.getElementById('remna-hwid-desc');
         if(hd)hd.textContent=title;
+        var dec=document.getElementById('remna-hwid-decrease-wrap');
+        if(dec){
+          if((openH.getAttribute('data-slot-removable')||'')==='1')dec.classList.remove('hidden');
+          else dec.classList.add('hidden');
+        }
         var ov=document.getElementById('remna-hwid-overlay');
         if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
       }
@@ -1468,7 +1477,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'К сроку подписки добавлены дни.',device_slots_ok:'Лимит устройств (слоты) обновлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -1993,6 +2002,24 @@ def _fmt_expires(expires_at: datetime | None) -> str:
     return expires_at.strftime("%d.%m.%Y")
 
 
+def _promo_expires_date_input_value(expires_at: datetime | None) -> str:
+    """Значение для <input type=\"date\"> (YYYY-MM-DD, UTC-календарный день)."""
+    if expires_at is None:
+        return ""
+    exp = expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=UTC)
+    return exp.astimezone(UTC).date().isoformat()
+
+
+def _promo_expires_from_form(expires_unlimited: str, expires_at_date: str) -> datetime | None:
+    """Срок промокода: чекбокс «без срока» или дата из календаря; пустая дата без чекбокса = без срока."""
+    ul = (expires_unlimited or "").strip().lower()
+    if ul in ("1", "on", "true", "yes"):
+        return None
+    return _parse_date_any((expires_at_date or "").strip())
+
+
 def _admin_allowed_by_tg(tg_id: int) -> bool:
     return tg_id in get_settings().admin_telegram_ids
 
@@ -2034,6 +2061,16 @@ def _subscription_list_badge(now: datetime, subs: list[Subscription]) -> tuple[s
     if (latest.status or "").lower() == "cancelled":
         return "Отменена", "badge-warning"
     return "Неактивна", "badge-ghost"
+
+
+def _active_subscription_devices_slots(now: datetime, subs: list[Subscription]) -> int | None:
+    """Число слотов устройств (devices_count) у неистёкшей active/trial подписки — как логика бейджа в списке."""
+    if not subs:
+        return None
+    for s in subs:
+        if s.status in ("active", "trial") and s.expires_at > now:
+            return int(s.devices_count)
+    return None
 
 
 def _avatar_with_fallback(user: User, *, px: int, ring_tw: str, ring_offset: str = "ring-offset-2") -> str:
@@ -5252,6 +5289,7 @@ async def admin_users(
     gh: str = "",
     usage: str = "",
     sort: str = "",
+    dev_slots: str = "",
 ) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -5264,8 +5302,9 @@ async def admin_users(
     gh_f = (gh or "").strip().lower()
     usage_f = (usage or "").strip().lower()
     sort_f = (sort or "").strip().lower()
+    dev_slots_f = (dev_slots or "").strip()
     page = max(1, page)
-    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f)
+    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f, dev_slots_f)
     now_m = time.monotonic()
     cached_users = _USERS_HTML_CACHE.get(cache_key)
     if cached_users is not None and now_m - cached_users[0] < _USERS_HTML_TTL_SEC:
@@ -5367,6 +5406,22 @@ async def admin_users(
             ).subquery()
             query = query.where(User.id.in_(select(heavy_sq.c.uid)))
             count_query = count_query.where(User.id.in_(select(heavy_sq.c.uid)))
+        if dev_slots_f:
+            try:
+                dev_n = int(dev_slots_f)
+            except ValueError:
+                dev_n = -1
+            if 1 <= dev_n <= 64:
+                dev_slots_match = exists().where(
+                    and_(
+                        Subscription.user_id == User.id,
+                        Subscription.status.in_(("active", "trial")),
+                        Subscription.expires_at > now_for_filter,
+                        Subscription.devices_count == dev_n,
+                    )
+                )
+                query = query.where(dev_slots_match)
+                count_query = count_query.where(dev_slots_match)
         if sort_f == "bal_desc":
             query = query.order_by(desc(User.balance), desc(User.id))
         elif sort_f == "bal_asc":
@@ -5407,12 +5462,15 @@ async def admin_users(
             risk_badge = "<span class='badge badge-error badge-xs'>1ч</span>"
         elif u.risk_notified_24h_at is not None:
             risk_badge = "<span class='badge badge-warning badge-xs'>24ч</span>"
+        dev_slot = _active_subscription_devices_slots(now_utc, subs_by_user.get(u.id, []))
+        dev_cell = str(dev_slot) if dev_slot is not None else "—"
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td>"
+            f"<td class='text-center font-mono text-sm'>{_esc(dev_cell)}</td>"
             f"<td>{risk_badge}</td></tr>"
         )
     pager = _pagination_bar(
@@ -5428,6 +5486,7 @@ async def admin_users(
             "gh": gh_f,
             "usage": usage_f,
             "sort": sort_f,
+            "dev_slots": dev_slots_f,
         },
     )
     sub_opts = (
@@ -5513,6 +5572,13 @@ async def admin_users(
         + (" selected" if sort_f == "bal_asc" else "")
         + '>Баланс ↑</option>'
     )
+    dev_opts_parts: list[str] = [
+        '<option value=""' + (" selected" if not dev_slots_f else "") + ">Все</option>"
+    ]
+    for dv in range(1, 33):
+        sel = " selected" if dev_slots_f == str(dv) else ""
+        dev_opts_parts.append(f"<option value='{dv}'{sel}>{dv} слот.</option>")
+    dev_opts = "".join(dev_opts_parts)
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
         "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
@@ -5530,18 +5596,20 @@ async def admin_users(
         f"<select id='us-gh' name='gh' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{gh_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Потребление</span>"
         f"<select id='us-usage' name='usage' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{usage_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Слоты (active/trial)</span>"
+        f"<select id='us-dev' name='dev_slots' class='select select-bordered select-sm h-9 min-h-9 text-sm' title='По числу devices_count у неистёкшей подписки'>{dev_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Сортировка</span>"
         f"<select id='us-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
         "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/users' title='Сбросить все фильтры'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>Сбросить</a>"
         "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th>Риск</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
         "<script>(function(){"
         "var form=document.getElementById('us-form'); if(!form)return;"
         "var q=document.getElementById('us-q'); var sub=document.getElementById('us-sub'); var blk=document.getElementById('us-blocked'); var risk=document.getElementById('us-risk');"
-        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var usage=document.getElementById('us-usage'); var sort=document.getElementById('us-sort');"
+        "var bill=document.getElementById('us-bill'); var gh=document.getElementById('us-gh'); var usage=document.getElementById('us-usage'); var sort=document.getElementById('us-sort'); var dev=document.getElementById('us-dev');"
         "var timer=null;"
         "function submitLater(ms){ if(timer)clearTimeout(timer); timer=setTimeout(function(){ form.submit(); }, ms); }"
         "if(q){ q.addEventListener('input', function(){ submitLater(320); }); q.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); form.submit(); } }); }"
@@ -5551,6 +5619,7 @@ async def admin_users(
         "if(bill)bill.addEventListener('change', function(){ form.submit(); });"
         "if(gh)gh.addEventListener('change', function(){ form.submit(); });"
         "if(usage)usage.addEventListener('change', function(){ form.submit(); });"
+        "if(dev)dev.addEventListener('change', function(){ form.submit(); });"
         "if(sort)sort.addEventListener('change', function(){ form.submit(); });"
         "})();</script>"
     )
@@ -5853,6 +5922,12 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             }
         last_cancelled_id = last_cancelled_sub.id if last_cancelled_sub else None
 
+    dev_bill_preview_rub = ""
+    if active_snap:
+        dev_bill_preview_rub = str(
+            monthly_extra_devices_rub_preview(settings, int(active_snap["devices_count"]))
+        )
+
     uinf: dict | None = None
     hwid_list_ok = False
     if ud.remnawave_uuid:
@@ -6089,6 +6164,46 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <span class="text-xs opacity-60 max-w-xs">{_esc(tip)}</span>
         </form>
         <div class="divider my-0"></div>
+        <p class="text-sm font-medium">Добавить дни к сроку</p>
+        <p class="text-xs opacity-70 mb-2">Сдвигает дату окончания на указанное число календарных дней (если подписка уже истекла — отсчёт от сегодня).</p>
+        <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+          <label class="form-control w-28">
+            <span class="label-text text-xs">Дней</span>
+            <input type="number" name="days" min="1" max="3650" value="30" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Добавить</button>
+        </form>
+        <div class="flex flex-wrap gap-2 mt-2">
+          <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+            <input type="hidden" name="days" value="7"/>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">+7</button>
+          </form>
+          <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+            <input type="hidden" name="days" value="30"/>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">+30</button>
+          </form>
+          <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+            <input type="hidden" name="days" value="90"/>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">+90</button>
+          </form>
+        </div>
+        <div class="divider my-0"></div>
+        <p class="text-sm font-medium">Лимит устройств (слоты)</p>
+        <p class="text-xs opacity-70 mb-2">Меняет <code class="text-xs bg-base-300 px-1 rounded">devices_count</code> в записи подписки и лимит HWID в Remnawave (если в панели не отключён лимит).</p>
+        <p class="text-xs opacity-60 mb-2">Плановый биллинг (не в боте): до {_esc(str(settings.subscription_included_device_slots))} устр. без отдельной доплаты; сверх — {_esc(str(settings.extra_device_monthly_rub))} ₽/мес за слот. При текущем лимите предпросмотр: <b>{_esc(dev_bill_preview_rub)}</b> ₽/мес.</p>
+        <form method="post" action="/admin/users/{user_id}/subscription/set-device-slots" class="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+          <label class="form-control w-32">
+            <span class="label-text text-xs">Слотов</span>
+            <input type="number" name="devices_count" min="2" max="64" value="{int(active_snap['devices_count'])}" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
+        </form>
+        <div class="divider my-0"></div>
         <p class="text-sm opacity-80">Полное отключение (как в Telegram-админке): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> в БД и <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> в панели.</p>
         <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_snap['id']}">Отключить подписку</button>
       </div>
@@ -6130,6 +6245,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     """
 
     hwid_rows = []
+    slot_rm_attr = (
+        "1"
+        if (active_snap is not None and int(active_snap.get("devices_count") or 0) > MIN_DEVICES)
+        else "0"
+    )
     for i, d in enumerate(hwid_devices):
         hwid = str(d.get("hwid") or "")
         title = hwid_device_title(d, i + 1)
@@ -6142,7 +6262,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             f"<td class='align-top'>{detail}</td>"
             "<td class='text-right align-top'>"
             f"<button type='button' class='btn btn-error btn-outline btn-sm h-9 min-h-9' data-remna-open-hwid data-no-row-nav "
-            f'data-user-id="{user_id}" data-hwid="{_esc_attr(hwid)}" data-title="{_esc_attr(title)}">Отвязать</button></td></tr>'
+            f'data-user-id="{user_id}" data-hwid="{_esc_attr(hwid)}" data-title="{_esc_attr(title)}" data-slot-removable="{slot_rm_attr}">Отвязать</button></td></tr>'
         )
     hwid_alert = ""
     if hwid_err:
@@ -6157,7 +6277,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         {hwid_alert}
         <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th>Данные</th><th></th></tr></thead>
         <tbody>{''.join(hwid_rows) or '<tr><td colspan="5" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
-        <p class="text-xs opacity-60">«Отвязать»: в модальном окне — только снять HWID с панели или также уменьшить оплаченный слот.</p>
+        <p class="text-xs opacity-60">«Отвязать»: в модальном окне — «Отвязать устройство» (только панель) или «Удалить слот» с подписки (если слотов больше двух).</p>
       </div>
     </div>
     """
@@ -6750,6 +6870,121 @@ async def admin_user_subscription_enable(
         await session.rollback()
     err = str(msg).replace("\n", " ")[:400]
     return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/add-days")
+async def admin_user_subscription_add_days(
+    request: Request,
+    user_id: int,
+    subscription_id: int = Form(...),
+    days: int = Form(...),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    if days < 1 or days > 3650:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Дней: от 1 до 3650')}",
+            status_code=303,
+        )
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        sub = (
+            await session.execute(
+                select(Subscription)
+                .options(selectinload(Subscription.plan))
+                .where(Subscription.id == subscription_id, Subscription.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if sub is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
+                status_code=303,
+            )
+        exp = sub.expires_at
+        if exp is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Нет даты окончания подписки')}",
+                status_code=303,
+            )
+        now = datetime.now(UTC)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        base = max(now, exp) if exp < now else exp
+        sub.expires_at = base + timedelta(days=int(days))
+        pl = sub.plan
+        if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+            bp = await get_base_subscription_plan(session)
+            if bp is not None:
+                sub.plan_id = bp.id
+        if user.remnawave_uuid is not None and not settings.remnawave_stub:
+            rw = RemnaWaveClient(settings)
+            try:
+                await update_rw_user_respecting_hwid_limit(
+                    rw,
+                    str(user.remnawave_uuid),
+                    devices_limit_for_panel=sub.devices_count,
+                    expire_at=sub.expires_at,
+                    status="ACTIVE",
+                )
+            except RemnaWaveError:
+                pass
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=days_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/set-device-slots")
+async def admin_user_subscription_set_device_slots(
+    request: Request,
+    user_id: int,
+    subscription_id: int = Form(...),
+    devices_count: int = Form(...),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    dc = int(devices_count)
+    if dc < 2 or dc > 64:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Слотов: целое число от 2 до 64')}",
+            status_code=303,
+        )
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        sub = (
+            await session.execute(
+                select(Subscription).where(
+                    Subscription.id == subscription_id,
+                    Subscription.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if sub is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
+                status_code=303,
+            )
+        sub.devices_count = dc
+        if user.remnawave_uuid is not None and not settings.remnawave_stub:
+            rw = RemnaWaveClient(settings)
+            try:
+                await update_rw_user_respecting_hwid_limit(
+                    rw,
+                    str(user.remnawave_uuid),
+                    devices_limit_for_panel=sub.devices_count,
+                )
+            except RemnaWaveError:
+                pass
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=device_slots_ok", status_code=303)
 
 
 @router.post("/users/{user_id}/unlink-hwid")
@@ -7946,8 +8181,17 @@ def _promo_form(
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" />
             <span class="label-text-alt text-xs opacity-70 mt-1">Если ниже выбраны пользователи — лимит игнорируется, каждый из списка может активировать 1 раз.</span>
           </label>
-          <label class="form-control w-full"><span class="label-text font-medium">Срок до (YYYY-MM-DD или DD.MM.YYYY или '-')</span>
-            <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="expires_at" value="{_esc(_fmt_expires(p.expires_at) if p else '-')}" /></label>
+          <div class="form-control w-full">
+            <span class="label-text font-medium">Срок действия</span>
+            <span class="label-text-alt text-xs opacity-70 mb-1">Выберите дату в календаре или отметьте «без срока». Пустая дата без галочки тоже означает без ограничения по времени.</span>
+            <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+              <input type="date" id="promo-expires-date" name="expires_at_date" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full max-w-[12rem]" value="{_esc(_promo_expires_date_input_value(p) if p else '')}" {'disabled' if (p is not None and p.expires_at is None) else ''} />
+              <label class="label cursor-pointer justify-start gap-2 py-0 w-fit">
+                <input type="checkbox" name="expires_unlimited" value="1" class="checkbox checkbox-sm" {'checked' if (p is not None and p.expires_at is None) else ''} onchange="document.getElementById('promo-expires-date').disabled=this.checked;if(this.checked)document.getElementById('promo-expires-date').value=''" />
+                <span class="label-text text-sm">Без срока</span>
+              </label>
+            </div>
+          </div>
           <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_active">
             <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
@@ -8225,7 +8469,8 @@ async def admin_promos_new_post(
     value: str = Form(""),
     fallback_value_rub: str = Form(""),
     max_uses: str = Form("-"),
-    expires_at: str = Form("-"),
+    expires_at_date: str = Form(""),
+    expires_unlimited: str = Form(""),
     is_active: str = Form("true"),
     allowed_user_ids: str = Form(""),
 ):
@@ -8250,7 +8495,7 @@ async def admin_promos_new_post(
             mu = int(max_uses.strip())
             if mu <= 0:
                 raise ValueError("Лимит должен быть > 0")
-        exp = _parse_date_any(expires_at)
+        exp = _promo_expires_from_form(expires_unlimited, expires_at_date)
         active = is_active == "true"
         allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
     except (ValueError, InvalidOperation) as e:
@@ -8301,9 +8546,9 @@ async def admin_promos_new_post(
                 f"Тип: {md_esc(_promo_type_ru(promo.type))}",
                 f"Награда: {md_esc(_promo_reward_caption(promo))}",
                 f"Срок (до): {md_esc(_fmt_expires(promo.expires_at))}",
-                f"Лимит: {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
+                f"Лимит: {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
-                f"Привязан к: {md_esc(len(added) if added else 'все пользователи')}",
+                f"Привязан к: {md_esc(str(len(added)) if added else 'все пользователи')}",
                 f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_create_web",
@@ -8425,7 +8670,8 @@ async def admin_promos_edit_post(
     value: str = Form(""),
     fallback_value_rub: str = Form(""),
     max_uses: str = Form("-"),
-    expires_at: str = Form("-"),
+    expires_at_date: str = Form(""),
+    expires_unlimited: str = Form(""),
     is_active: str = Form("true"),
     allowed_user_ids: str = Form(""),
 ):
@@ -8456,7 +8702,7 @@ async def admin_promos_edit_post(
                 mu = int(max_uses.strip())
                 if mu <= 0:
                     raise ValueError("Лимит должен быть > 0")
-            exp = _parse_date_any(expires_at)
+            exp = _promo_expires_from_form(expires_unlimited, expires_at_date)
             active = is_active == "true"
             allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
         except (ValueError, InvalidOperation) as e:
@@ -8505,11 +8751,11 @@ async def admin_promos_edit_post(
             lines=[
                 f"Код: {md_esc(promo.code)}",
                 f"Тип: {md_esc(_promo_type_ru(before_type))} → {md_esc(_promo_type_ru(promo.type))}",
-                f"Награда: {md_esc(before_value)} → {md_esc(promo.value)}",
+                f"Награда: {md_esc(str(before_value))} → {md_esc(str(promo.value))}",
                 f"Срок: {md_esc(_fmt_expires(before_expires_at))} → {md_esc(_fmt_expires(promo.expires_at))}",
-                f"Лимит: {md_esc('∞' if before_max_uses is None else before_max_uses)} → {md_esc('∞' if promo.max_uses is None else promo.max_uses)}",
+                f"Лимит: {md_esc('∞' if before_max_uses is None else str(before_max_uses))} → {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
-                f"Привязан к: {md_esc(len(before_allowed) if before_allowed else 'все')} → {md_esc(len(after_allowed) if after_allowed else 'все')}",
+                f"Привязан к: {md_esc(str(len(before_allowed)) if before_allowed else 'все')} → {md_esc(str(len(after_allowed)) if after_allowed else 'все')}",
                 f"Кто: {md_esc(actor_label)}",
             ],
             event_type="promo_edit_web",

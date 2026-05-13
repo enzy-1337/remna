@@ -29,6 +29,7 @@ from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
+from bot.telegram_profile_texts import BOT_PROFILE_LONG_DEFAULT, BOT_PROFILE_SHORT_DEFAULT
 from shared.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,13 @@ async def create_bot_and_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher
         scope=BotCommandScopeAllPrivateChats(),
     )
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    short = ((settings.bot_profile_short_description or "").strip() or BOT_PROFILE_SHORT_DEFAULT)[:120]
+    long_desc = ((settings.bot_profile_description or "").strip() or BOT_PROFILE_LONG_DEFAULT)[:512]
+    try:
+        await bot.set_my_short_description(short_description=short)
+        await bot.set_my_description(description=long_desc)
+    except Exception:
+        logger.warning("set_my_description / set_my_short_description: не удалось применить", exc_info=True)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     _mount_dispatcher(dp, settings)

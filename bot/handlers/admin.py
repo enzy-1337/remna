@@ -924,6 +924,12 @@ async def _build_user_card(
                 callback_data=f"admin:ad:{u.id}:{sub.id}",
             )
         )
+        b.row(
+            InlineKeyboardButton(
+                text="📆 Добавить дни",
+                callback_data=f"admin:days:{u.id}:{sub.id}",
+            )
+        )
 
     b.row(
         InlineKeyboardButton(
@@ -1598,6 +1604,70 @@ def _admin_months_quick_markup(user_id: int, sub_id: int) -> InlineKeyboardMarku
     return kb.as_markup()
 
 
+def _admin_days_quick_markup(user_id: int, sub_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for chunk in ((7, 14), (30, 90), (180, 365)):
+        kb.row(
+            *[
+                InlineKeyboardButton(
+                    text=f"+{d} дн.",
+                    callback_data=f"admin:dayq:{user_id}:{sub_id}:{d}",
+                )
+                for d in chunk
+            ]
+        )
+    kb.row(InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data="admin:noop"))
+    return kb.as_markup()
+
+
+async def _apply_subscription_add_days(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    sub_id: int,
+    days: int,
+    settings,
+) -> tuple[bool, str]:
+    if days < 1 or days > 3650:
+        return False, "Допустимо от 1 до 3650 дней."
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == sub_id, Subscription.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None:
+        return False, "Подписка не найдена."
+    exp = sub.expires_at
+    if exp is None:
+        return False, "Нет даты окончания подписки."
+    now = datetime.now(timezone.utc)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    base = max(now, exp) if exp < now else exp
+    sub.expires_at = base + timedelta(days=days)
+    pl = sub.plan
+    if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
+    u = await session.get(User, user_id)
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status="ACTIVE",
+            )
+        except RemnaWaveError as e:
+            logger.warning("admin add days RW failed: %s", e)
+    return True, ""
+
+
 @router.callback_query(F.data.startswith("admin:sd:"))
 async def cb_admin_sub_disable(
     cq: CallbackQuery,
@@ -1882,6 +1952,156 @@ async def msg_admin_add_months(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines(plain(f"✅ Подписка продлена на {months} мес."), "", cap),
+        reply_markup=kb,
+        settings=settings,
+        delete_message=None,
+        photo_key="admin:users:card",
+    )
+
+
+@router.callback_query(F.data.startswith("admin:days:"))
+async def cb_admin_add_days_start(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) != 4:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[2])
+        sub_id = int(parts[3])
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    sub = await session.get(Subscription, sub_id)
+    if sub is None or sub.user_id != user_id:
+        await cq.answer("Подписка не найдена", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_add_days)
+    await cq.answer()
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc("Введите целое число дней для добавления к сроку подписки (1–3650)."),
+            reply_markup=_admin_days_quick_markup(user_id, sub_id),
+        )
+        await state.update_data(
+            admin_add_days_sub_id=sub_id,
+            admin_add_days_user_id=user_id,
+            admin_add_days_prompt_mid=sent.message_id,
+        )
+    else:
+        await state.update_data(admin_add_days_sub_id=sub_id, admin_add_days_user_id=user_id)
+
+
+@router.callback_query(F.data.startswith("admin:dayq:"))
+async def cb_admin_add_days_quick(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) != 5:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[2])
+        sub_id = int(parts[3])
+        days = int(parts[4])
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    settings = get_settings()
+    ok, err = await _apply_subscription_add_days(
+        session, user_id=user_id, sub_id=sub_id, days=days, settings=settings
+    )
+    if not ok:
+        await cq.answer(err[:200], show_alert=True)
+        return
+    await session.commit()
+    await cq.answer(f"+{days} дн.")
+    await _render_user_card(cq, session, user_id=user_id)
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_add_days), F.text)
+async def msg_admin_add_days(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+    data = await state.get_data()
+    sub_id = data.get("admin_add_days_sub_id")
+    user_id = data.get("admin_add_days_user_id")
+    prompt_mid = data.get("admin_add_days_prompt_mid")
+
+    async def _del_admin_input() -> None:
+        if message.bot:
+            await _try_delete_message(message.bot, message.chat.id, message.message_id)
+
+    if not isinstance(sub_id, int) or not isinstance(user_id, int):
+        await _del_admin_input()
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await _del_admin_input()
+        await message.answer("Нужно целое число.")
+        return
+    days = int(raw)
+    if days < 1 or days > 3650:
+        await _del_admin_input()
+        await message.answer("Допустимо от 1 до 3650 дней.")
+        return
+
+    settings = get_settings()
+    ok, err = await _apply_subscription_add_days(
+        session, user_id=user_id, sub_id=sub_id, days=days, settings=settings
+    )
+    if not ok:
+        await _del_admin_input()
+        await message.answer(err)
+        return
+
+    await _del_admin_input()
+    if message.bot and prompt_mid is not None:
+        await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
+    await session.commit()
+
+    viewer = message.from_user.id if message.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
+    if built is None or message.bot is None:
+        await message.answer(f"Добавлено дней: {days}")
+        return
+    cap, kb = built
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(plain(f"✅ К сроку подписки добавлено {days} дн."), "", cap),
         reply_markup=kb,
         settings=settings,
         delete_message=None,

@@ -635,6 +635,12 @@ async def remove_hwid_device_from_panel(
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Нет активной подписки.")
+    if sub.devices_count <= MIN_DEVICES:
+        return False, join_lines(
+            plain("Нельзя удалить слот: в подписке минимум "),
+            bold(str(MIN_DEVICES)),
+            plain(" устройств."),
+        )
     if sub.devices_count < 1:
         return False, plain("Нет оплаченных слотов для уменьшения лимита.")
 
@@ -656,7 +662,7 @@ async def remove_hwid_device_from_panel(
     except RemnaWaveError as e:
         return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
-    new_limit = max(0, sub.devices_count - 1)
+    new_limit = max(MIN_DEVICES, sub.devices_count - 1)
     if should_apply_hwid_device_limit_to_panel(uinf_pol):
         try:
             await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
@@ -685,7 +691,7 @@ async def remove_hwid_device_from_panel(
     )
     await session.flush()
     return True, join_lines(
-        plain("Устройство отвязано."),
+        plain("Слот снят с подписки, устройство отвязано."),
         plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),
     )
 
@@ -700,6 +706,12 @@ async def remove_device_slot(
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Нет активной подписки.")
+    if sub.devices_count <= MIN_DEVICES:
+        return False, join_lines(
+            plain("Нельзя удалить слот: в подписке минимум "),
+            bold(str(MIN_DEVICES)),
+            plain(" устройств."),
+        )
     if sub.devices_count < 1:
         return False, plain("Нет слотов для уменьшения лимита.")
 
@@ -716,7 +728,7 @@ async def remove_device_slot(
         uinf_pol = await rw.get_user(str(user.remnawave_uuid))
     except RemnaWaveError:
         pass
-    new_limit = max(0, sub.devices_count - 1)
+    new_limit = max(MIN_DEVICES, sub.devices_count - 1)
     if should_apply_hwid_device_limit_to_panel(uinf_pol):
         try:
             await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=new_limit)
@@ -1037,3 +1049,20 @@ async def admin_convert_monthly_subscriptions_to_payg_balance(
 
     await session.flush()
     return changed, rw_changed, total_credit
+
+
+def subscription_included_device_slots(settings: Settings) -> int:
+    """Слотов в подписке без отдельной доплаты (для будущего месячного биллинга устройств)."""
+    return int(settings.subscription_included_device_slots)
+
+
+def billable_device_slots_over_included(settings: Settings, subscription_devices_count: int) -> int:
+    """Сколько слотов считаются «сверх включённых» (≥ 0)."""
+    inc = subscription_included_device_slots(settings)
+    return max(0, int(subscription_devices_count) - inc)
+
+
+def monthly_extra_devices_rub_preview(settings: Settings, subscription_devices_count: int) -> Decimal:
+    """Предпросмотр ₽/мес за платные слоты сверх включённых (бот пока не списывает)."""
+    n = billable_device_slots_over_included(settings, subscription_devices_count)
+    return (settings.extra_device_monthly_rub * Decimal(n)).quantize(Decimal("0.01"))

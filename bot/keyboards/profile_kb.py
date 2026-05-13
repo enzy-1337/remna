@@ -17,8 +17,8 @@ def profile_main_keyboard(
     if show_welcome_topup:
         b.row(
             InlineKeyboardButton(
-                text="💳 Оплатить 10 ₽",
-                callback_data="topup:amt:10",
+                text="💳 Пополнить баланс",
+                callback_data="menu:balance",
             )
         )
     if show_trial:

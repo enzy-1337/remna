@@ -163,6 +163,18 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Стоимость одного дополнительного слота устройства.",
             ),
             (
+                "SUBSCRIPTION_INCLUDED_DEVICE_SLOTS",
+                "Устройств в подписке без доплаты",
+                lambda s: str(s.subscription_included_device_slots),
+                "Сколько слотов входит в базовую подписку (закладка под месячный биллинг; бот пока не списывает).",
+            ),
+            (
+                "EXTRA_DEVICE_MONTHLY_RUB",
+                "Доп. устройство ₽/мес (план)",
+                lambda s: str(s.extra_device_monthly_rub),
+                "Планируемая цена за слот сверх включённых, в месяц (бот пока не списывает).",
+            ),
+            (
                 "SUBSCRIPTION_AUTORENEW_ENABLED",
                 "Автопродление подписки",
                 lambda s: "true" if s.subscription_autorenew_enabled else "false",

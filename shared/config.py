@@ -31,6 +31,16 @@ class Settings(BaseSettings):
         validation_alias="BOT_USERNAME",
         description="Username бота без @ (для реф. ссылок на шаге 9)",
     )
+    bot_profile_short_description: str | None = Field(
+        default=None,
+        validation_alias="BOT_PROFILE_SHORT_DESCRIPTION",
+        description="Краткое описание бота в Telegram (поиск, до ~120 символов). Пусто — встроенный текст.",
+    )
+    bot_profile_description: str | None = Field(
+        default=None,
+        validation_alias="BOT_PROFILE_DESCRIPTION",
+        description="Текст «О боте» в профиле Telegram до нажатия Start (до ~512 символов). Пусто — встроенный текст.",
+    )
     downloader_bot_token: str = Field(
         default="",
         validation_alias="DOWNLOADER_BOT_TOKEN",
@@ -407,6 +417,18 @@ class Settings(BaseSettings):
 
     # Подписка / устройства (шаг 8)
     extra_device_price_rub: Decimal = Field(default=Decimal("65"), validation_alias="EXTRA_DEVICE_PRICE_RUB")
+    subscription_included_device_slots: int = Field(
+        default=2,
+        ge=1,
+        le=64,
+        validation_alias="SUBSCRIPTION_INCLUDED_DEVICE_SLOTS",
+        description="Сколько слотов устройств входит в базовую подписку без отдельной доплаты (закладка под месячный биллинг; бот пока не списывает).",
+    )
+    extra_device_monthly_rub: Decimal = Field(
+        default=Decimal("70"),
+        validation_alias="EXTRA_DEVICE_MONTHLY_RUB",
+        description="Планируемая цена ₽/мес за каждое устройство сверх SUBSCRIPTION_INCLUDED_DEVICE_SLOTS (бот пока не списывает).",
+    )
     subscription_autorenew_enabled: bool = Field(
         default=True,
         validation_alias="SUBSCRIPTION_AUTORENEW_ENABLED",
