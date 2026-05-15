@@ -42,6 +42,7 @@ from shared.services.subscription_service import (
     list_paid_plans,
     plan_tariff_button_label,
     purchase_plan_with_balance,
+    resolve_plan_price_rub,
     subscription_days_left,
 )
 from tickets.config import config as tickets_config
@@ -321,7 +322,7 @@ def _subscription_page(
 def _renew_page(
     *,
     token: str,
-    plans: list[Plan],
+    plans: list[tuple[Plan, str]],
     can_renew: bool,
     days_left: int,
     window_days: int,
@@ -343,15 +344,15 @@ def _renew_page(
             f"Сейчас осталось {days_left} дн."
         )
     plan_buttons: list[str] = []
-    for p in plans:
-        label = _esc(plan_tariff_button_label(p))
+    for p, label in plans:
+        label_esc = _esc(label)
         if can_renew:
             plan_buttons.append(
-                f'<button type="submit" name="plan_id" value="{p.id}" class="btn btn-tariff">{label}</button>'
+                f'<button type="submit" name="plan_id" value="{p.id}" class="btn btn-tariff">{label_esc}</button>'
             )
         else:
             plan_buttons.append(
-                f'<button type="button" class="btn btn-tariff btn-tariff-disabled" disabled>{label}</button>'
+                f'<button type="button" class="btn btn-tariff btn-tariff-disabled" disabled>{label_esc}</button>'
             )
     plans_html = "\n".join(plan_buttons) or '<p class="muted">Нет доступных тарифов.</p>'
     page = f"""<!DOCTYPE html>
@@ -1410,10 +1411,14 @@ async def public_subscription_renew_page(subscription_key: str) -> HTMLResponse:
     can_renew = can_renew_subscription_with_tariff(sub, window_days=window)
     factory = get_session_factory()
     async with factory() as session:
-        plans = await list_paid_plans(session)
+        raw_plans = await list_paid_plans(session)
+        plan_rows: list[tuple[Plan, str]] = []
+        for p in raw_plans:
+            eff = await resolve_plan_price_rub(session, p)
+            plan_rows.append((p, plan_tariff_button_label(p, price_rub=eff)))
     return _renew_page(
         token=token,
-        plans=plans,
+        plans=plan_rows,
         can_renew=can_renew,
         days_left=days_left,
         window_days=window,
@@ -1441,12 +1446,16 @@ async def public_subscription_renew_post(
 
     factory = get_session_factory()
     async with factory() as session:
-        plans = await list_paid_plans(session)
+        raw_plans = await list_paid_plans(session)
+        plan_rows: list[tuple[Plan, str]] = []
+        for p in raw_plans:
+            eff = await resolve_plan_price_rub(session, p)
+            plan_rows.append((p, plan_tariff_button_label(p, price_rub=eff)))
 
     def _renew_response(*, error: str | None = None) -> HTMLResponse:
         return _renew_page(
             token=token,
-            plans=plans,
+            plans=plan_rows,
             can_renew=can_renew,
             days_left=days_left,
             window_days=window,
@@ -1462,7 +1471,7 @@ async def public_subscription_renew_post(
         pid = int((plan_id or "").strip())
     except ValueError:
         return _renew_response(error="Выберите тариф.")
-    if not any(p.id == pid for p in plans):
+    if not any(p.id == pid for p, _lbl in plan_rows):
         return _renew_response(error="Тариф недоступен.")
 
     idem = secrets.token_urlsafe(12)

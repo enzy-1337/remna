@@ -35,7 +35,7 @@ from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     TRIAL_PLAN_NAME,
     calculate_discounted_plan_price,
-    can_renew_subscription_with_tariff,
+    check_tariff_extension_window,
     default_one_month_tariff_price_rub,
     get_active_subscription,
     get_base_subscription_plan,
@@ -43,9 +43,8 @@ from shared.services.subscription_service import (
     plan_tariff_button_label,
     plan_tariff_button_label_with_discount,
     purchase_plan_with_balance,
-    renewal_blocked_message,
+    resolve_plan_price_rub,
     set_subscription_auto_renew,
-    subscription_days_left,
 )
 
 from shared.services.billing_v2.billing_calendar import (
@@ -332,15 +331,15 @@ async def _render_tariff_list(
         title = "🔄 " + bold("Продлить подписку") + "\n\n"
     else:
         title = "📋 " + bold("Тарифы") + "\n\n"
+    extension_allowed, days_left, window = await check_tariff_extension_window(
+        session, db_user.id, settings
+    )
     extend_hint: str | None = None
-    if is_extend and has_act and active_sub is not None:
-        window = int(settings.subscription_renewal_window_days)
-        if window > 0 and not can_renew_subscription_with_tariff(active_sub, window_days=window):
-            dl = subscription_days_left(active_sub.expires_at)
-            extend_hint = plain(
-                f"⏳ Продление откроется за {window} дн. до конца. Сейчас осталось {dl} дн. "
-                "Кнопки ниже неактивны до этого срока."
-            )
+    if is_extend and has_act and not extension_allowed and window > 0:
+        extend_hint = plain(
+            f"⏳ Продление доступно только за {window} дн. до окончания. "
+            f"Сейчас осталось {days_left} дн."
+        )
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
     body = title + plain(
         "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
@@ -361,15 +360,17 @@ async def _render_tariff_list(
         )
     b = InlineKeyboardBuilder()
     for p in plans:
+        eff_price = await resolve_plan_price_rub(session, p)
         label = (
-            plan_tariff_button_label_with_discount(p, discount_percent)
+            plan_tariff_button_label_with_discount(p, discount_percent, price_rub=eff_price)
             if discount_percent > 0
-            else plan_tariff_button_label(p)
+            else plan_tariff_button_label(p, price_rub=eff_price)
         )
+        buy_cb = f"sub:buy:{p.id}" if extension_allowed else "sub:renewal:blocked"
         b.row(
             InlineKeyboardButton(
                 text=label[:64],
-                callback_data=f"sub:buy:{p.id}",
+                callback_data=buy_cb,
             )
         )
     back_cb = "menu:sub_main" if has_act else "menu:main"
@@ -599,6 +600,31 @@ async def cb_plans_or_extend(
     await _render_tariff_list(cq, session, db_user, state, banner=None)
 
 
+@router.callback_query(F.data == "sub:renewal:blocked")
+async def cb_renewal_blocked(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    settings = get_settings()
+    allowed, days_left, window = await check_tariff_extension_window(
+        session, db_user.id, settings
+    )
+    if allowed:
+        await cq.answer("Продление доступно.", show_alert=False)
+        return
+    await cq.answer(
+        strip_for_popup_alert(
+            f"Продление доступно только за {window} дн. до окончания подписки. "
+            f"Сейчас осталось {days_left} дн."
+        )[:200],
+        show_alert=True,
+    )
+
+
 @router.callback_query(F.data.startswith("sub:buy:"))
 async def cb_buy_plan(
     cq: CallbackQuery,
@@ -631,29 +657,23 @@ async def cb_buy_plan(
         )
         return
     assert plan is not None
-    active = await get_active_subscription(session, db_user.id)
-    window = int(settings.subscription_renewal_window_days)
-    if window > 0 and active is not None and active.expires_at is not None:
-        now = datetime.now(timezone.utc)
-        exp = active.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp > now:
-            long_horizon = (exp - now).total_seconds() >= 86400 * 400
-            if not long_horizon and not can_renew_subscription_with_tariff(
-                active, window_days=window, now=now
-            ):
-                days_left = subscription_days_left(exp, now=now)
-                await cq.answer(
-                    strip_for_popup_alert(
-                        f"Продление доступно только за {window} дн. до окончания. "
-                        f"Сейчас осталось {days_left} дн."
-                    )[:200],
-                    show_alert=True,
-                )
-                return
+    extension_allowed, days_left, window = await check_tariff_extension_window(
+        session, db_user.id, settings
+    )
+    if not extension_allowed:
+        await cq.answer(
+            strip_for_popup_alert(
+                f"Продление доступно только за {window} дн. до окончания подписки. "
+                f"Сейчас осталось {days_left} дн."
+            )[:200],
+            show_alert=True,
+        )
+        return
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
-    original, discount_amount, final = calculate_discounted_plan_price(plan, discount_percent)
+    eff_price = await resolve_plan_price_rub(session, plan)
+    original, discount_amount, final = calculate_discounted_plan_price(
+        plan, discount_percent, price_rub=eff_price
+    )
 
     lines = [
         "🧾 " + bold("Подтверждение покупки"),
@@ -678,13 +698,16 @@ async def cb_buy_plan(
     token = secrets.token_urlsafe(8)
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     b = InlineKeyboardBuilder()
+    state_data = await state.get_data()
+    back_tariffs = "sub:extend" if state_data.get("sub_tariffs_extend") else "sub:plans"
     b.row(
         InlineKeyboardButton(
             text="✅ Подтвердить",
             callback_data=f"sub:buyconfirm:{pid}:{token}",
+            style="success",
         )
     )
-    b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data="sub:plans", style="danger"))
+    b.row(InlineKeyboardButton(text="⬅️ К тарифам", callback_data=back_tariffs, style="danger"))
     await state.update_data(sub_buy_confirm_token=token, sub_buy_confirm_plan_id=pid, sub_buy_confirm_expires_at=expires_at)
     await answer_callback_with_photo_screen(
         cq,
@@ -730,6 +753,18 @@ async def cb_buy_plan_confirm(
     settings = get_settings()
     if not await tariff_purchases_enabled(settings):
         await cq.answer("Покупка тарифов временно отключена.", show_alert=True)
+        return
+    extension_allowed, days_left, window = await check_tariff_extension_window(
+        session, db_user.id, settings
+    )
+    if not extension_allowed:
+        await cq.answer(
+            strip_for_popup_alert(
+                f"Продление доступно только за {window} дн. до окончания подписки. "
+                f"Сейчас осталось {days_left} дн."
+            )[:200],
+            show_alert=True,
+        )
         return
     tid = cq.from_user.id if cq.from_user else db_user.telegram_id
     ok, msg, kind = await purchase_plan_with_balance(

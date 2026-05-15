@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 MIN_DEVICES = 2
 MAX_DEVICES = 10
 
+ONE_MONTH_DURATION_MIN = 28
+ONE_MONTH_DURATION_MAX = 35
+ONE_MONTH_REFERENCE_NAME = "1 месяц"
+
 
 def hybrid_subscription_hwid_cap(settings: Settings, user: User) -> int | None:
     """Hybrid: фиксированный лимит слотов/HWID в панели (оплата по факту использования)."""
@@ -66,23 +70,65 @@ def calculate_tariff_price_from_base_month(
     return raw.quantize(Decimal("1"), rounding=ROUND_FLOOR)
 
 
-async def apply_plan_price_from_monthly_base(
+def is_one_month_duration(duration_days: int) -> bool:
+    return ONE_MONTH_DURATION_MIN <= int(duration_days) <= ONE_MONTH_DURATION_MAX
+
+
+async def get_one_month_reference_plan(session: AsyncSession) -> Plan | None:
+    """Тариф «1 месяц» — единственный источник базовой цены для магазина."""
+    r = await session.execute(
+        select(Plan)
+        .where(
+            Plan.is_active.is_(True),
+            Plan.name.notin_([BASE_SUBSCRIPTION_PLAN_NAME, TRIAL_PLAN_NAME]),
+            Plan.duration_days >= ONE_MONTH_DURATION_MIN,
+            Plan.duration_days <= ONE_MONTH_DURATION_MAX,
+        )
+        .order_by(Plan.sort_order, Plan.id)
+    )
+    plans = list(r.scalars().all())
+    if not plans:
+        return None
+    for p in plans:
+        if (p.name or "").strip().lower() == ONE_MONTH_REFERENCE_NAME.lower():
+            return p
+    return plans[0]
+
+
+async def resolve_plan_price_rub(session: AsyncSession, plan: Plan) -> Decimal:
+    """Актуальная цена: для «1 месяц» — из поля плана, для остальных — расчёт от базы и скидки."""
+    ref = await get_one_month_reference_plan(session)
+    if ref is None:
+        return plan.price_rub
+    if plan.id is not None and plan.id == ref.id:
+        return ref.price_rub
+    return calculate_tariff_price_from_base_month(
+        ref.price_rub,
+        duration_days=int(plan.duration_days),
+        discount_percent=plan.discount_percent,
+    )
+
+
+async def assign_plan_catalog_price(
     session: AsyncSession,
     plan: Plan,
     *,
-    base_month_rub: Decimal | None = None,
+    submitted_price_rub: Decimal | None = None,
 ) -> Decimal:
     """
-    Если у плана задана скидка — пересчитать price_rub от базовой месячной цены.
-    Возвращает итоговую цену (уже записанную в plan.price_rub при изменении).
+    Записать price_rub в план: базовый месяц — вручную, остальные — только от базы × срок × (1−скидка%).
     """
-    if plan.discount_percent <= 0:
+    ref = await get_one_month_reference_plan(session)
+    if ref is None:
+        if is_one_month_duration(plan.duration_days):
+            if submitted_price_rub is not None:
+                plan.price_rub = submitted_price_rub
         return plan.price_rub
-    base = base_month_rub
-    if base is None:
-        base = await default_one_month_tariff_price_rub(session)
-    if base is None or base <= 0:
+    if plan.id is not None and plan.id == ref.id:
+        if submitted_price_rub is not None:
+            plan.price_rub = submitted_price_rub
         return plan.price_rub
+    base = ref.price_rub
     plan.price_rub = calculate_tariff_price_from_base_month(
         base,
         duration_days=int(plan.duration_days),
@@ -91,15 +137,69 @@ async def apply_plan_price_from_monthly_base(
     return plan.price_rub
 
 
+async def refresh_all_derived_plan_prices(session: AsyncSession) -> None:
+    """Пересчитать price_rub у всех тарифов, кроме базового «1 месяц»."""
+    ref = await get_one_month_reference_plan(session)
+    if ref is None:
+        return
+    r = await session.execute(
+        select(Plan).where(
+            Plan.is_active.is_(True),
+            Plan.name.notin_([BASE_SUBSCRIPTION_PLAN_NAME, TRIAL_PLAN_NAME]),
+        )
+    )
+    for p in r.scalars().all():
+        if p.id == ref.id:
+            continue
+        p.price_rub = calculate_tariff_price_from_base_month(
+            ref.price_rub,
+            duration_days=int(p.duration_days),
+            discount_percent=p.discount_percent,
+        )
+
+
+async def apply_plan_price_from_monthly_base(
+    session: AsyncSession,
+    plan: Plan,
+    *,
+    base_month_rub: Decimal | None = None,
+) -> Decimal:
+    """Совместимость: пересчёт через assign_plan_catalog_price."""
+    _ = base_month_rub
+    return await assign_plan_catalog_price(session, plan)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def subscription_days_left(expires_at: datetime | None, *, now: datetime | None = None) -> int:
     if expires_at is None:
         return 0
-    at = now or datetime.now(timezone.utc)
-    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=timezone.utc)
-    left = exp - at.astimezone(timezone.utc) if at.tzinfo else exp - at.replace(tzinfo=timezone.utc)
-    return max(0, int(left.total_seconds() // 86400))
+    at = _as_utc(now or datetime.now(timezone.utc))
+    exp = _as_utc(expires_at)
+    return max(0, int((exp - at).total_seconds() // 86400))
+
+
+def subscription_extension_would_stack(
+    active: Subscription | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Покупка тарифа прибавит срок к текущей подписке (не первая покупка после PAYG-заглушки).
+    """
+    if active is None or active.expires_at is None:
+        return False
+    at = _as_utc(now or datetime.now(timezone.utc))
+    exp = _as_utc(active.expires_at)
+    if exp <= at:
+        return False
+    if (exp - at).total_seconds() >= 86400 * 400:
+        return False
+    return True
 
 
 def can_renew_subscription_with_tariff(
@@ -109,15 +209,34 @@ def can_renew_subscription_with_tariff(
     now: datetime | None = None,
 ) -> bool:
     """
-    Продление разрешено, если нет активной подписки (первая покупка) или до конца ≤ window_days.
+    Продление разрешено: нет стекающейся подписки или до конца ≤ window_days.
     """
+    if int(window_days) <= 0:
+        return True
     if active is None:
         return True
-    at = now or datetime.now(timezone.utc)
-    exp = active.expires_at
-    if exp is None or exp <= at:
+    if not subscription_extension_would_stack(active, now=now):
         return True
-    return subscription_days_left(exp, now=at) <= int(window_days)
+    exp = active.expires_at
+    assert exp is not None
+    return subscription_days_left(exp, now=now) <= int(window_days)
+
+
+async def check_tariff_extension_window(
+    session: AsyncSession,
+    user_id: int,
+    settings: Settings,
+) -> tuple[bool, int, int]:
+    """(разрешено_ли_продление, дней_до_конца, окно_дней)."""
+    window = int(settings.subscription_renewal_window_days)
+    if window <= 0:
+        return True, 0, 0
+    active = await get_active_subscription(session, user_id)
+    if not subscription_extension_would_stack(active):
+        return True, 0, window
+    assert active is not None and active.expires_at is not None
+    days_left = subscription_days_left(active.expires_at)
+    return days_left <= window, days_left, window
 
 
 def renewal_blocked_message(days_left: int, window_days: int) -> str:
@@ -134,10 +253,10 @@ def renewal_blocked_message(days_left: int, window_days: int) -> str:
     )
 
 
-def plan_tariff_button_label(plan: Plan) -> str:
+def plan_tariff_button_label(plan: Plan, *, price_rub: Decimal | None = None) -> str:
     """Текст кнопки тарифа со скидкой, напр.: «3 месяца — 370 ₽ (-5%)»."""
     name = (plan.name or "")[:28]
-    price = plan.price_rub
+    price = price_rub if price_rub is not None else plan.price_rub
     price_s = str(int(price)) if price == price.to_integral_value() else str(price)
     disc = plan.discount_percent
     suffix = ""
@@ -151,11 +270,16 @@ def plan_tariff_button_label(plan: Plan) -> str:
     return f"{name} — {price_s} ₽{suffix}"
 
 
-def plan_tariff_button_label_with_discount(plan: Plan, discount_percent: Decimal) -> str:
-    base = plan_tariff_button_label(plan)
+def plan_tariff_button_label_with_discount(
+    plan: Plan,
+    discount_percent: Decimal,
+    *,
+    price_rub: Decimal | None = None,
+) -> str:
+    base = plan_tariff_button_label(plan, price_rub=price_rub)
     if discount_percent <= 0:
         return base
-    original = plan.price_rub
+    original = price_rub if price_rub is not None else plan.price_rub
     discount_amount = (original * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
     final = (original - discount_amount).quantize(Decimal("0.01"))
     if final < 0:
@@ -163,8 +287,13 @@ def plan_tariff_button_label_with_discount(plan: Plan, discount_percent: Decimal
     return f"{base} → {final} ₽"
 
 
-def calculate_discounted_plan_price(plan: Plan, discount_percent: Decimal) -> tuple[Decimal, Decimal, Decimal]:
-    original = plan.price_rub
+def calculate_discounted_plan_price(
+    plan: Plan,
+    discount_percent: Decimal,
+    *,
+    price_rub: Decimal | None = None,
+) -> tuple[Decimal, Decimal, Decimal]:
+    original = price_rub if price_rub is not None else plan.price_rub
     if discount_percent <= 0:
         return original, Decimal("0"), original
     discount_amount = (original * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
@@ -200,16 +329,11 @@ async def list_paid_plans(session: AsyncSession) -> list[Plan]:
 
 
 async def default_one_month_tariff_price_rub(session: AsyncSession) -> Decimal | None:
-    """
-    Минимальная цена активного платного тарифа со сроком ~1 календарный месяц (28–35 дн.).
-    Для экрана продления и кредита legacy→hybrid вместо фиксированной базы только из .env.
-    """
-    plans = await list_paid_plans(session)
-    monthlies = [p for p in plans if 28 <= int(p.duration_days) <= 35]
-    if not monthlies:
+    """Цена тарифа «1 месяц» — база для расчёта остальных пакетов."""
+    ref = await get_one_month_reference_plan(session)
+    if ref is None:
         return None
-    best = min(monthlies, key=lambda p: (p.price_rub, p.sort_order, p.id))
-    return best.price_rub
+    return ref.price_rub
 
 
 async def resolve_legacy_transition_base_month_rub(session: AsyncSession, settings: Settings) -> Decimal:
@@ -361,7 +485,7 @@ async def purchase_plan_with_balance(
     if base_plan is None:
         return False, plain("В БД не настроен тариф «Базовый» (seed планов)."), "error"
 
-    original_price = purchased_plan.price_rub
+    original_price = await resolve_plan_price_rub(session, purchased_plan)
     price = original_price
     discount_usage, discount_percent = await get_pending_purchase_discount_percent(session, user_id=user.id)
     discount_amount = Decimal("0")
@@ -391,18 +515,11 @@ async def purchase_plan_with_balance(
 
     now = datetime.now(timezone.utc)
     active = await get_active_subscription(session, user.id)
-    renewal_window = int(settings.subscription_renewal_window_days)
-    if renewal_window > 0 and active is not None and active.expires_at is not None:
-        exp = active.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp > now:
-            long_horizon = (exp - now).total_seconds() >= 86400 * 400
-            if not long_horizon and not can_renew_subscription_with_tariff(
-                active, window_days=renewal_window, now=now
-            ):
-                days_left = subscription_days_left(exp, now=now)
-                return False, renewal_blocked_message(days_left, renewal_window), "error"
+    allowed, days_left, renewal_window = await check_tariff_extension_window(
+        session, user.id, settings
+    )
+    if not allowed:
+        return False, renewal_blocked_message(days_left, renewal_window), "error"
 
     hybrid_cap = hybrid_subscription_hwid_cap(settings, user)
     if hybrid_cap is not None:

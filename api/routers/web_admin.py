@@ -94,8 +94,12 @@ from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     MIN_DEVICES,
-    apply_plan_price_from_monthly_base,
+    assign_plan_catalog_price,
     default_one_month_tariff_price_rub,
+    get_one_month_reference_plan,
+    is_one_month_duration,
+    refresh_all_derived_plan_prices,
+    resolve_plan_price_rub,
     admin_convert_monthly_subscriptions_to_payg_balance,
     admin_disable_subscription_record,
     admin_enable_subscription_record,
@@ -8851,6 +8855,7 @@ def _admin_plan_form(
     error: str | None = None,
     plan_id: int | None = None,
     base_month_rub_hint: Decimal | None = None,
+    price_editable: bool = True,
 ) -> str:
     p = plan
     e = f"<div class='alert alert-error text-sm'>{_esc(error)}</div>" if error else ""
@@ -8862,6 +8867,14 @@ def _admin_plan_form(
     dd = str(p.duration_days) if p else "30"
     pr = str(p.price_rub) if p else "179"
     dsc = str(p.discount_percent) if p else "0"
+    price_field = (
+        f"""<label class="form-control w-full"><span class="label-text font-medium">Цена за 1 месяц, ₽</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="price_rub" id="f_price_rub" value="{_esc(pr)}" /></label>
+          <p class="text-xs opacity-70 -mt-2">Только для тарифа «1 месяц». Остальные пакеты считаются автоматически.</p>"""
+        if price_editable
+        else """<input type="hidden" name="price_rub" value="0" />
+          <p class="text-sm opacity-80">Цена рассчитывается автоматически от тарифа «1 месяц» и скидки ниже.</p>"""
+    )
     tgb = "" if p is None or p.traffic_limit_gb is None else str(p.traffic_limit_gb)
     dlim = "" if p is None or p.device_limit is None else str(p.device_limit)
     mgbl = "" if p is None or p.monthly_gb_limit is None else str(p.monthly_gb_limit)
@@ -8889,15 +8902,12 @@ def _admin_plan_form(
           <label class="form-control w-full"><span class="label-text font-medium">Название</span>
             <input type="text" name="name" id="f_name" value="{_esc(nm)}" {name_extra} /></label>
           <p class="text-xs opacity-70 -mt-2">Имена «{_esc(BASE_SUBSCRIPTION_PLAN_NAME)}» и «Триал» нельзя переименовать (системные).</p>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label class="form-control w-full"><span class="label-text font-medium">Срок</span>
-              <input class="input input-bordered input-sm h-9 min-h-9" name="duration_days" id="f_duration_days" type="number" min="1" value="{_esc(dd)}" /></label>
-            <label class="form-control w-full"><span class="label-text font-medium">Цена, ₽</span>
-              <input class="input input-bordered input-sm h-9 min-h-9" name="price_rub" id="f_price_rub" value="{_esc(pr)}" /></label>
-          </div>
+          <label class="form-control w-full"><span class="label-text font-medium">Срок, дней</span>
+            <input class="input input-bordered input-sm h-9 min-h-9" name="duration_days" id="f_duration_days" type="number" min="1" value="{_esc(dd)}" /></label>
+          {price_field}
           <label class="form-control w-full"><span class="label-text font-medium">Скидка плана, %</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="discount_percent" id="f_discount_percent" value="{_esc(dsc)}" /></label>
-          <p class="text-xs opacity-70 -mt-2">При сохранении цена пересчитается от тарифа «1 месяц»: база × (срок/30) × (1−скидка%), округление вниз до целых ₽. На кнопках в боте отображается эта скидка.</p>
+          <p class="text-xs opacity-70 -mt-2">Для 2 и 3 месяцев укажите только скидку — цена считается от тарифа «1 месяц» автоматически.</p>
           <p id="f_discount_price_preview" class="text-sm font-mono opacity-80"></p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label class="form-control w-full"><span class="label-text font-medium">Лимит трафика, ГБ (пусто = без лимита в записи)</span>
@@ -8973,7 +8983,7 @@ def _admin_plan_form(
             var raw=BASE*months*(1-disc/100);
             var floored=Math.floor(raw);
             out.textContent='Расчётная цена при сохранении: '+floored+' ₽ (база '+BASE+' ₽/мес × '+months.toFixed(2)+' мес × '+(100-disc)+'%)';
-            if(priceEl) priceEl.value=String(floored);
+            if(priceEl && priceEl.type!=='hidden') priceEl.value=String(floored);
           }}
           ['f_discount_percent','f_duration_days'].forEach(function(id){{
             var el=document.getElementById(id);
@@ -9014,9 +9024,11 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
     )
     async with await _session() as session:
         dyn_base = await resolve_legacy_transition_base_month_rub(session, settings)
+        ref_plan = await get_one_month_reference_plan(session)
         plans = list(
             (await session.execute(select(Plan).order_by(Plan.sort_order.asc(), Plan.id.asc()))).scalars().all()
         )
+        plan_prices = {pl.id: await resolve_plan_price_rub(session, pl) for pl in plans}
     rows: list[str] = []
     for pl in plans:
         dev, gb = plan_fields_for_ppu_estimate(pl)
@@ -9026,7 +9038,7 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/tariffs/{pl.id}/edit' tabindex='0' role='link'>"
             f"<td class='font-medium'>{_esc(pl.name)}</td>"
-            f"<td>{pl.duration_days}</td><td>{_esc(pl.price_rub)}</td>"
+            f"<td>{pl.duration_days}</td><td>{_esc(plan_prices.get(pl.id, pl.price_rub))}</td>"
             f"<td class='text-xs'>{_esc(pl.traffic_limit_gb if pl.traffic_limit_gb is not None else '—')}</td>"
             f"<td class='text-xs'>{_esc(pl.device_limit if pl.device_limit is not None else '—')}</td>"
             f"<td class='text-xs'>{_esc(pl.monthly_gb_limit if pl.monthly_gb_limit is not None else '—')}</td>"
@@ -9042,6 +9054,7 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
             action="/admin/tariffs/new",
             settings=settings,
             base_month_rub_hint=dyn_base,
+            price_editable=ref_plan is None,
         ),
     )
     body = (
@@ -9073,12 +9086,14 @@ async def admin_tariffs_new(request: Request) -> HTMLResponse:
     settings = get_settings()
     async with await _session() as session:
         base_hint = await default_one_month_tariff_price_rub(session)
+        ref_plan = await get_one_month_reference_plan(session)
     return _layout(
         "Новый тариф",
         _admin_plan_form(
             action="/admin/tariffs/new",
             settings=settings,
             base_month_rub_hint=base_hint,
+            price_editable=ref_plan is None,
         ),
         request=request,
         back_href="/admin/tariffs",
@@ -9146,10 +9161,25 @@ async def admin_tariffs_new_post(
                 request=request,
                 back_href="/admin/tariffs",
             )
+        ref_before = await get_one_month_reference_plan(session)
+        is_ref_target = ref_before is None and is_one_month_duration(dd)
+        if is_ref_target and pr <= 0:
+            return _layout(
+                "Тариф — ошибка",
+                _admin_plan_form(
+                    action="/admin/tariffs/new",
+                    settings=settings,
+                    error="Укажите цену за 1 месяц (больше 0 ₽)",
+                    base_month_rub_hint=await default_one_month_tariff_price_rub(session),
+                    price_editable=True,
+                ),
+                request=request,
+                back_href="/admin/tariffs",
+            )
         new_plan = Plan(
             name=nm,
             duration_days=dd,
-            price_rub=pr,
+            price_rub=pr if is_ref_target else Decimal("0"),
             discount_percent=dsc,
             traffic_limit_gb=tgb,
             device_limit=dlim,
@@ -9158,9 +9188,15 @@ async def admin_tariffs_new_post(
             is_active=active,
             sort_order=so,
         )
-        if dsc > 0:
-            await apply_plan_price_from_monthly_base(session, new_plan)
         session.add(new_plan)
+        await session.flush()
+        ref = await get_one_month_reference_plan(session)
+        is_ref = ref is not None and new_plan.id == ref.id
+        await assign_plan_catalog_price(
+            session, new_plan, submitted_price_rub=pr if is_ref else None
+        )
+        if is_ref:
+            await refresh_all_derived_plan_prices(session)
         await session.commit()
     return RedirectResponse("/admin/tariffs", status_code=303)
 
@@ -9174,6 +9210,8 @@ async def admin_tariffs_edit(request: Request, plan_id: int) -> HTMLResponse:
     async with await _session() as session:
         plan = await session.get(Plan, plan_id)
         base_hint = await default_one_month_tariff_price_rub(session)
+        ref_plan = await get_one_month_reference_plan(session)
+        price_editable = ref_plan is None or (plan is not None and plan.id == ref_plan.id)
     if plan is None:
         return _layout(
             "Тариф не найден",
@@ -9189,6 +9227,7 @@ async def admin_tariffs_edit(request: Request, plan_id: int) -> HTMLResponse:
             plan=plan,
             plan_id=plan_id,
             base_month_rub_hint=base_hint,
+            price_editable=price_editable,
         ),
         request=request,
         back_href="/admin/tariffs",
@@ -9274,9 +9313,25 @@ async def admin_tariffs_edit_post(
                     request=request,
                     back_href="/admin/tariffs",
                 )
+        ref = await get_one_month_reference_plan(session)
+        is_ref = ref is not None and plan.id == ref.id
+        if is_ref and pr <= 0:
+            return _layout(
+                "Тариф — ошибка",
+                _admin_plan_form(
+                    action=f"/admin/tariffs/{plan_id}/edit",
+                    settings=settings,
+                    plan=plan,
+                    plan_id=plan_id,
+                    error="Укажите цену за 1 месяц (больше 0 ₽)",
+                    base_month_rub_hint=await default_one_month_tariff_price_rub(session),
+                    price_editable=True,
+                ),
+                request=request,
+                back_href="/admin/tariffs",
+            )
         plan.name = nm
         plan.duration_days = dd
-        plan.price_rub = pr
         plan.discount_percent = dsc
         plan.traffic_limit_gb = tgb
         plan.device_limit = dlim
@@ -9284,8 +9339,11 @@ async def admin_tariffs_edit_post(
         plan.is_package_monthly = pkg
         plan.is_active = active
         plan.sort_order = so
-        if dsc > 0:
-            await apply_plan_price_from_monthly_base(session, plan)
+        await assign_plan_catalog_price(
+            session, plan, submitted_price_rub=pr if is_ref else None
+        )
+        if is_ref:
+            await refresh_all_derived_plan_prices(session)
         await session.commit()
     return RedirectResponse("/admin/tariffs", status_code=303)
 
