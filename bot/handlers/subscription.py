@@ -35,6 +35,7 @@ from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     TRIAL_PLAN_NAME,
     calculate_discounted_plan_price,
+    can_renew_subscription_with_tariff,
     default_one_month_tariff_price_rub,
     get_active_subscription,
     get_base_subscription_plan,
@@ -42,7 +43,9 @@ from shared.services.subscription_service import (
     plan_tariff_button_label,
     plan_tariff_button_label_with_discount,
     purchase_plan_with_balance,
+    renewal_blocked_message,
     set_subscription_auto_renew,
+    subscription_days_left,
 )
 
 from shared.services.billing_v2.billing_calendar import (
@@ -321,17 +324,29 @@ async def _render_tariff_list(
     if not plans:
         await safe_callback_answer(cq, "Нет доступных тарифов", show_alert=True)
         return
-    has_act = await get_active_subscription(session, db_user.id) is not None
+    active_sub = await get_active_subscription(session, db_user.id)
+    has_act = active_sub is not None
     data = await state.get_data()
     is_extend = bool(data.get("sub_tariffs_extend"))
     if is_extend and has_act:
         title = "🔄 " + bold("Продлить подписку") + "\n\n"
     else:
         title = "📋 " + bold("Тарифы") + "\n\n"
+    extend_hint: str | None = None
+    if is_extend and has_act and active_sub is not None:
+        window = int(settings.subscription_renewal_window_days)
+        if window > 0 and not can_renew_subscription_with_tariff(active_sub, window_days=window):
+            dl = subscription_days_left(active_sub.expires_at)
+            extend_hint = plain(
+                f"⏳ Продление откроется за {window} дн. до конца. Сейчас осталось {dl} дн. "
+                "Кнопки ниже неактивны до этого срока."
+            )
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
     body = title + plain(
         "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
     )
+    if extend_hint:
+        body = join_lines(extend_hint, "", body)
     if banner:
         body = join_lines(banner, "", body)
     if discount_percent > 0 and promo_code:
@@ -616,6 +631,27 @@ async def cb_buy_plan(
         )
         return
     assert plan is not None
+    active = await get_active_subscription(session, db_user.id)
+    window = int(settings.subscription_renewal_window_days)
+    if window > 0 and active is not None and active.expires_at is not None:
+        now = datetime.now(timezone.utc)
+        exp = active.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp > now:
+            long_horizon = (exp - now).total_seconds() >= 86400 * 400
+            if not long_horizon and not can_renew_subscription_with_tariff(
+                active, window_days=window, now=now
+            ):
+                days_left = subscription_days_left(exp, now=now)
+                await cq.answer(
+                    strip_for_popup_alert(
+                        f"Продление доступно только за {window} дн. до окончания. "
+                        f"Сейчас осталось {days_left} дн."
+                    )[:200],
+                    show_alert=True,
+                )
+                return
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
     original, discount_amount, final = calculate_discounted_plan_price(plan, discount_percent)
 

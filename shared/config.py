@@ -447,6 +447,13 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_AUTORENEW_WINDOW_SEC",
         description="За сколько секунд до expires_at пытаться продлить (по умолчанию 1 ч)",
     )
+    subscription_renewal_window_days: int = Field(
+        default=7,
+        ge=0,
+        le=90,
+        validation_alias="SUBSCRIPTION_RENEWAL_WINDOW_DAYS",
+        description="Продление тарифом с баланса: только если до конца подписки осталось не больше N дней (0 = без ограничения)",
+    )
     subscription_expiry_notify_enabled: bool = Field(
         default=True,
         validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_ENABLED",

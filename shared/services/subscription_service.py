@@ -6,7 +6,7 @@ import logging
 import uuid as uuid_lib
 from typing import Any
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +42,96 @@ def hybrid_subscription_hwid_cap(settings: Settings, user: User) -> int | None:
     if settings.billing_v2_enabled and user.billing_mode == "hybrid":
         return int(settings.billing_hybrid_hwid_slots)
     return None
+
+
+def tariff_duration_months(duration_days: int) -> Decimal:
+    """Количество «месяцев» для расчёта цены: duration_days / 30."""
+    return (Decimal(int(duration_days)) / Decimal(30)).quantize(Decimal("0.0001"))
+
+
+def calculate_tariff_price_from_base_month(
+    base_month_rub: Decimal,
+    *,
+    duration_days: int,
+    discount_percent: Decimal,
+) -> Decimal:
+    """
+    Цена тарифа: база за месяц × число месяцев × (1 − скидка%), округление вниз до целых ₽.
+    Пример: 179 × 2 × 0,98 = 350,84 → 350 ₽.
+    """
+    months = tariff_duration_months(duration_days)
+    disc = discount_percent if discount_percent > 0 else Decimal("0")
+    factor = Decimal("1") - disc / Decimal("100")
+    raw = base_month_rub * months * factor
+    return raw.quantize(Decimal("1"), rounding=ROUND_FLOOR)
+
+
+async def apply_plan_price_from_monthly_base(
+    session: AsyncSession,
+    plan: Plan,
+    *,
+    base_month_rub: Decimal | None = None,
+) -> Decimal:
+    """
+    Если у плана задана скидка — пересчитать price_rub от базовой месячной цены.
+    Возвращает итоговую цену (уже записанную в plan.price_rub при изменении).
+    """
+    if plan.discount_percent <= 0:
+        return plan.price_rub
+    base = base_month_rub
+    if base is None:
+        base = await default_one_month_tariff_price_rub(session)
+    if base is None or base <= 0:
+        return plan.price_rub
+    plan.price_rub = calculate_tariff_price_from_base_month(
+        base,
+        duration_days=int(plan.duration_days),
+        discount_percent=plan.discount_percent,
+    )
+    return plan.price_rub
+
+
+def subscription_days_left(expires_at: datetime | None, *, now: datetime | None = None) -> int:
+    if expires_at is None:
+        return 0
+    at = now or datetime.now(timezone.utc)
+    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    left = exp - at.astimezone(timezone.utc) if at.tzinfo else exp - at.replace(tzinfo=timezone.utc)
+    return max(0, int(left.total_seconds() // 86400))
+
+
+def can_renew_subscription_with_tariff(
+    active: Subscription | None,
+    *,
+    window_days: int,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Продление разрешено, если нет активной подписки (первая покупка) или до конца ≤ window_days.
+    """
+    if active is None:
+        return True
+    at = now or datetime.now(timezone.utc)
+    exp = active.expires_at
+    if exp is None or exp <= at:
+        return True
+    return subscription_days_left(exp, now=at) <= int(window_days)
+
+
+def renewal_blocked_message(days_left: int, window_days: int) -> str:
+    return join_lines(
+        plain(
+            "Вы не можете продлить подписку: продление доступно только за "
+        )
+        + bold(str(window_days))
+        + plain(" дн. до окончания подписки."),
+        "",
+        plain("Сейчас до конца осталось: ")
+        + bold(str(days_left))
+        + plain(" дн."),
+    )
 
 
 def plan_tariff_button_label(plan: Plan) -> str:
@@ -301,6 +391,19 @@ async def purchase_plan_with_balance(
 
     now = datetime.now(timezone.utc)
     active = await get_active_subscription(session, user.id)
+    renewal_window = int(settings.subscription_renewal_window_days)
+    if renewal_window > 0 and active is not None and active.expires_at is not None:
+        exp = active.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp > now:
+            long_horizon = (exp - now).total_seconds() >= 86400 * 400
+            if not long_horizon and not can_renew_subscription_with_tariff(
+                active, window_days=renewal_window, now=now
+            ):
+                days_left = subscription_days_left(exp, now=now)
+                return False, renewal_blocked_message(days_left, renewal_window), "error"
+
     hybrid_cap = hybrid_subscription_hwid_cap(settings, user)
     if hybrid_cap is not None:
         dev_limit = hybrid_cap

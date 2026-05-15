@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import secrets
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -32,8 +33,17 @@ from shared.tickets_db_compat import (
 )
 from shared.services.billing_v2.balance_runway_service import compute_balance_runway
 from shared.services.billing_v2.detail_service import user_has_tariff_subscription_charges
+from shared.models.plan import Plan
+from shared.services.feature_flags import tariff_purchases_enabled
 from shared.services.topup_service import create_topup_payment
-from shared.services.subscription_service import get_active_subscription
+from shared.services.subscription_service import (
+    can_renew_subscription_with_tariff,
+    get_active_subscription,
+    list_paid_plans,
+    plan_tariff_button_label,
+    purchase_plan_with_balance,
+    subscription_days_left,
+)
 from tickets.config import config as tickets_config
 from tickets.services import create_ticket, set_ticket_topic
 
@@ -120,10 +130,17 @@ def _subscription_page(
     created_at: datetime | None,
     balance_rub: Decimal | int | float | None,
     bot_open_url: str | None,
+    show_renew_button: bool = False,
 ) -> HTMLResponse:
     bot_href = _esc((bot_open_url or "").strip()) or "#"
     bot_btn_disabled = " opacity-60 pointer-events-none" if not (bot_open_url or "").strip() else ""
     topup_href = f"/sub/{_esc(token)}/topup"
+    renew_href = f"/sub/{_esc(token)}/renew"
+    renew_btn_html = (
+        f'<a class="btn btn-primary" href="{renew_href}">Продлить подписку</a>'
+        if show_renew_button
+        else ""
+    )
     active_badge = "Активна"
     hint_html = f'<div class="subid">{_esc(headline_hint or "")}</div>' if headline_hint else ""
     page = f"""<!DOCTYPE html>
@@ -285,6 +302,7 @@ def _subscription_page(
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
     </section>
     <section class="actions">
+      {renew_btn_html}
       <a class="btn btn-outline" href="{topup_href}">Пополнить баланс</a>
       <a class="btn btn-primary{bot_btn_disabled}" href="{bot_href}">Перейти в бота</a>
     </section>
@@ -292,6 +310,167 @@ def _subscription_page(
   <nav class="hotbar">
     <div class="hotbar-inner">
       <a class="hotbtn active" href="/sub/{_esc(token)}">Моя подписка</a>
+      <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>
+    </div>
+  </nav>
+</body>
+</html>"""
+    return HTMLResponse(page)
+
+
+def _renew_page(
+    *,
+    token: str,
+    plans: list[Plan],
+    can_renew: bool,
+    days_left: int,
+    window_days: int,
+    balance_rub: Decimal | int | float | None,
+    error_message: str | None = None,
+) -> HTMLResponse:
+    back_href = f"/sub/{_esc(token)}"
+    form_action = f"/sub/{_esc(token)}/renew"
+    error_html = (
+        f'<div class="error-box">{_esc(error_message or "")}</div>'
+        if error_message
+        else ""
+    )
+    if can_renew:
+        hint = "Выберите тариф (оплата с баланса)."
+    else:
+        hint = (
+            f"Продление доступно только за {window_days} дн. до окончания подписки. "
+            f"Сейчас осталось {days_left} дн."
+        )
+    plan_buttons: list[str] = []
+    for p in plans:
+        label = _esc(plan_tariff_button_label(p))
+        if can_renew:
+            plan_buttons.append(
+                f'<button type="submit" name="plan_id" value="{p.id}" class="btn btn-tariff">{label}</button>'
+            )
+        else:
+            plan_buttons.append(
+                f'<button type="button" class="btn btn-tariff btn-tariff-disabled" disabled>{label}</button>'
+            )
+    plans_html = "\n".join(plan_buttons) or '<p class="muted">Нет доступных тарифов.</p>'
+    page = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flux Network — продление</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #060a1b;
+      --card: #0b1328;
+      --line: rgba(148, 163, 184, 0.15);
+      --text: #e8edf6;
+      --muted: #95a3bf;
+      --blue: #2b78ff;
+      --blue2: #1f68e8;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+    .wrap {{ max-width: 430px; margin: 0 auto; padding: 20px 14px 90px; }}
+    .brand {{ font-size: 28px; font-weight: 700; margin: 4px 0 14px; }}
+    .brand span {{ color: #f4cc44; margin-right: 6px; }}
+    .card {{
+      background: linear-gradient(180deg, var(--card), #091021);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }}
+    .muted {{ color: var(--muted); font-size: 15px; line-height: 1.45; }}
+    .error-box {{
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fecaca;
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      font-size: 14px;
+    }}
+    .tariffs {{ display: grid; gap: 10px; margin-top: 14px; }}
+    .btn-tariff {{
+      width: 100%;
+      min-height: 52px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(15, 26, 52, 0.85);
+      color: #e8edf6;
+      font-size: 18px;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .btn-tariff-disabled {{
+      opacity: 0.45;
+      cursor: not-allowed;
+      color: #8b9bb8;
+      background: rgba(30, 40, 60, 0.5);
+    }}
+    .btn-back {{
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 48px;
+      margin-top: 14px;
+      border-radius: 12px;
+      text-decoration: none;
+      color: #d8e3fa;
+      border: 1px solid var(--line);
+      font-size: 18px;
+      font-weight: 600;
+    }}
+    .hotbar {{
+      position: fixed; left: 0; right: 0; bottom: 0;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 12, 28, 0.95);
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    }}
+    .hotbar-inner {{
+      max-width: 430px; margin: 0 auto;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }}
+    .hotbtn {{
+      text-decoration: none; color: #c8d5ef;
+      border: 1px solid var(--line); border-radius: 12px;
+      min-height: 46px; display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 600;
+      background: rgba(15, 26, 52, 0.55);
+    }}
+    .hotbtn.active {{
+      color: #fff;
+      border-color: rgba(86, 135, 255, 0.45);
+      background: rgba(39, 101, 224, 0.35);
+    }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="brand"><span>⚡</span>Flux Network</h1>
+    <section class="card">
+      <h2 style="margin:0 0 8px;font-size:22px;">Продлить подписку</h2>
+      <p class="muted">{_esc(hint)}</p>
+      <p class="muted" style="margin-top:8px;">Баланс: {_esc(_format_rub(balance_rub))}</p>
+      {error_html}
+      <form method="post" action="{form_action}" class="tariffs">
+        {plans_html}
+      </form>
+      <a class="btn-back" href="{back_href}">Назад</a>
+    </section>
+  </main>
+  <nav class="hotbar">
+    <div class="hotbar-inner">
+      <a class="hotbtn" href="{back_href}">Моя подписка</a>
       <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>
     </div>
   </nav>
@@ -943,6 +1122,9 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     bot_username = (settings.bot_username or "").strip().lstrip("@")
     if bot_username:
         bot_open_url = f"https://t.me/{bot_username}"
+    show_renew = False
+    if db_user is not None and sub is not None and await tariff_purchases_enabled(settings):
+        show_renew = True
     return _subscription_page(
         token=token,
         headline_value=headline_value,
@@ -951,6 +1133,7 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         created_at=created_at,
         balance_rub=db_user.balance if db_user is not None else Decimal("0"),
         bot_open_url=bot_open_url,
+        show_renew_button=show_renew,
     )
 
 
@@ -1209,6 +1392,101 @@ async def public_subscription_support_media_document(subscription_key: str, msg_
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{_esc(str(row.get("document_file_name") or "document"))}"'},
         )
+
+
+@router.get("/sub/{subscription_key}/renew")
+async def public_subscription_renew_page(subscription_key: str) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>/renew")
+    settings = get_settings()
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        return render_not_found_page(f"/sub/{token}/renew")
+    if not await tariff_purchases_enabled(settings):
+        return render_not_found_page(f"/sub/{token}/renew")
+    window = int(settings.subscription_renewal_window_days)
+    days_left = subscription_days_left(sub.expires_at if sub else None)
+    can_renew = can_renew_subscription_with_tariff(sub, window_days=window)
+    factory = get_session_factory()
+    async with factory() as session:
+        plans = await list_paid_plans(session)
+    return _renew_page(
+        token=token,
+        plans=plans,
+        can_renew=can_renew,
+        days_left=days_left,
+        window_days=window,
+        balance_rub=db_user.balance,
+    )
+
+
+@router.post("/sub/{subscription_key}/renew")
+async def public_subscription_renew_post(
+    subscription_key: str,
+    plan_id: str = Form(""),
+) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>/renew")
+    settings = get_settings()
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None:
+        return render_not_found_page(f"/sub/{token}/renew")
+    if not await tariff_purchases_enabled(settings):
+        return render_not_found_page(f"/sub/{token}/renew")
+    window = int(settings.subscription_renewal_window_days)
+    days_left = subscription_days_left(sub.expires_at if sub else None)
+    can_renew = can_renew_subscription_with_tariff(sub, window_days=window)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        plans = await list_paid_plans(session)
+
+    def _renew_response(*, error: str | None = None) -> HTMLResponse:
+        return _renew_page(
+            token=token,
+            plans=plans,
+            can_renew=can_renew,
+            days_left=days_left,
+            window_days=window,
+            balance_rub=db_user.balance,
+            error_message=error,
+        )
+
+    if not can_renew:
+        return _renew_response(
+            error=f"Продление доступно только за {window} дн. до окончания. Сейчас осталось {days_left} дн."
+        )
+    try:
+        pid = int((plan_id or "").strip())
+    except ValueError:
+        return _renew_response(error="Выберите тариф.")
+    if not any(p.id == pid for p in plans):
+        return _renew_response(error="Тариф недоступен.")
+
+    idem = secrets.token_urlsafe(12)
+    async with factory() as session:
+        user = await session.get(User, db_user.id)
+        if user is None:
+            return _renew_response(error="Пользователь не найден.")
+        ok, msg, kind = await purchase_plan_with_balance(
+            session,
+            user=user,
+            plan_id=pid,
+            telegram_id=int(user.telegram_id),
+            settings=settings,
+            save_to_cart_if_insufficient=False,
+            idempotency_key=f"webrenew:{user.id}:{idem}",
+        )
+        if ok:
+            await session.commit()
+            return RedirectResponse(f"/sub/{token}", status_code=303)
+        await session.rollback()
+    plain_msg = msg.replace("*", "").replace("_", "").replace("`", "") if isinstance(msg, str) else str(msg)
+    if kind == "insufficient":
+        plain_msg = f"{plain_msg} Пополните баланс и повторите."
+    return _renew_response(error=plain_msg[:500])
 
 
 @router.get("/sub/{subscription_key}/topup")
