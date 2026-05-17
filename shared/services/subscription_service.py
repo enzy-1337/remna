@@ -964,6 +964,7 @@ async def unlink_hwid_device_keep_slots(
     user: User,
     hwid: str,
     settings: Settings,
+    initiator: str = "user_bot",
 ) -> tuple[bool, str]:
     """Снять HWID только с панели: слоты подписки (devices_count) и лимит в панели не уменьшаем."""
     sub = await get_active_subscription(session, user.id)
@@ -1002,6 +1003,16 @@ async def unlink_hwid_device_keep_slots(
         meta={"source": "unlink_hwid_device_keep_slots"},
     )
     await session.flush()
+    from shared.services.device_telegram_notify import notify_admin_device_detached
+
+    await notify_admin_device_detached(
+        settings,
+        user=user,
+        hwid=hwid,
+        mode="keep_slots",
+        initiator=initiator,
+        session=session,
+    )
     return True, join_lines(
         plain("Устройство отвязано от панели."),
         plain("Оплаченные слоты не изменялись."),
@@ -1014,6 +1025,7 @@ async def remove_hwid_device_from_panel(
     user: User,
     hwid: str,
     settings: Settings,
+    initiator: str = "user_bot",
 ) -> tuple[bool, str]:
     """Удалить устройство в Remnawave (HWID API) и синхронизировать лимит слотов в боте."""
     sub = await get_active_subscription(session, user.id)
@@ -1074,6 +1086,16 @@ async def remove_hwid_device_from_panel(
         meta={"source": "remove_hwid_device_from_panel"},
     )
     await session.flush()
+    from shared.services.device_telegram_notify import notify_admin_device_detached
+
+    await notify_admin_device_detached(
+        settings,
+        user=user,
+        hwid=hwid,
+        mode="decrease_slot",
+        initiator=initiator,
+        session=session,
+    )
     return True, join_lines(
         plain("Слот снят с подписки, устройство отвязано."),
         plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),
@@ -1086,6 +1108,7 @@ async def remove_device_slot(
     user: User,
     device_id: int,
     settings: Settings,
+    initiator: str = "user_bot",
 ) -> tuple[bool, str]:
     sub = await get_active_subscription(session, user.id)
     if not sub:
@@ -1120,8 +1143,19 @@ async def remove_device_slot(
             return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
     sub.devices_count = new_limit
+    hwid_for_log = str(dev.remnawave_client_id or dev.name or device_id)
     await session.delete(dev)
     await session.flush()
+    from shared.services.device_telegram_notify import notify_admin_device_detached
+
+    await notify_admin_device_detached(
+        settings,
+        user=user,
+        hwid=hwid_for_log,
+        mode="db_slot",
+        initiator=initiator,
+        session=session,
+    )
     return True, join_lines(
         plain("Устройство удалено."),
         plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),

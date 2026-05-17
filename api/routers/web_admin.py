@@ -7083,10 +7083,14 @@ async def admin_user_unlink_hwid(
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
         if mode_n == "keep_slots":
-            ok, msg = await unlink_hwid_device_keep_slots(session, user=user, hwid=hwid, settings=settings)
+            ok, msg = await unlink_hwid_device_keep_slots(
+                session, user=user, hwid=hwid, settings=settings, initiator="web_admin"
+            )
             ncode = "hwid_keep"
         else:
-            ok, msg = await remove_hwid_device_from_panel(session, user=user, hwid=hwid, settings=settings)
+            ok, msg = await remove_hwid_device_from_panel(
+                session, user=user, hwid=hwid, settings=settings, initiator="web_admin"
+            )
             ncode = "hwid_slot"
         if ok:
             await session.commit()
@@ -7106,7 +7110,9 @@ async def admin_user_unlink_device(request: Request, user_id: int, device_id: in
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
-        ok, msg = await remove_device_slot(session, user=user, device_id=device_id, settings=settings)
+        ok, msg = await remove_device_slot(
+            session, user=user, device_id=device_id, settings=settings, initiator="web_admin"
+        )
         if ok:
             await session.commit()
             return RedirectResponse(f"/admin/users/{user_id}?n=db_slot", status_code=303)

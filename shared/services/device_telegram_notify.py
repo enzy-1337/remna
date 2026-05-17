@@ -7,9 +7,17 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
-from shared.md2 import bold, join_lines, plain
+from shared.md2 import bold, code, join_lines, plain
 from shared.models.user import User
+from shared.services.admin_log_topics import AdminLogTopic
+from shared.services.admin_notify import notify_admin
 from shared.services.telegram_notify import delete_telegram_message, send_telegram_message
+
+_DEVICE_DETACH_MODE_RU: dict[str, str] = {
+    "keep_slots": "Отвязка от панели, слоты не менялись",
+    "decrease_slot": "Отвязка и уменьшение лимита слотов",
+    "db_slot": "Удаление слота в БД и обновление лимита",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -53,3 +61,37 @@ async def notify_device_attached_replace_message(
     )
     user.device_notify_message_id = int(mid) if mid is not None else None
     await session.flush()
+
+
+async def notify_admin_device_detached(
+    settings: Settings,
+    *,
+    user: User,
+    hwid: str,
+    mode: str,
+    initiator: str = "user_bot",
+    session: AsyncSession | None = None,
+) -> None:
+    """Сообщение в админ-чат (тема DEVICES) после успешной отвязки устройства."""
+    from shared.services.web_admin_notify import web_admin_actor_notify_line
+
+    hw = ((hwid or "").strip() or "—")[:128]
+    mode_label = _DEVICE_DETACH_MODE_RU.get(mode, mode)
+    lines: list[str] = [
+        plain("Режим: ") + bold(mode_label),
+        plain("HWID: ") + code(hw),
+    ]
+    if initiator == "web_admin":
+        lines.append(web_admin_actor_notify_line())
+    else:
+        lines.append(plain("Инициатор: ") + bold("пользователь в боте"))
+
+    await notify_admin(
+        settings,
+        title="📱 " + bold("Устройство отвязано"),
+        lines=lines,
+        event_type="device_detached",
+        topic=AdminLogTopic.DEVICES,
+        subject_user=user,
+        session=session,
+    )
