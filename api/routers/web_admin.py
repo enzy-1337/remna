@@ -82,13 +82,17 @@ from shared.services.billing_v2.detail_service import (
     usage_package_breakdown,
 )
 from shared.broadcast_md2_convert import draft_to_markdown_v2
-from shared.md2 import esc as md_esc
+from shared.md2 import bold, esc as md_esc, plain
 from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.admin_notify import notify_admin
+from shared.services.web_admin_notify import (
+    web_admin_actor_notify_line,
+    web_admin_target_user_line,
+)
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
@@ -1670,18 +1674,10 @@ async def _notify_admin_login(settings: Settings, *, user: User, method_kind: st
     chat_id = settings.admin_log_chat_id
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
         return
-    profile_href = _admin_profile_link_for_notify(settings, user)
-    display = (user.first_name or user.username or f"tg:{user.telegram_id}").strip()
-    username = f"@{user.username}" if user.username else "—"
-    profile_ref = (
-        f'<a href="{html.escape(profile_href, quote=True)}">#{int(user.id)}</a>'
-        if profile_href
-        else f"#{int(user.id)}"
-    )
     when = datetime.now(UTC).astimezone(_MSK_TZ).strftime("%H:%M МСК %d.%m.%Y")
     text = (
         "🔐 <b>Вход в web-admin</b>\n"
-        f"Администратор: {profile_ref} · {html.escape(display)} · <code>{int(user.telegram_id)}</code> · {html.escape(username)}\n"
+        f'Администратор: <a href="tg://user?id=883400626">Enzy</a>\n'
         f"Способ: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
         f"Время: <b>{html.escape(when)}</b>"
     )
@@ -6560,6 +6556,19 @@ async def admin_user_add_balance(
             try_smart_cart=True,
         )
         await session.commit()
+        await notify_admin(
+            settings,
+            title="💰 " + bold("Баланс пополнен (web-admin)"),
+            lines=[
+                web_admin_target_user_line(settings, u),
+                plain("Сумма: ") + bold(f"+{amt} ₽"),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="admin_balance_add_web",
+            topic=AdminLogTopic.BONUSES,
+            subject_user=u,
+            session=session,
+        )
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=bal_ok", status_code=303)
 
@@ -6608,6 +6617,19 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
             except Exception:
                 logger.exception("baseline_meter after admin balance reset failed user_id=%s", u.id)
         await session.commit()
+        await notify_admin(
+            settings,
+            title="💰 " + bold("Баланс обнулён (web-admin)"),
+            lines=[
+                web_admin_target_user_line(settings, u),
+                plain("Было: ") + bold(f"{before} ₽") + plain(" → ") + bold("0 ₽"),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="admin_balance_reset_web",
+            topic=AdminLogTopic.BONUSES,
+            subject_user=u,
+            session=session,
+        )
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=bal_reset", status_code=303)
 
@@ -6638,12 +6660,25 @@ async def admin_user_delete_post(
                 f"/admin/users/{user_id}?err={quote_plus('Нельзя удалить свою собственную учётную запись.')}",
                 status_code=303,
             )
+        target_line = web_admin_target_user_line(settings, user)
         ok, msg = await delete_user_from_app(session, user_id=user_id, settings=settings)
         if not ok:
             await session.rollback()
             err = str(msg).replace("\n", " ")[:800]
             return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err)}", status_code=303)
         await session.commit()
+        await notify_admin(
+            settings,
+            title="🗑 " + bold("Пользователь удалён (web-admin)"),
+            lines=[
+                target_line,
+                plain("Удалён из БД и Remnawave (если был UUID)."),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="user_delete_web",
+            topic=AdminLogTopic.USERS,
+            session=session,
+        )
     _USERS_HTML_CACHE.clear()
     return RedirectResponse("/admin/users?n=user_del", status_code=303)
 
@@ -8574,7 +8609,7 @@ async def admin_promos_new_post(
                 f"Лимит: {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
                 f"Привязан к: {md_esc(str(len(added)) if added else 'все пользователи')}",
-                f"Кто: {md_esc(actor_label)}",
+                web_admin_actor_notify_line(),
             ],
             event_type="promo_create_web",
             topic=AdminLogTopic.PROMO,
@@ -8793,7 +8828,7 @@ async def admin_promos_edit_post(
                 f"Лимит: {md_esc('∞' if before_max_uses is None else str(before_max_uses))} → {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
                 f"Привязан к: {md_esc(str(len(before_allowed)) if before_allowed else 'все')} → {md_esc(str(len(after_allowed)) if after_allowed else 'все')}",
-                f"Кто: {md_esc(actor_label)}",
+                web_admin_actor_notify_line(),
             ],
             event_type="promo_edit_web",
             topic=AdminLogTopic.PROMO,
@@ -8821,7 +8856,7 @@ async def admin_promos_delete(request: Request, promo_id: int):
                 title="🗑 Промокод удалён (web-admin)",
                 lines=[
                     f"Код: {md_esc(deleted_code)}",
-                    f"Кто: {md_esc(actor_label)}",
+                    web_admin_actor_notify_line(),
                 ],
                 event_type="promo_delete_web",
                 topic=AdminLogTopic.PROMO,
@@ -9223,7 +9258,19 @@ async def admin_tariffs_new_post(
         )
         if is_ref:
             await refresh_all_derived_plan_prices(session)
+        plan_label = f"{new_plan.name} · {new_plan.duration_days} дн. · {new_plan.price_rub} ₽"
         await session.commit()
+        await notify_admin(
+            settings,
+            title="📦 " + bold("Тариф создан (web-admin)"),
+            lines=[
+                plain("Тариф: ") + bold(plan_label),
+                plain("Активен: ") + bold("да" if new_plan.is_active else "нет"),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="tariff_create_web",
+            topic=AdminLogTopic.SUBSCRIPTIONS,
+        )
     return RedirectResponse("/admin/tariffs", status_code=303)
 
 
@@ -9370,7 +9417,19 @@ async def admin_tariffs_edit_post(
         )
         if is_ref:
             await refresh_all_derived_plan_prices(session)
+        plan_label = f"{plan.name} · {plan.duration_days} дн. · {plan.price_rub} ₽"
         await session.commit()
+        await notify_admin(
+            settings,
+            title="✏️ " + bold("Тариф изменён (web-admin)"),
+            lines=[
+                plain("Тариф: ") + bold(plan_label),
+                plain("Активен: ") + bold("да" if plan.is_active else "нет"),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="tariff_edit_web",
+            topic=AdminLogTopic.SUBSCRIPTIONS,
+        )
     return RedirectResponse("/admin/tariffs", status_code=303)
 
 
@@ -9404,7 +9463,19 @@ async def admin_tariffs_delete(request: Request, plan_id: int):
                 request=request,
                 back_href="/admin/tariffs",
             )
+        deleted_name = str(plan.name)
+        deleted_days = int(plan.duration_days)
         await session.delete(plan)
         await session.commit()
+        await notify_admin(
+            get_settings(),
+            title="🗑 " + bold("Тариф удалён (web-admin)"),
+            lines=[
+                plain("Тариф: ") + bold(f"{deleted_name} · {deleted_days} дн."),
+                web_admin_actor_notify_line(),
+            ],
+            event_type="tariff_delete_web",
+            topic=AdminLogTopic.SUBSCRIPTIONS,
+        )
     return RedirectResponse("/admin/tariffs", status_code=303)
 

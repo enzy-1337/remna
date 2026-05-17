@@ -78,7 +78,7 @@ async def build_subscription_detail_caption(
             plain("Пакетный тариф — кнопка «Тарифы» ниже, если нужен фиксированный пакет."),
         ]
         if settings.trial_enabled:
-            lines.append(plain("Либо активируйте триал с главного экрана профиля."))
+            lines.append(plain("Пополните баланс и оформите тариф в «Моя подписка»."))
         return (join_lines(*lines), None)
 
     plan = sub.plan

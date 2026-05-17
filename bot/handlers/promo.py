@@ -151,7 +151,7 @@ async def msg_promo_code(
                 lines = [
                     f"Код: {code(meta['code'])}",
                     "Тип: " + code(meta["type"]),
-                    f"Бонус: +{bold(str(meta['value']))}%",
+                    plain("Бонус: +") + bold(str(meta["value"])) + plain("%"),
                     plain("Сработает 1 раз на первое пополнение после активации."),
                 ]
             else:

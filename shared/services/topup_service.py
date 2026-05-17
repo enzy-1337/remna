@@ -464,9 +464,19 @@ async def notify_topup_success(
     if extra:
         text += f"\n\n{extra}"
     if promo_bonus_rub is not None and promo_bonus_rub > 0:
-        text += f"\n\n🎁 Промокод бонус: +{bold(str(promo_bonus_rub))} ₽."
+        text += (
+            "\n\n"
+            + plain("🎁 Промокод бонус: +")
+            + bold(str(promo_bonus_rub))
+            + plain(" ₽.")
+        )
     if first_topup_extra_rub is not None and first_topup_extra_rub > 0:
-        text += f"\n\n🎁 Первое пополнение: +{bold(str(first_topup_extra_rub))} ₽."
+        text += (
+            "\n\n"
+            + plain("🎁 Первое пополнение: +")
+            + bold(str(first_topup_extra_rub))
+            + plain(" ₽.")
+        )
     if tg is not None and tg > 0:
         if invoice_mid is not None:
             from shared.services.telegram_notify import delete_telegram_message

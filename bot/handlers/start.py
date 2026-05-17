@@ -42,6 +42,26 @@ def default_bot_profile_text() -> str:
     return BOT_PROFILE_LONG_DEFAULT
 
 
+def _registration_intro_lines(
+    *,
+    created: bool,
+    invited_signup_bonus: Decimal | None,
+) -> list[str]:
+    if not created:
+        return [plain("👋 ") + bold("С возвращением!")]
+    lines: list[str] = [
+        plain("👋 ") + bold("Добро пожаловать!"),
+        plain("Аккаунт создан — ниже профиль и разделы бота."),
+    ]
+    if invited_signup_bonus is not None and invited_signup_bonus > 0:
+        lines.append(
+            plain("🎁 Бонус по приглашению: ")
+            + bold(str(invited_signup_bonus))
+            + plain(" ₽ уже на балансе.")
+        )
+    return lines
+
+
 def _no_subscription_profile_hint(
     *,
     settings: Settings,
@@ -49,61 +69,29 @@ def _no_subscription_profile_hint(
     show_welcome_topup: bool,
 ) -> str:
     """Подсказка под профилем, если нет активной подписки."""
+    lines: list[str] = [
+        "",
+        "🚀 " + bold("Как начать"),
+        plain("Пополните баланс и оформите тариф в «Моя подписка» — доступ откроется после оплаты."),
+    ]
+    if show_welcome_topup:
+        lines.append(plain("Кнопка «Пополнить баланс» ниже — быстрый старт."))
     min_rub = int(settings.billing_first_topup_extra_balance_min_rub)
-    if user.billing_mode == "hybrid" and not settings.billing_v2_enabled:
-        return join_lines(
-            "",
-            "💡 " + bold("Пополнение баланса"),
-            plain(
-                "Расширенный биллинг (PAYG v2) на сервере выключен: пополнение только увеличивает баланс в рублях, "
-                "без автоматической выдачи VPN-подписки после оплаты. Подключение — через «Моя подписка» → «Тарифы» или триал."
-            ),
-        )
-    if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
-        lines: list[str] = [
-            "",
-            "💡 " + bold("Старт без пакетного тарифа"),
-            plain(
-                f"Пополните баланс в боте — после первого успешного пополнения от {min_rub} ₽ подключается доступ PAYG "
-                "(устройства и трафик по балансу)."
-            ),
-            plain("Пакетный тариф: «Моя подписка» → «Тарифы», если так удобнее."),
-        ]
-        fb = settings.billing_first_topup_fixed_bonus_rub
-        pct = settings.billing_first_topup_extra_balance_percent
+    fb = settings.billing_first_topup_fixed_bonus_rub
+    pct = settings.billing_first_topup_extra_balance_percent
+    if user.billing_mode == "hybrid" and settings.billing_v2_enabled and show_welcome_topup:
         if fb > Decimal("0") and pct <= Decimal("0"):
             lines.append(
                 plain(
-                    f"Бонус первого зачисления: +{fb.quantize(Decimal('1'))} ₽ при сумме первого пополнения не ниже {min_rub} ₽."
+                    f"При первом пополнении от {min_rub} ₽ — бонус +{fb.quantize(Decimal('1'))} ₽."
                 )
             )
         elif pct > Decimal("0"):
             pct_s = format(pct.normalize(), "f").rstrip("0").rstrip(".")
             lines.append(
-                plain(
-                    f"Бонус первого зачисления: +{pct_s}% к сумме этого платежа при пополнении от {min_rub} ₽."
-                )
+                plain(f"При первом пополнении от {min_rub} ₽ — бонус +{pct_s}% к сумме.")
             )
-        else:
-            lines.append(plain("Бонусы первого зачисления — по настройкам сервера, после успешной оплаты в боте."))
-        if show_welcome_topup:
-            lines.extend(
-                [
-                    "",
-                    "🧪 " + bold("Небольшой тестовый платёж"),
-                    plain(
-                        "Платёж на 10 ₽ можно сделать дополнительно к основному первому пополнению: суммы складываются, "
-                        f"и если общая сумма первого зачисления не ниже {min_rub} ₽, действуют бонусы программы."
-                    ),
-                    plain("Нажмите «Пополнить баланс» ниже и выберите сумму."),
-                ]
-            )
-        return join_lines(*lines)
-    return join_lines(
-        "",
-        "💡 " + bold("Доступ к VPN"),
-        plain("Оформите подписку или триал в разделе «Моя подписка»."),
-    )
+    return join_lines(*lines)
 
 
 async def _had_balance_credit(session: AsyncSession, user_id: int) -> bool:
@@ -167,17 +155,10 @@ async def cmd_start(
     tg = message.from_user
     assert tg is not None
 
-    intro_lines: list[str] = []
+    intro_lines: list[str] = _registration_intro_lines(
+        created=created, invited_signup_bonus=invited_signup_bonus
+    )
     if created:
-        intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
-        if user.referred_by is not None:
-            intro_lines.append(esc("Вы присоединились по приглашению друга."))
-        if invited_signup_bonus is not None and invited_signup_bonus > 0:
-            intro_lines.append(
-                plain("🎁 На баланс начислено ")
-                + bold(str(invited_signup_bonus))
-                + plain(" ₽ за регистрацию по приглашению.")
-            )
         await notify_admin(
             settings,
             title="🆕 " + bold("Новый пользователь"),
@@ -187,8 +168,6 @@ async def cmd_start(
             subject_user=user,
             session=session,
         )
-    else:
-        intro_lines.append(esc("С возвращением!"))
 
     has_act = await get_active_subscription(session, user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(user, has_act))
@@ -260,17 +239,10 @@ async def cb_channel_check(
     if await reject_if_blocked(cq, db_user):
         return
 
-    intro_lines: list[str] = []
+    intro_lines: list[str] = _registration_intro_lines(
+        created=created, invited_signup_bonus=invited_signup_bonus
+    )
     if created:
-        intro_lines.append("✅ " + bold("Регистрация прошла успешно!"))
-        if db_user.referred_by is not None:
-            intro_lines.append(esc("Вы присоединились по приглашению друга."))
-        if invited_signup_bonus is not None and invited_signup_bonus > 0:
-            intro_lines.append(
-                plain("🎁 На баланс начислено ")
-                + bold(str(invited_signup_bonus))
-                + plain(" ₽ за регистрацию по приглашению.")
-            )
         await notify_admin(
             settings,
             title="🆕 " + bold("Новый пользователь"),
