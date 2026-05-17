@@ -83,6 +83,8 @@ def _promo_reward_caption(promo: PromoCode) -> str:
         return f"+{v} устройств"
     if promo.type == "topup_bonus_percent":
         return f"+{v}% к первому пополнению"
+    if promo.type == "extra_days":
+        return f"+{int(v)} дн."
     return f"+{v}"
 
 
@@ -131,6 +133,8 @@ def _list_button_label(promo: PromoCode) -> str:
         r = f"{v}dev"
     elif promo.type == "topup_bonus_percent":
         r = f"{v}%"
+    elif promo.type == "extra_days":
+        r = f"{int(v)}d"
     else:
         r = f"{v}₽"
     s = f"{status} {promo.code} · {r} · до {exp} ·/{limit}"
@@ -177,6 +181,12 @@ def _type_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="📈 % к первому пополнению (1 раз)",
             callback_data=f"{prefix}:type:topup_bonus_percent",
+        )
+    )
+    b.row(
+        InlineKeyboardButton(
+            text="📅 Дни подписки",
+            callback_data=f"{prefix}:type:extra_days",
         )
     )
     b.row(
@@ -461,7 +471,14 @@ async def cb_promos_create_type(
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]
-    if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
+    if promo_type not in {
+        "discount_percent",
+        "balance_rub",
+        "topup_bonus_percent",
+        "extra_gb",
+        "extra_devices",
+        "extra_days",
+    }:
         await cq.answer("Неверный тип.", show_alert=True)
         return
     await state.update_data(create_type=promo_type)
@@ -499,6 +516,13 @@ async def cb_promos_create_type(
                 "Введите количество дополнительных устройств (целое число, например 1).",
                 reply_markup=cancel_kb,
             )
+        elif promo_type == "extra_days":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите дни подписки (целое число, например 3). Без подписки — тест на N дней, с подпиской — продление.",
+                reply_markup=cancel_kb,
+            )
         else:
             await _send_and_track(
                 state,
@@ -525,7 +549,7 @@ async def msg_promos_create_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type in {"extra_gb", "extra_devices"}:
+    if promo_type in {"extra_gb", "extra_devices", "extra_days"}:
         if not raw.isdigit():
             await _send_and_track(state, message, "Нужно целое число.")
             return
@@ -941,6 +965,13 @@ async def cb_promos_edit_field(
                 "Введите скидку в % на следующую покупку тарифа (например 10).",
                 reply_markup=cancel_kb,
             )
+        elif promo.type == "extra_days":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите дни подписки (целое число, например 3).",
+                reply_markup=cancel_kb,
+            )
         elif promo.type in {"extra_gb", "extra_devices"}:
             await _send_and_track(
                 state,
@@ -1002,7 +1033,14 @@ async def cb_promos_edit_type(
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]
-    if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
+    if promo_type not in {
+        "discount_percent",
+        "balance_rub",
+        "topup_bonus_percent",
+        "extra_gb",
+        "extra_devices",
+        "extra_days",
+    }:
         await cq.answer("Неверный тип.", show_alert=True)
         return
     data = await state.get_data()
@@ -1037,6 +1075,13 @@ async def cb_promos_edit_type(
                 "Введите скидку в % на следующую покупку тарифа (например 10).",
                 reply_markup=cancel_kb,
             )
+        elif promo_type == "extra_days":
+            await _send_and_track(
+                state,
+                cq.message,
+                "Введите дни подписки (целое число, например 3).",
+                reply_markup=cancel_kb,
+            )
         elif promo_type in {"extra_gb", "extra_devices"}:
             await _send_and_track(state, cq.message, "Введите целое число.", reply_markup=cancel_kb)
         else:
@@ -1068,7 +1113,7 @@ async def msg_promos_edit_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type in {"extra_gb", "extra_devices"}:
+    if promo_type in {"extra_gb", "extra_devices", "extra_days"}:
         if not raw.isdigit():
             await _send_and_track(state, message, "Нужно целое число.")
             return

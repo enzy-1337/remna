@@ -404,6 +404,134 @@ async def ensure_placeholder_devices(session: AsyncSession, sub: Subscription) -
         await session.flush()
 
 
+async def grant_subscription_extra_days(
+    session: AsyncSession,
+    *,
+    user: User,
+    days: int,
+    settings: Settings,
+    promo_code: str,
+) -> tuple[bool, datetime]:
+    """
+    Добавить дни к активной подписке или выдать новую на N дней (промокод extra_days).
+    Возвращает (была_ли_активная_подписка, новый_expires_at).
+    """
+    if days <= 0:
+        raise ValueError("Количество дней должно быть больше нуля.")
+    if user.telegram_id is None or int(user.telegram_id) <= 0:
+        raise ValueError("У пользователя не привязан Telegram — продление недоступно.")
+
+    base_plan = await get_base_subscription_plan(session)
+    if base_plan is None:
+        raise ValueError("В БД не настроен тариф «Базовый».")
+
+    now = datetime.now(timezone.utc)
+    sub = await get_admin_manageable_subscription(session, user.id)
+    had_active = (
+        sub is not None
+        and sub.expires_at is not None
+        and _as_utc(sub.expires_at) > now
+    )
+
+    from shared.services.optimized_route_service import remnawave_squads_for_db_user
+
+    rw = RemnaWaveClient(settings)
+    squads = remnawave_squads_for_db_user(settings, user)
+    hybrid_cap = hybrid_subscription_hwid_cap(settings, user)
+    dev_limit = hybrid_cap if hybrid_cap is not None else MIN_DEVICES
+    desc = build_remnawave_panel_description(user)
+    tg_id = int(user.telegram_id)
+
+    if sub is None:
+        new_expires = now + timedelta(days=days)
+        traffic_bytes = 0
+        if base_plan.traffic_limit_gb and base_plan.traffic_limit_gb > 0:
+            traffic_bytes = int(base_plan.traffic_limit_gb) * (1024**3)
+        if user.remnawave_uuid is None:
+            existing = await rw.find_user_by_telegram_id(tg_id)
+            if existing is not None and existing.get("uuid"):
+                user.remnawave_uuid = uuid_lib.UUID(str(existing["uuid"]))
+            else:
+                uname = build_remnawave_username_from_db_user(user)
+                created = await _create_rw_user_retries(
+                    rw,
+                    base_username=uname,
+                    telegram_id=tg_id,
+                    expire_at=new_expires,
+                    traffic_limit_bytes=traffic_bytes,
+                    description=desc,
+                    hwid_device_limit=dev_limit,
+                    active_internal_squads=squads,
+                )
+                uid = created.get("uuid")
+                if not uid:
+                    raise RemnaWaveError("Панель не вернула uuid пользователя")
+                user.remnawave_uuid = uuid_lib.UUID(str(uid))
+        await update_rw_user_respecting_hwid_limit(
+            rw,
+            str(user.remnawave_uuid),
+            devices_limit_for_panel=dev_limit,
+            expire_at=new_expires,
+            traffic_limit_bytes=traffic_bytes,
+            status="ACTIVE",
+            description=desc,
+            active_internal_squads=squads,
+        )
+        sub = Subscription(
+            user_id=user.id,
+            plan_id=base_plan.id,
+            remnawave_sub_uuid=user.remnawave_uuid,
+            status="active",
+            devices_count=dev_limit,
+            started_at=now,
+            expires_at=new_expires,
+            auto_renew=False,
+        )
+        session.add(sub)
+        await session.flush()
+        await ensure_placeholder_devices(session, sub)
+        had_active = False
+    else:
+        exp = _as_utc(sub.expires_at) if sub.expires_at else now
+        base_exp = exp if exp > now else now
+        new_expires = base_exp + timedelta(days=days)
+        sub.expires_at = new_expires
+        if sub.status not in ("active", "trial"):
+            sub.status = "active"
+        if user.remnawave_uuid is not None:
+            traffic_bytes = 0
+            plan = await session.get(Plan, sub.plan_id) if sub.plan_id else None
+            if plan and plan.traffic_limit_gb and plan.traffic_limit_gb > 0:
+                traffic_bytes = int(plan.traffic_limit_gb) * (1024**3)
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(user.remnawave_uuid),
+                devices_limit_for_panel=dev_limit,
+                expire_at=new_expires,
+                traffic_limit_bytes=traffic_bytes,
+                status="ACTIVE",
+                description=desc,
+                active_internal_squads=squads,
+            )
+        had_active = exp > now
+
+    session.add(
+        Transaction(
+            user_id=user.id,
+            type="promo_extra_days",
+            amount=Decimal("0"),
+            currency="RUB",
+            payment_provider="promo",
+            payment_id=promo_code,
+            status="completed",
+            description=f"Промокод {promo_code}: +{days} дн. подписки",
+            meta={"promo_type": "extra_days", "days": days, "expires_at": new_expires.isoformat()},
+        )
+    )
+    await session.flush()
+    return had_active, new_expires
+
+
 async def _create_rw_user_retries(
     rw: RemnaWaveClient,
     *,

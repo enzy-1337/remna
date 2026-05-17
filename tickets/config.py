@@ -23,7 +23,7 @@ def _parse_int_csv(raw: str | None) -> list[int]:
 class TicketsConfig:
     bot_token: str = ""
     support_group_id: int = 0
-    reminder_hours: int = 6
+    reminder_hours: int = 12
     auto_close_days: int = 3
     media_max_mb: int = 50
     admin_ids: list[int] = field(default_factory=list)
@@ -40,7 +40,7 @@ class TicketsConfig:
                 return default
 
         support_group_id = _int_env("SUPPORT_GROUP_ID", 0)
-        reminder_hours = _int_env("REMINDER_HOURS", 6)
+        reminder_hours = _int_env("REMINDER_HOURS", 12)
         auto_close_days = _int_env("AUTO_CLOSE_DAYS", 3)
         media_max_mb = _int_env("TICKETS_MEDIA_MAX_MB", 50)
         admin_ids = _parse_int_csv(os.getenv("ADMIN_IDS"))

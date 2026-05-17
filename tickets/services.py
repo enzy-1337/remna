@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 
+from aiogram import Bot
+from aiogram.enums import ParseMode
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.config import Settings, get_settings
 from shared.models.user import User
+from shared.services.billing_v2.detail_service import format_hybrid_billing_today_for_support_topic
+from tickets.config import config
+from tickets.keyboards import topic_ticket_keyboard
 from shared.services.user_registration import get_user_by_telegram_id, register_user
 from shared.tickets_db_compat import (
     ticket_messages_has_photo_file_id_column,
@@ -285,6 +292,83 @@ async def assign_ticket_admin(
         ),
         {"aid": admin_user_id, "atg": admin_telegram_id, "now": now, "tid": ticket_id},
     )
+
+
+async def build_ticket_topic_open_html(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    db_user: User,
+    message_text: str,
+    settings: Settings,
+    display_name: str,
+    telegram_user_id: int,
+    username: str | None = None,
+) -> str:
+    """HTML-текст первого сообщения тикета в теме форума (как в боте поддержки)."""
+    created_line = "Дата: " + datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    disp = (display_name or "Пользователь").strip()
+    user_line = f'<a href="tg://user?id={int(telegram_user_id)}">{html.escape(disp)}</a>'
+    un = ("@" + username) if username else ""
+    billing_html = await format_hybrid_billing_today_for_support_topic(
+        session, user=db_user, settings=settings
+    )
+    body = html.escape((message_text or "").strip())
+    cap = (
+        f"<b>🎫 Тикет #{ticket_id}</b>\n"
+        f"Пользователь: {user_line} {html.escape(un)}\n"
+        f"{created_line}\n\n"
+        f"<blockquote>{body}</blockquote>"
+    )
+    if billing_html:
+        cap += "\n\n" + billing_html
+    return cap
+
+
+async def open_ticket_forum_topic(
+    bot: Bot,
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    db_user: User,
+    message_text: str,
+    display_name: str,
+    telegram_user_id: int,
+    username: str | None = None,
+    settings: Settings | None = None,
+) -> int:
+    """
+    Создать тему форума и отправить открывающее сообщение с клавиатурой админа.
+    Возвращает topic_id.
+    """
+    if config.support_group_id == 0:
+        raise RuntimeError("SUPPORT_GROUP_ID не настроен")
+    s = settings or get_settings()
+    title = f"Тикет #{ticket_id} — {(display_name or 'Пользователь').strip()}"[:128]
+    topic = await bot.create_forum_topic(chat_id=config.support_group_id, name=title)
+    topic_id = int(topic.message_thread_id)
+    await set_ticket_topic(session, ticket_id=ticket_id, topic_id=topic_id)
+    me = await bot.get_me()
+    kb = topic_ticket_keyboard(bot_username=me.username or "", ticket_id=ticket_id)
+    cap = await build_ticket_topic_open_html(
+        session,
+        ticket_id=ticket_id,
+        db_user=db_user,
+        message_text=message_text,
+        settings=s,
+        display_name=display_name,
+        telegram_user_id=telegram_user_id,
+        username=username,
+    )
+    await bot.send_message(
+        chat_id=config.support_group_id,
+        message_thread_id=topic_id,
+        text=cap,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
+    return topic_id
 
 
 async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: bool) -> bool:

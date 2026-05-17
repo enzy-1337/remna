@@ -13,13 +13,6 @@ from tickets.config import config
 log = logging.getLogger("tickets.scheduler")
 
 
-def _admin_mentions_html() -> str:
-    if not config.admin_ids:
-        return ""
-    parts = [f'<a href="tg://user?id={aid}">admin:{aid}</a>' for aid in config.admin_ids]
-    return " ".join(parts)
-
-
 class TicketScheduler:
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -76,10 +69,10 @@ class TicketScheduler:
                 await session.execute(
                     text(
                         """
-                        SELECT t.id, t.topic_id,
-                               EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 3600.0 AS no_reply_hours
+                        SELECT t.id, t.topic_id
                         FROM tickets t
-                        WHERE t.status = 'open'
+                        WHERE t.status IN ('open', 'in_progress')
+                          AND t.admin_reminder_sent_at IS NULL
                           AND t.created_at <= NOW() - (:hrs * INTERVAL '1 hour')
                           AND NOT EXISTS (
                             SELECT 1
@@ -94,15 +87,11 @@ class TicketScheduler:
                     {"hrs": int(config.reminder_hours)},
                 )
             ).all()
-        mentions = _admin_mentions_html()
-        for tid, topic_id, no_reply_hours in rows:
-            try:
-                hours_i = max(1, int(float(no_reply_hours or 0)))
-            except Exception:
-                hours_i = int(config.reminder_hours)
+        hrs = int(config.reminder_hours)
+        for tid, topic_id in rows:
             msg = (
-                f"⏰ Тикет #{int(tid)} не получил ответа уже {hours_i} часов!"
-                + (f"\n\n{mentions}" if mentions else "")
+                f"⏰ Тикет #{int(tid)} без ответа администратора более {hrs} ч. "
+                "Проверьте тему и ответьте пользователю."
             )
             try:
                 await self.bot.send_message(
@@ -111,6 +100,18 @@ class TicketScheduler:
                     text=msg,
                     disable_web_page_preview=True,
                 )
+                async with factory() as session:
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE tickets
+                            SET admin_reminder_sent_at = NOW()
+                            WHERE id = :tid AND admin_reminder_sent_at IS NULL
+                            """
+                        ),
+                        {"tid": int(tid)},
+                    )
+                    await session.commit()
             except Exception:
                 log.exception("Failed to send reminder for ticket #%s", tid)
 

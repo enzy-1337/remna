@@ -46,7 +46,13 @@ from shared.services.subscription_service import (
     subscription_days_left,
 )
 from tickets.config import config as tickets_config
-from tickets.services import create_ticket, set_ticket_topic
+from tickets.services import (
+    add_ticket_message,
+    bump_ticket_activity,
+    create_ticket,
+    get_active_ticket_id,
+    open_ticket_forum_topic,
+)
 
 router = APIRouter(tags=["public-pages"])
 logger = logging.getLogger(__name__)
@@ -941,48 +947,69 @@ async def _resolve_subscription_context(subscription_key: str) -> tuple[dict | N
     return panel_user, db_user, sub
 
 
-async def _ensure_active_support_ticket(*, db_user: User) -> tuple[int, int]:
-    """Возвращает (ticket_id, topic_id). Если активного нет — создаёт новый."""
+def _web_support_display_name(db_user: User) -> str:
+    parts = [p for p in (db_user.first_name, db_user.last_name) if p]
+    if parts:
+        return " ".join(parts).strip()
+    if db_user.username:
+        return f"@{db_user.username}"
+    return f"ID {int(db_user.telegram_id)}"
+
+
+async def _get_active_support_ticket(*, db_user: User) -> tuple[int, int] | None:
+    """Активный тикет (id, topic_id) или None — без автосоздания."""
     factory = get_session_factory()
     async with factory() as session:
-        active_id = (
+        active_id = await get_active_ticket_id(session, user_id=db_user.id)
+        if active_id is None:
+            return None
+        row = (
             await session.execute(
-                text(
-                    """
-                    SELECT id, topic_id
-                    FROM tickets
-                    WHERE user_id=:uid AND status IN ('open','in_progress')
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """
-                ),
-                {"uid": db_user.id},
+                text("SELECT topic_id FROM tickets WHERE id=:tid LIMIT 1"),
+                {"tid": int(active_id)},
             )
         ).mappings().first()
-        if active_id is not None:
-            return int(active_id["id"]), int(active_id["topic_id"] or 0)
+        topic_id = int(row["topic_id"] or 0) if row else 0
+        return int(active_id), topic_id
+
+
+async def _start_web_support_ticket(*, db_user: User, message_text: str) -> tuple[int, int]:
+    """Новый тикет из web: тема форума как в боте поддержки."""
+    factory = get_session_factory()
+    async with factory() as session:
         tid = await create_ticket(
             session,
             user=db_user,
             telegram_user_id=int(db_user.telegram_id),
-            text_body="Тикет создан из web-поддержки.",
+            text_body=message_text,
         )
-        if not tickets_config.bot_token or not tickets_config.support_group_id:
-            await session.commit()
-            return tid, 0
-        title = f"Тикет #{tid} — web user {db_user.id}"[:128]
-        async with Bot(token=tickets_config.bot_token) as bot:
-            topic = await bot.create_forum_topic(chat_id=tickets_config.support_group_id, name=title)
-            topic_id = int(topic.message_thread_id)
-            await set_ticket_topic(session, ticket_id=tid, topic_id=topic_id)
-            await bot.send_message(
-                chat_id=tickets_config.support_group_id,
-                message_thread_id=topic_id,
-                text=f"<b>🎫 Тикет #{tid} из веб-поддержки</b>\nПользователь: <code>{int(db_user.telegram_id)}</code>",
-                parse_mode=ParseMode.HTML,
-            )
+        topic_id = 0
+        if tickets_config.bot_token and tickets_config.support_group_id:
+            settings = get_settings()
+            disp = _web_support_display_name(db_user)
+            async with Bot(token=tickets_config.bot_token) as bot:
+                topic_id = await open_ticket_forum_topic(
+                    bot,
+                    session,
+                    ticket_id=tid,
+                    db_user=db_user,
+                    message_text=message_text,
+                    display_name=disp,
+                    telegram_user_id=int(db_user.telegram_id),
+                    username=db_user.username,
+                    settings=settings,
+                )
         await session.commit()
         return tid, topic_id
+
+
+def _web_support_topic_text(*, ticket_id: int, db_user: User, msg: str) -> str:
+    disp = _web_support_display_name(db_user)
+    user_line = f'<a href="tg://user?id={int(db_user.telegram_id)}">{_esc(disp)}</a>'
+    topic_text = f"<b>✉️ Новое сообщение в тикете #{ticket_id}</b>\nОт: {user_line}"
+    if msg:
+        topic_text += f"\n\n<blockquote>{_esc(msg)}</blockquote>"
+    return topic_text
 
 
 def _page(title: str, message: str, *, variant: str, badge: str, footer: str) -> HTMLResponse:
@@ -1155,7 +1182,10 @@ async def public_subscription_support_messages(subscription_key: str) -> dict[st
     panel_user, db_user, _sub = await _resolve_subscription_context(token)
     if panel_user is None or db_user is None:
         raise HTTPException(status_code=404, detail="Not found")
-    ticket_id, _topic_id = await _ensure_active_support_ticket(db_user=db_user)
+    active = await _get_active_support_ticket(db_user=db_user)
+    if active is None:
+        return {"ticket_id": None, "messages": []}
+    ticket_id, _topic_id = active
     factory = get_session_factory()
     async with factory() as session:
         has_photo = await ticket_messages_has_photo_file_id_column(session)
@@ -1207,7 +1237,15 @@ async def public_subscription_support_send(
     msg = (text_value or "").strip()
     if not msg and file is None:
         raise HTTPException(status_code=400, detail="Message is empty")
-    ticket_id, topic_id = await _ensure_active_support_ticket(db_user=db_user)
+    active = await _get_active_support_ticket(db_user=db_user)
+    is_new_ticket = active is None
+    if is_new_ticket:
+        ticket_id, topic_id = await _start_web_support_ticket(
+            db_user=db_user,
+            message_text=msg or "📎 Вложение",
+        )
+    else:
+        ticket_id, topic_id = active
     photo_file_id: str | None = None
     video_file_id: str | None = None
     document_file_id: str | None = None
@@ -1245,26 +1283,50 @@ async def public_subscription_support_send(
                 sent = await bot.send_document(chat_id=int(db_user.telegram_id), document=upload, caption=msg[:1024] or None)
                 document_file_id = sent.document.file_id if sent.document else None
                 document_name = safe_name
-            if topic_id:
-                topic_caption = "<b>✉️ Сообщение из web-поддержки</b>"
-                if msg:
-                    topic_caption += f"\n\n<blockquote>{_esc(msg)}</blockquote>"
+            if topic_id and file is not None:
+                if is_new_ticket:
+                    cap = msg[:1024] if msg else None
+                else:
+                    cap = _web_support_topic_text(ticket_id=ticket_id, db_user=db_user, msg=msg)[:1024]
                 if photo_file_id:
-                    await bot.send_photo(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, photo=photo_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
+                    await bot.send_photo(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        photo=photo_file_id,
+                        caption=cap,
+                        parse_mode=ParseMode.HTML if cap and not is_new_ticket else None,
+                    )
                 elif video_file_id:
-                    await bot.send_video(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, video=video_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
+                    await bot.send_video(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        video=video_file_id,
+                        caption=cap,
+                        parse_mode=ParseMode.HTML if cap and not is_new_ticket else None,
+                    )
                 elif document_file_id:
-                    await bot.send_document(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, document=document_file_id, caption=topic_caption[:1024], parse_mode=ParseMode.HTML)
-    elif topic_id and tickets_config.bot_token:
+                    await bot.send_document(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        document=document_file_id,
+                        caption=cap,
+                        parse_mode=ParseMode.HTML if cap and not is_new_ticket else None,
+                    )
+    elif topic_id and tickets_config.bot_token and not is_new_ticket:
         async with Bot(token=tickets_config.bot_token) as bot:
             await bot.send_message(
                 chat_id=tickets_config.support_group_id,
                 message_thread_id=topic_id,
-                text=f"<b>✉️ Сообщение из web-поддержки</b>\n\n<blockquote>{_esc(msg)}</blockquote>",
+                text=_web_support_topic_text(ticket_id=ticket_id, db_user=db_user, msg=msg),
                 parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
     factory = get_session_factory()
     async with factory() as session:
+        if is_new_ticket and file is None:
+            await bump_ticket_activity(session, ticket_id=ticket_id, status_to_in_progress=False)
+            await session.commit()
+            return {"ok": True, "ticket_id": ticket_id}
         now = datetime.now(timezone.utc)
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         has_video = await ticket_messages_has_video_file_id_column(session)

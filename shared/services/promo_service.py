@@ -24,6 +24,7 @@ SUPPORTED_PROMO_TYPES = {
     "discount_percent",
     "extra_gb",
     "extra_devices",
+    "extra_days",
 }
 
 
@@ -266,6 +267,48 @@ async def apply_promo_code_for_user_v2(
         )
         await session.flush()
         return True, plain("✅ Начислено ") + bold(str(gb)) + plain(" ГБ."), {"code": promo.code, "type": promo.type, "value": str(gb)}
+
+    if promo.type == "extra_days":
+        from shared.services.subscription_service import grant_subscription_extra_days
+
+        add_days = int(value)
+        if add_days <= 0:
+            return False, plain("Некорректное количество дней."), None
+        try:
+            had_active, new_expires = await grant_subscription_extra_days(
+                session,
+                user=user,
+                days=add_days,
+                settings=settings,
+                promo_code=promo.code,
+            )
+        except ValueError as e:
+            return False, plain(str(e)), None
+        except RemnaWaveError:
+            return False, plain("Не удалось обновить срок подписки в VPN-панели."), None
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            return False, plain("Вы уже использовали этот промокод."), None
+        exp_s = new_expires.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        if had_active:
+            msg = (
+                plain("✅ К подписке добавлено ")
+                + bold(str(add_days))
+                + plain(" дн. Действует до ")
+                + bold(exp_s)
+                + plain(".")
+            )
+        else:
+            msg = (
+                plain("✅ Подписка активирована на ")
+                + bold(str(add_days))
+                + plain(" дн. (до ")
+                + bold(exp_s)
+                + plain(").")
+            )
+        return True, msg, {"code": promo.code, "type": promo.type, "value": str(add_days)}
 
     if promo.type == "extra_devices":
         from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit

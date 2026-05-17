@@ -1858,6 +1858,8 @@ def _promo_reward_caption(promo: PromoCode) -> str:
         return f"+{v} устройств"
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
+    if promo.type == "extra_days":
+        return f"+{int(v)} дн."
     return f"+{v}"
 
 
@@ -1868,6 +1870,7 @@ _PROMO_TYPE_RU: dict[str, str] = {
     "topup_bonus_percent": "% к первому пополнению",
     "extra_gb": "Гигабайты",
     "extra_devices": "Устройства",
+    "extra_days": "Дни подписки",
 }
 
 
@@ -8492,13 +8495,24 @@ async def admin_promos_new_post(
         c = code.strip().upper()
         if not c:
             raise ValueError("Код обязателен")
-        if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices"}:
+        if promo_type not in {
+            "discount_percent",
+            "balance_rub",
+            "topup_bonus_percent",
+            "extra_gb",
+            "extra_devices",
+            "extra_days",
+        }:
             raise ValueError("Неверный тип")
         val = Decimal(value.strip().replace(",", "."))
         if val <= 0:
             raise ValueError("Награда должна быть > 0")
         if promo_type == "discount_percent" and (val <= 0 or val >= 100):
             raise ValueError("discount_percent должен быть в диапазоне (0,100)")
+        if promo_type in {"extra_gb", "extra_devices", "extra_days"} and val != val.to_integral_value():
+            raise ValueError("Для этого типа нужно целое число")
+        if promo_type == "extra_days" and int(val) > 3650:
+            raise ValueError("Слишком много дней")
         mu: int | None = None
         if max_uses.strip() != "-":
             if not max_uses.strip().isdigit():
@@ -8699,13 +8713,25 @@ async def admin_promos_edit_post(
                 back_href="/admin/promos",
             )
         try:
-            if promo_type not in {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_gb", "extra_devices", "bonus_rub"}:
+            if promo_type not in {
+                "discount_percent",
+                "balance_rub",
+                "topup_bonus_percent",
+                "extra_gb",
+                "extra_devices",
+                "extra_days",
+                "bonus_rub",
+            }:
                 raise ValueError("Неверный тип")
             val = Decimal(value.strip().replace(",", "."))
             if val <= 0:
                 raise ValueError("Награда должна быть > 0")
             if promo_type == "discount_percent" and (val <= 0 or val >= 100):
                 raise ValueError("discount_percent должен быть в диапазоне (0,100)")
+            if promo_type in {"extra_gb", "extra_devices", "extra_days"} and val != val.to_integral_value():
+                raise ValueError("Для этого типа нужно целое число")
+            if promo_type == "extra_days" and int(val) > 3650:
+                raise ValueError("Слишком много дней")
             mu: int | None = None
             if max_uses.strip() != "-":
                 if not max_uses.strip().isdigit():
