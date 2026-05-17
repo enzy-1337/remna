@@ -106,6 +106,7 @@ from shared.services.subscription_service import (
     resolve_plan_price_rub,
     admin_convert_monthly_subscriptions_to_payg_balance,
     admin_disable_subscription_record,
+    admin_adjust_subscription_days,
     admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
@@ -1557,7 +1558,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'К сроку подписки добавлены дни.',device_slots_ok:'Лимит устройств (слоты) обновлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -6204,17 +6205,27 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <span class="text-xs opacity-60 max-w-xs">{_esc(tip)}</span>
         </form>
         <div class="divider my-0"></div>
-        <p class="text-sm font-medium">Добавить дни к сроку</p>
-        <p class="text-xs opacity-70 mb-2">Сдвигает дату окончания на указанное число календарных дней (если подписка уже истекла — отсчёт от сегодня).</p>
+        <p class="text-sm font-medium">Изменить срок подписки</p>
+        <p class="text-xs opacity-70 mb-2">Сдвигает дату окончания на указанное число календарных дней (положительное — продлить, отрицательное — сократить; если подписка истекла — отсчёт от сегодня).</p>
         <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="flex flex-wrap items-end gap-2">
           <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
-          <label class="form-control w-28">
-            <span class="label-text text-xs">Дней</span>
-            <input type="number" name="days" min="1" max="3650" value="30" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
+          <label class="form-control w-32">
+            <span class="label-text text-xs">Дней (+/−)</span>
+            <input type="number" name="days" min="-3650" max="3650" value="30" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
           </label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Добавить</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Применить</button>
         </form>
         <div class="flex flex-wrap gap-2 mt-2">
+          <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+            <input type="hidden" name="days" value="-7"/>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">−7</button>
+          </form>
+          <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
+            <input type="hidden" name="days" value="-30"/>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">−30</button>
+          </form>
           <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
             <input type="hidden" name="days" value="7"/>
@@ -6961,56 +6972,23 @@ async def admin_user_subscription_add_days(
     denied = _require_login(request)
     if denied is not None:
         return denied
-    if days < 1 or days > 3650:
-        return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('Дней: от 1 до 3650')}",
-            status_code=303,
-        )
     settings = get_settings()
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
-        sub = (
-            await session.execute(
-                select(Subscription)
-                .options(selectinload(Subscription.plan))
-                .where(Subscription.id == subscription_id, Subscription.user_id == user_id)
-            )
-        ).scalar_one_or_none()
-        if sub is None:
+        ok, err = await admin_adjust_subscription_days(
+            session,
+            user_id=user_id,
+            sub_id=subscription_id,
+            days_delta=int(days),
+            settings=settings,
+        )
+        if not ok:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
+                f"/admin/users/{user_id}?err={quote_plus(err)}",
                 status_code=303,
             )
-        exp = sub.expires_at
-        if exp is None:
-            return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('Нет даты окончания подписки')}",
-                status_code=303,
-            )
-        now = datetime.now(UTC)
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=UTC)
-        base = max(now, exp) if exp < now else exp
-        sub.expires_at = base + timedelta(days=int(days))
-        pl = sub.plan
-        if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
-            bp = await get_base_subscription_plan(session)
-            if bp is not None:
-                sub.plan_id = bp.id
-        if user.remnawave_uuid is not None and not settings.remnawave_stub:
-            rw = RemnaWaveClient(settings)
-            try:
-                await update_rw_user_respecting_hwid_limit(
-                    rw,
-                    str(user.remnawave_uuid),
-                    devices_limit_for_panel=sub.devices_count,
-                    expire_at=sub.expires_at,
-                    status="ACTIVE",
-                )
-            except RemnaWaveError:
-                pass
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=days_ok", status_code=303)

@@ -1169,6 +1169,68 @@ async def list_user_devices(session: AsyncSession, subscription_id: int) -> list
     return list(r.scalars().all())
 
 
+def _subscription_expiry_anchor(exp: datetime, now: datetime) -> datetime:
+    """Опорная дата для сдвига срока: если подписка истекла — от «сейчас»."""
+    return max(now, exp) if exp < now else exp
+
+
+async def admin_adjust_subscription_days(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    sub_id: int,
+    days_delta: int,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """
+    Сдвинуть expires_at на days_delta календарных дней (положительно — продлить, отрицательно — сократить).
+    Синхронизирует Remnawave. Для триала (кроме смены плана) переводит на базовый тариф как при ручном продлении.
+    """
+    if days_delta == 0 or days_delta < -3650 or days_delta > 3650:
+        return False, "Допустимо от -3650 до 3650 дней (не 0)."
+    sub = (
+        await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.id == sub_id, Subscription.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if sub is None:
+        return False, "Подписка не найдена."
+    if sub.expires_at is None:
+        return False, "Нет даты окончания подписки."
+
+    now = datetime.now(timezone.utc)
+    exp = _as_utc(sub.expires_at)
+    anchor = _subscription_expiry_anchor(exp, now)
+    new_exp = anchor + timedelta(days=days_delta)
+    if new_exp < now:
+        new_exp = now
+    sub.expires_at = new_exp
+
+    pl = sub.plan
+    if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
+        bp = await get_base_subscription_plan(session)
+        if bp is not None:
+            sub.plan_id = bp.id
+
+    u = await session.get(User, user_id)
+    rw_status = "ACTIVE" if new_exp > now else "DISABLED"
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+                expire_at=sub.expires_at,
+                status=rw_status,
+            )
+        except RemnaWaveError as e:
+            logger.warning("admin_adjust_subscription_days RW failed: %s", e)
+    return True, ""
+
+
 async def admin_disable_subscription_record(
     session: AsyncSession,
     *,
