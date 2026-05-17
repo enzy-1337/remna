@@ -51,7 +51,7 @@ def apply_ipv4_preferred_dns() -> None:
 def _private_chat_commands() -> list[BotCommand]:
     """Меню команд в личке основного бота — только /start."""
     return [
-        BotCommand(command="start", description="Главное меню и профиль"),
+        BotCommand(command="start", description="Личный кабинет и меню"),
     ]
 
 
