@@ -161,18 +161,6 @@ def _type_select_keyboard(prefix: str) -> InlineKeyboardMarkup:
     )
     b.row(
         InlineKeyboardButton(
-            text="📊 Дополнительные ГБ",
-            callback_data=f"{prefix}:type:extra_gb",
-        )
-    )
-    b.row(
-        InlineKeyboardButton(
-            text="🖥 Дополнительные устройства",
-            callback_data=f"{prefix}:type:extra_devices",
-        )
-    )
-    b.row(
-        InlineKeyboardButton(
             text="💰 Деньги на баланс",
             callback_data=f"{prefix}:type:balance_rub",
         )
@@ -475,8 +463,6 @@ async def cb_promos_create_type(
         "discount_percent",
         "balance_rub",
         "topup_bonus_percent",
-        "extra_gb",
-        "extra_devices",
         "extra_days",
     }:
         await cq.answer("Неверный тип.", show_alert=True)
@@ -500,20 +486,6 @@ async def cb_promos_create_type(
                 state,
                 cq.message,
                 "Введите скидку в % на следующую покупку тарифа (например 10).",
-                reply_markup=cancel_kb,
-            )
-        elif promo_type == "extra_gb":
-            await _send_and_track(
-                state,
-                cq.message,
-                "Введите дополнительные ГБ (целое число, например 5).",
-                reply_markup=cancel_kb,
-            )
-        elif promo_type == "extra_devices":
-            await _send_and_track(
-                state,
-                cq.message,
-                "Введите количество дополнительных устройств (целое число, например 1).",
                 reply_markup=cancel_kb,
             )
         elif promo_type == "extra_days":
@@ -549,7 +521,7 @@ async def msg_promos_create_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type in {"extra_gb", "extra_devices", "extra_days"}:
+    if promo_type == "extra_days":
         if not raw.isdigit():
             await _send_and_track(state, message, "Нужно целое число.")
             return
@@ -972,13 +944,6 @@ async def cb_promos_edit_field(
                 "Введите дни подписки (целое число, например 3).",
                 reply_markup=cancel_kb,
             )
-        elif promo.type in {"extra_gb", "extra_devices"}:
-            await _send_and_track(
-                state,
-                cq.message,
-                "Введите целое число (например 5).",
-                reply_markup=cancel_kb,
-            )
         else:
             await _send_and_track(
                 state,
@@ -1037,8 +1002,6 @@ async def cb_promos_edit_type(
         "discount_percent",
         "balance_rub",
         "topup_bonus_percent",
-        "extra_gb",
-        "extra_devices",
         "extra_days",
     }:
         await cq.answer("Неверный тип.", show_alert=True)
@@ -1082,8 +1045,6 @@ async def cb_promos_edit_type(
                 "Введите дни подписки (целое число, например 3).",
                 reply_markup=cancel_kb,
             )
-        elif promo_type in {"extra_gb", "extra_devices"}:
-            await _send_and_track(state, cq.message, "Введите целое число.", reply_markup=cancel_kb)
         else:
             await _send_and_track(
                 state,
@@ -1113,7 +1074,7 @@ async def msg_promos_edit_value(
     await _try_delete_by_id(message.bot, message.chat.id, prompt_mid if isinstance(prompt_mid, int) else None)
     await delete_message_safe(message)
 
-    if promo_type in {"extra_gb", "extra_devices", "extra_days"}:
+    if promo_type == "extra_days":
         if not raw.isdigit():
             await _send_and_track(state, message, "Нужно целое число.")
             return

@@ -24,6 +24,12 @@ class PromoCode(Base):
     used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    require_no_active_subscription: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    require_no_paid_subscription_months: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

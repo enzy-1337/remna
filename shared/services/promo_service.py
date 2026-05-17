@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -26,6 +26,67 @@ SUPPORTED_PROMO_TYPES = {
     "extra_devices",
     "extra_days",
 }
+
+_PAID_SUBSCRIPTION_TXN_TYPES = ("subscription", "subscription_autorenew")
+
+
+async def user_has_recent_paid_subscription(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    months: int,
+    now: datetime | None = None,
+) -> bool:
+    """Была ли успешная покупка/продление тарифа за последние N календарных месяцев (~30 дн.)."""
+    if months < 1:
+        return False
+    at = now or datetime.now(timezone.utc)
+    cutoff = at - timedelta(days=int(months) * 30)
+    row = (
+        await session.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.type.in_(_PAID_SUBSCRIPTION_TXN_TYPES),
+                Transaction.status == "completed",
+                Transaction.created_at >= cutoff,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def validate_promo_activation_eligibility(
+    session: AsyncSession,
+    *,
+    promo: PromoCode,
+    user: User,
+) -> str | None:
+    """
+    Дополнительные условия из web-admin. None — можно активировать.
+    Возвращает готовый текст ошибки (MarkdownV2).
+    """
+    from shared.services.subscription_service import get_active_subscription
+
+    if bool(getattr(promo, "require_no_active_subscription", False)):
+        if await get_active_subscription(session, user.id) is not None:
+            return plain("Промокод доступен только без активной подписки.")
+
+    months = getattr(promo, "require_no_paid_subscription_months", None)
+    if months is not None and int(months) > 0:
+        if await user_has_recent_paid_subscription(session, user.id, months=int(months)):
+            m = int(months)
+            if m == 1:
+                tail = "1 месяц"
+            elif 2 <= m <= 4:
+                tail = f"{m} месяца"
+            else:
+                tail = f"{m} месяцев"
+            return plain(
+                "Промокод для тех, кто не покупал подписку последние "
+            ) + plain(tail) + plain(".")
+    return None
 
 
 async def get_pending_purchase_discount_percent(
@@ -152,6 +213,10 @@ async def apply_promo_code_for_user_v2(
     )
     if used.scalar_one_or_none() is not None:
         return False, plain("Вы уже использовали этот промокод."), None
+
+    elig_err = await validate_promo_activation_eligibility(session, promo=promo, user=user)
+    if elig_err is not None:
+        return False, elig_err, None
 
     now = datetime.now(timezone.utc)
     value = Decimal(str(promo.value))

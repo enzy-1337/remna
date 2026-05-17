@@ -1864,15 +1864,45 @@ _PROMO_TYPE_RU: dict[str, str] = {
     "balance_rub": "Деньги на баланс (₽)",
     "bonus_rub": "Бонус на баланс (₽, устар.)",
     "topup_bonus_percent": "% к первому пополнению",
-    "extra_gb": "Гигабайты",
-    "extra_devices": "Устройства",
+    "extra_gb": "Гигабайты (устар.)",
+    "extra_devices": "Устройства (устар.)",
     "extra_days": "Дни подписки",
 }
+
+_PROMO_TYPES_SELECTABLE = frozenset(
+    {"discount_percent", "balance_rub", "topup_bonus_percent", "extra_days"}
+)
 
 
 def _promo_type_ru(t: str) -> str:
     """Человеко-читаемое название типа промокода для web-admin."""
     return _PROMO_TYPE_RU.get((t or "").strip(), t or "")
+
+
+def _parse_promo_eligibility_form(
+    require_no_active_subscription: str,
+    require_no_paid_subscription_months: str,
+) -> tuple[bool, int | None]:
+    req_active = (require_no_active_subscription or "").strip() == "1"
+    raw = (require_no_paid_subscription_months or "").strip()
+    months: int | None = None
+    if raw and raw not in ("-", "—"):
+        if not raw.isdigit():
+            raise ValueError("«Месяцев без покупки подписки» — целое число или пусто")
+        months = int(raw)
+        if months < 1:
+            raise ValueError("«Месяцев без покупки» — минимум 1 или оставьте пусто")
+    return req_active, months
+
+
+def _promo_eligibility_summary(promo: PromoCode) -> str:
+    parts: list[str] = []
+    if bool(getattr(promo, "require_no_active_subscription", False)):
+        parts.append("без активной подписки")
+    m = getattr(promo, "require_no_paid_subscription_months", None)
+    if m is not None and int(m) > 0:
+        parts.append(f"не покупали подписку {int(m)} мес.")
+    return ", ".join(parts) if parts else "без доп. условий"
 
 
 def _web_admin_actor_label(request: Request) -> str:
@@ -8197,15 +8227,19 @@ def _promo_form(
     type_options = "".join(
         f"<option value='{_esc(k)}' {'selected' if p and p.type == k else ''}>{_esc(v)}</option>"
         for k, v in _PROMO_TYPE_RU.items()
-        if k != "bonus_rub"
-        # bonus_rub оставляем поддержку при редактировании старых, но не в выборе
+        if k in _PROMO_TYPES_SELECTABLE
     )
-    # Если у текущего промокода тип bonus_rub — добавим его опцией, чтобы select остался валидным
-    if p is not None and p.type == "bonus_rub":
+    # Устаревшие типы — только чтобы select остался валидным при редактировании
+    if p is not None and p.type not in _PROMO_TYPES_SELECTABLE:
+        legacy_label = _promo_type_ru(p.type)
         type_options = (
-            "<option value='bonus_rub' selected>Бонус на баланс (₽, устар.)</option>"
+            f"<option value='{_esc(p.type)}' selected>{_esc(legacy_label)}</option>"
             + type_options
         )
+
+    req_no_active = bool(getattr(p, "require_no_active_subscription", False)) if p else False
+    req_months = getattr(p, "require_no_paid_subscription_months", None) if p else None
+    req_months_val = str(int(req_months)) if req_months is not None and int(req_months) > 0 else ""
 
     return f"""
     <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
@@ -8230,6 +8264,19 @@ def _promo_form(
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" />
             <span class="label-text-alt text-xs opacity-70 mt-1">Если ниже выбраны пользователи — лимит игнорируется, каждый из списка может активировать 1 раз.</span>
           </label>
+          <div class="form-control w-full rounded-lg border border-base-content/10 bg-base-200/30 p-4 gap-3">
+            <span class="label-text font-medium">Условия активации</span>
+            <span class="label-text-alt text-xs opacity-70">Повторная активация одним пользователем всегда запрещена.</span>
+            <label class="label cursor-pointer justify-start gap-3 py-1">
+              <input type="checkbox" name="require_no_active_subscription" value="1" class="checkbox checkbox-sm" {'checked' if req_no_active else ''} />
+              <span class="label-text text-sm">Только без активной подписки (в т.ч. триал)</span>
+            </label>
+            <label class="form-control w-full max-w-xs">
+              <span class="label-text text-sm">Не покупали подписку, месяцев</span>
+              <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="require_no_paid_subscription_months" type="number" min="1" max="24" step="1" placeholder="пусто = не проверять" value="{_esc(req_months_val)}" />
+              <span class="label-text-alt text-xs opacity-70">Например <code class="text-xs">2</code> для TEST3.</span>
+            </label>
+          </div>
           <div class="form-control w-full">
             <span class="label-text font-medium">Срок действия</span>
             <span class="label-text-alt text-xs opacity-70 mb-1">Выберите дату в календаре или отметьте «без срока». Пустая дата без галочки тоже означает без ограничения по времени.</span>
@@ -8522,6 +8569,8 @@ async def admin_promos_new_post(
     expires_unlimited: str = Form(""),
     is_active: str = Form("true"),
     allowed_user_ids: str = Form(""),
+    require_no_active_subscription: str = Form(""),
+    require_no_paid_subscription_months: str = Form(""),
 ):
     denied = _require_login(request)
     if denied is not None:
@@ -8530,24 +8579,20 @@ async def admin_promos_new_post(
         c = code.strip().upper()
         if not c:
             raise ValueError("Код обязателен")
-        if promo_type not in {
-            "discount_percent",
-            "balance_rub",
-            "topup_bonus_percent",
-            "extra_gb",
-            "extra_devices",
-            "extra_days",
-        }:
+        if promo_type not in _PROMO_TYPES_SELECTABLE:
             raise ValueError("Неверный тип")
         val = Decimal(value.strip().replace(",", "."))
         if val <= 0:
             raise ValueError("Награда должна быть > 0")
         if promo_type == "discount_percent" and (val <= 0 or val >= 100):
             raise ValueError("discount_percent должен быть в диапазоне (0,100)")
-        if promo_type in {"extra_gb", "extra_devices", "extra_days"} and val != val.to_integral_value():
-            raise ValueError("Для этого типа нужно целое число")
+        if promo_type == "extra_days" and val != val.to_integral_value():
+            raise ValueError("Для дней подписки нужно целое число")
         if promo_type == "extra_days" and int(val) > 3650:
             raise ValueError("Слишком много дней")
+        req_no_active, req_months = _parse_promo_eligibility_form(
+            require_no_active_subscription, require_no_paid_subscription_months
+        )
         mu: int | None = None
         if max_uses.strip() != "-":
             if not max_uses.strip().isdigit():
@@ -8590,6 +8635,8 @@ async def admin_promos_new_post(
             max_uses=mu,
             expires_at=exp,
             is_active=active,
+            require_no_active_subscription=req_no_active,
+            require_no_paid_subscription_months=req_months,
             created_by_user_id=admin_db_id,
         )
         session.add(promo)
@@ -8609,6 +8656,7 @@ async def admin_promos_new_post(
                 f"Лимит: {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
                 f"Привязан к: {md_esc(str(len(added)) if added else 'все пользователи')}",
+                f"Условия: {md_esc(_promo_eligibility_summary(promo))}",
                 web_admin_actor_notify_line(),
             ],
             event_type="promo_create_web",
@@ -8675,6 +8723,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         <p>Тип: <span class="badge badge-ghost">{_esc(_promo_type_ru(promo.type))}</span> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
         <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
         <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b> · Доступен: <b>{_esc(scope_caption)}</b></p>
+        <p>Условия активации: <b>{_esc(_promo_eligibility_summary(promo))}</b></p>
         <div class="flex flex-wrap gap-2">
           <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
           <form method="post" action="/admin/promos/{promo.id}/delete" data-remna-confirm-msg="Удалить промокод?">
@@ -8734,6 +8783,8 @@ async def admin_promos_edit_post(
     expires_unlimited: str = Form(""),
     is_active: str = Form("true"),
     allowed_user_ids: str = Form(""),
+    require_no_active_subscription: str = Form(""),
+    require_no_paid_subscription_months: str = Form(""),
 ):
     denied = _require_login(request)
     if denied is not None:
@@ -8748,25 +8799,21 @@ async def admin_promos_edit_post(
                 back_href="/admin/promos",
             )
         try:
-            if promo_type not in {
-                "discount_percent",
-                "balance_rub",
-                "topup_bonus_percent",
-                "extra_gb",
-                "extra_devices",
-                "extra_days",
-                "bonus_rub",
-            }:
+            allowed_types = set(_PROMO_TYPES_SELECTABLE) | {promo.type, "bonus_rub"}
+            if promo_type not in allowed_types:
                 raise ValueError("Неверный тип")
             val = Decimal(value.strip().replace(",", "."))
             if val <= 0:
                 raise ValueError("Награда должна быть > 0")
             if promo_type == "discount_percent" and (val <= 0 or val >= 100):
                 raise ValueError("discount_percent должен быть в диапазоне (0,100)")
-            if promo_type in {"extra_gb", "extra_devices", "extra_days"} and val != val.to_integral_value():
-                raise ValueError("Для этого типа нужно целое число")
+            if promo_type == "extra_days" and val != val.to_integral_value():
+                raise ValueError("Для дней подписки нужно целое число")
             if promo_type == "extra_days" and int(val) > 3650:
                 raise ValueError("Слишком много дней")
+            req_no_active, req_months = _parse_promo_eligibility_form(
+                require_no_active_subscription, require_no_paid_subscription_months
+            )
             mu: int | None = None
             if max_uses.strip() != "-":
                 if not max_uses.strip().isdigit():
@@ -8812,6 +8859,8 @@ async def admin_promos_edit_post(
         promo.max_uses = mu
         promo.expires_at = exp
         promo.is_active = active
+        promo.require_no_active_subscription = req_no_active
+        promo.require_no_paid_subscription_months = req_months
         added, removed = await _sync_promo_allowed_users(
             session, promo_id=int(promo.id), user_ids=allow_ids
         )
@@ -8828,6 +8877,7 @@ async def admin_promos_edit_post(
                 f"Лимит: {md_esc('∞' if before_max_uses is None else str(before_max_uses))} → {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
                 f"Привязан к: {md_esc(str(len(before_allowed)) if before_allowed else 'все')} → {md_esc(str(len(after_allowed)) if after_allowed else 'все')}",
+                f"Условия: {md_esc(_promo_eligibility_summary(promo))}",
                 web_admin_actor_notify_line(),
             ],
             event_type="promo_edit_web",
