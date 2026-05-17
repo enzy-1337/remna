@@ -24,6 +24,10 @@ from shared.services.trial_service import trial_eligible
 from shared.md2 import bold, esc, join_lines, plain
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
+from shared.services.pending_start_referral import (
+    resolve_start_args_for_new_user,
+    save_pending_referral_start,
+)
 from shared.services.user_registration import register_user
 from shared.services.billing_v2.transition_service import maybe_switch_to_hybrid
 
@@ -132,7 +136,12 @@ async def cmd_start(
     is_bot_admin: bool = False,
 ) -> None:
     settings = get_settings()
+    payload = extract_start_payload(message)
     if not is_channel_member:
+        if message.from_user is not None:
+            await save_pending_referral_start(
+                message.from_user.id, payload, settings=settings
+            )
         await message.answer(
             esc(
                 "👋 Добро пожаловать!\n\n"
@@ -143,8 +152,13 @@ async def cmd_start(
         )
         return
 
-    payload = extract_start_payload(message)
-    user, created, invited_signup_bonus = await register_user(session, message.from_user, payload)
+    assert message.from_user is not None
+    start_args = await resolve_start_args_for_new_user(
+        message.from_user.id, payload, settings=settings
+    )
+    user, created, invited_signup_bonus = await register_user(
+        session, message.from_user, start_args
+    )
     await maybe_switch_to_hybrid(session, user=user, now=None, settings=settings)
 
     if await reject_if_blocked(message, user):
@@ -237,7 +251,10 @@ async def cb_channel_check(
     created = False
     invited_signup_bonus = None
     if db_user is None:
-        db_user, created, invited_signup_bonus = await register_user(session, tg_user, None)
+        start_args = await resolve_start_args_for_new_user(tg_user.id, None, settings=settings)
+        db_user, created, invited_signup_bonus = await register_user(
+            session, tg_user, start_args
+        )
     await maybe_switch_to_hybrid(session, user=db_user, now=None, settings=settings)
 
     if await reject_if_blocked(cq, db_user):
