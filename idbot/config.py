@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shared.bot_cta import DEFAULT_BOT_CTA_LABEL
+
 
 class IdBotSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -16,6 +18,11 @@ class IdBotSettings(BaseSettings):
 
     idbot_bot_token: str = Field(default="", validation_alias="IDBOT_BOT_TOKEN")
     bot_username: str | None = Field(default=None, validation_alias="BOT_USERNAME")
+    bot_cta_label: str = Field(
+        default=DEFAULT_BOT_CTA_LABEL,
+        validation_alias="BOT_CTA_LABEL",
+        description="Подпись рекламной inline-кнопки. Подстановка: {username}",
+    )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     admin_log_chat_id: str | int | None = Field(default=None, validation_alias="ADMIN_LOG_CHAT_ID")
     admin_log_topic_boot: int | None = Field(default=None, validation_alias="ADMIN_LOG_TOPIC_BOOT")

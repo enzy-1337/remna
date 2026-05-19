@@ -2,27 +2,19 @@
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
+from shared.bot_cta import build_bot_cta_keyboard
 from shared.md2 import bold, code, esc, italic, join_lines, link, plain
 
 
-def cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None:
-    """Inline-кнопка в стиле основного бота: 💜 @<bot_username>."""
-    uname = (bot_username or "").strip().lstrip("@")
-    if not uname:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💜 @{uname}",
-                    url=f"https://t.me/{uname}",
-                    style="primary",
-                )
-            ],
-        ]
-    )
+def cta_keyboard(
+    bot_username: str | None,
+    *,
+    label_template: str | None = None,
+) -> InlineKeyboardMarkup | None:
+    """Inline-кнопка в стиле основного бота (см. BOT_CTA_LABEL / shared.bot_cta)."""
+    return build_bot_cta_keyboard(bot_username, label_template=label_template)
 
 
 def format_user_telegram_card(

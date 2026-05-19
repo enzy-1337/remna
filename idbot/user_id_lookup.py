@@ -48,7 +48,8 @@ def _full_name(user: TgUser | None) -> str:
 
 
 def _reply_markup():
-    return cta_keyboard(get_idbot_settings().bot_username)
+    settings = get_idbot_settings()
+    return cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
 
 
 async def _answer_from_tg_user(message: Message, user: TgUser) -> None:

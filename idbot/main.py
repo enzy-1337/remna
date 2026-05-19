@@ -96,7 +96,7 @@ async def cmd_start_private(message: Message, command: CommandObject) -> None:
     if tg is None:
         return
     name = display_name(tg.first_name, tg.last_name)
-    kb = cta_keyboard(settings.bot_username)
+    kb = cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
 
     chat_id_from_payload = _parse_chat_payload(command.args)
     if chat_id_from_payload is not None:
@@ -170,7 +170,7 @@ async def cb_choose_destination(cq: CallbackQuery) -> None:
     settings = get_idbot_settings()
     bot = cq.bot
     name = display_name(clicker.first_name, clicker.last_name)
-    cta_kb = cta_keyboard(settings.bot_username)
+    cta_kb = cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
 
     # Текст для группы и для ЛС: тот же блок с Чат ID — для пользователя это самое полезное.
     id_text = format_user_telegram_card(

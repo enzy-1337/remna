@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shared.bot_cta import DEFAULT_BOT_CTA_LABEL
+
 
 class DownloaderSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -19,6 +21,11 @@ class DownloaderSettings(BaseSettings):
     downloader_max_file_mb: int = Field(default=0, ge=0, validation_alias="DOWNLOADER_MAX_FILE_MB")
     downloader_max_duration_sec: int = Field(default=0, ge=0, validation_alias="DOWNLOADER_MAX_DURATION_SEC")
     bot_username: str | None = Field(default=None, validation_alias="BOT_USERNAME")
+    bot_cta_label: str = Field(
+        default=DEFAULT_BOT_CTA_LABEL,
+        validation_alias="BOT_CTA_LABEL",
+        description="Подпись рекламной inline-кнопки. Подстановка: {username}",
+    )
     database_url: str = Field(..., validation_alias="DATABASE_URL")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     admin_log_chat_id: str | int | None = Field(default=None, validation_alias="ADMIN_LOG_CHAT_ID")

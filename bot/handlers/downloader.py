@@ -12,7 +12,8 @@ import string
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputMediaPhoto
+from aiogram.types import FSInputFile, Message, InputMediaPhoto
+from shared.bot_cta import build_bot_cta_keyboard
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,21 +60,6 @@ async def _maybe_compress_for_telegram(
     if compressed is None:
         return video_path, size_bytes, False
     return compressed, int(compressed.stat().st_size), True
-
-
-def _build_cta_keyboard(bot_username: str | None) -> InlineKeyboardMarkup | None:
-    uname = (bot_username or "").strip().lstrip("@")
-    if not uname:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💜 @{uname}", url=f"https://t.me/{uname}", style="primary"
-                )
-            ],
-        ]
-    )
 
 
 async def _generate_unique_referral_code(session: AsyncSession) -> str:
@@ -262,7 +248,7 @@ async def handle_download_link(
                             )
                         )
                         return
-                kb = _build_cta_keyboard(settings.bot_username)
+                kb = build_bot_cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
                 sent_user_video: Message | None = None
                 sent_user_photos: list[Message] = []
                 delivered_size = video.size_bytes

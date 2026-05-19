@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from pydantic import AliasChoices, Field, computed_field, field_validator, model_validator
 
+from shared.bot_cta import DEFAULT_BOT_CTA_LABEL
 from shared.services.admin_log_topics import AdminLogTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,6 +31,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="BOT_USERNAME",
         description="Username бота без @ (для реф. ссылок на шаге 9)",
+    )
+    bot_cta_label: str = Field(
+        default=DEFAULT_BOT_CTA_LABEL,
+        validation_alias="BOT_CTA_LABEL",
+        description="Подпись рекламной inline-кнопки в ботах. Подстановка: {username} — username без @",
     )
     bot_profile_short_description: str | None = Field(
         default=None,
