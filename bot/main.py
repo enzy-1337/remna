@@ -24,7 +24,8 @@ from bot.bootstrap_db import bootstrap_bot_database_schema
 from bot.factory import apply_ipv4_preferred_dns, create_bot_and_dispatcher
 from shared.config import get_settings
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
+from shared.md2 import bold, join_lines, plain
+from shared.services.admin_notify import notify_admin
 
 
 async def main() -> None:
@@ -52,14 +53,14 @@ async def main() -> None:
     bg_tasks = start_background_loops(settings, stop_event)
     try:
         boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
-        sent = await notify_admin_plain(
+        await notify_admin(
             settings,
-            text=f"🚀 Основной бот запущен (polling)\n{boot_ts}",
+            title="🚀 " + bold("Основной бот запущен (polling)"),
+            lines=[plain(boot_ts)],
             topic=AdminLogTopic.BOOT,
             event_type="bot_startup",
         )
-        if sent:
-            log.info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
+        log.info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
         await dp.start_polling(bot)
     finally:
         stop_event.set()

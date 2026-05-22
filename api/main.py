@@ -33,7 +33,8 @@ from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
+from shared.md2 import bold, plain
+from shared.services.admin_notify import notify_admin
 from shared.services.broadcast_service import tick_scheduled_broadcast_queue
 
 logging.basicConfig(
@@ -135,23 +136,20 @@ async def lifespan(app: FastAPI):
             datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
         )
         mode = "webhook" if s.telegram_webhook_enabled else "polling"
-        lines = [
-            "🚀 Сайт (API) запущен",
-            f"Режим Telegram: {mode}",
-        ]
+        boot_lines = [plain("Режим Telegram: ") + bold(mode)]
         if s.telegram_webhook_enabled:
             wh_url = (s.telegram_webhook_url or "").strip()
             if wh_url:
-                lines.append(f"URL: {wh_url}")
-        lines.append(boot_ts)
-        sent = await notify_admin_plain(
+                boot_lines.append(plain("URL: ") + bold(wh_url))
+        boot_lines.append(plain(boot_ts))
+        await notify_admin(
             s,
-            text="\n".join(lines),
+            title="🚀 " + bold("Сайт (API) запущен"),
+            lines=boot_lines,
             topic=AdminLogTopic.BOOT,
             event_type="api_startup",
         )
-        if sent:
-            log.info("Уведомление о запуске сайта отправлено в админ-чат (тема BOOT).")
+        log.info("Уведомление о запуске сайта отправлено в админ-чат (тема BOOT).")
     except Exception:
         log.debug("admin notify api startup", exc_info=True)
 

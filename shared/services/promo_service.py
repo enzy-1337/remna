@@ -356,7 +356,9 @@ async def apply_promo_code_for_user_v2(
         except IntegrityError:
             await session.rollback()
             return False, plain("Вы уже использовали этот промокод."), None
-        exp_s = new_expires.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        from shared.datetime_msk import fmt_dt_msk
+
+        exp_s = fmt_dt_msk(new_expires)
         if had_active:
             msg = (
                 plain("✅ К подписке добавлено ")

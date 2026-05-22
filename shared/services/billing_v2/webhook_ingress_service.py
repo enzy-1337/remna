@@ -16,7 +16,7 @@ from shared.models.device_history import DeviceHistory
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
+from shared.services.admin_notify import notify_admin
 from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.billing_v2.billing_calendar import billing_today
@@ -413,28 +413,29 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                 await notify_device_attached_replace_message(
                     session, user, settings, first_ever=first_ever_device
                 )
+                from shared.md2 import bold, code, link, plain
+
                 model = (
                     hist_meta.get("device_model")
                     or hist_meta.get("device_name")
                     or "—"
                 )
-                who = (user.first_name or user.username or f"user#{user.id}").strip()
-                username = f" @{user.username}" if user.username else ""
                 profile_url = _web_admin_user_profile_url(settings, user)
-                admin_text = (
-                    "📱 Новое устройство\n"
-                    f"Пользователь: {who}{username}\n"
-                    f"Telegram ID: {int(user.telegram_id)}\n"
-                    f"HWID: {hwid}\n"
-                    f"Модель: {model}\n"
-                    + (f"Профиль: {profile_url}\n" if profile_url else "")
-                    + f"Событие: {event_type}"
-                )
-                await notify_admin_plain(
+                admin_lines: list[str] = [
+                    plain("HWID: ") + code(hwid),
+                    plain("Модель: ") + bold(str(model)),
+                    plain("Событие: ") + code(event_type),
+                ]
+                if profile_url:
+                    admin_lines.append(link("Профиль в админке", profile_url))
+                await notify_admin(
                     settings,
-                    text=admin_text,
+                    title="📱 " + bold("Новое устройство"),
+                    lines=admin_lines,
                     topic=AdminLogTopic.DEVICES,
                     event_type="device_attached_admin_log",
+                    subject_user=user,
+                    session=session,
                 )
             row.status = "processed"
     elif event_type == "subscription.status":

@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy import text
 
 from shared.config import get_settings
+from shared.md2 import strip_for_popup_alert
 from shared.database import get_session_factory
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.models.subscription import Subscription
@@ -675,7 +676,22 @@ def _support_page(token: str) -> HTMLResponse:
     .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:44px 1fr 44px; gap:8px; align-items:center; }}
     .iconbtn {{ width:44px; height:44px; border-radius:12px; border:1px solid var(--line); background:#0d1730; color:#dbe6ff; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
     .input {{ width:100%; height:44px; border-radius:12px; border:1px solid var(--line); background:#0b142b; color:#fff; padding:10px 12px; }}
-    .attach-info {{ max-width:430px; margin:6px auto 0; color:var(--muted); font-size:12px; }}
+    .attach-preview-wrap {{ max-width:430px; margin:8px auto 0; display:none; }}
+    .attach-preview-wrap.visible {{ display:block; }}
+    .attach-preview {{
+      position:relative; display:inline-flex; flex-direction:column; align-items:flex-start; gap:4px;
+      padding:6px; border-radius:12px; border:1px solid var(--line); background:rgba(15,26,52,.55);
+    }}
+    .attach-preview img {{
+      width:72px; height:72px; border-radius:8px; object-fit:cover; border:1px solid var(--line);
+      background:rgba(255,255,255,.04);
+    }}
+    .attach-preview .fname {{ max-width:140px; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+    .attach-preview .rm {{
+      position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:6px;
+      border:1px solid var(--line); background:rgba(7,12,28,.9); color:#fff; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; font-size:12px; line-height:1;
+    }}
     .hotbar {{
       position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line);
       background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
@@ -704,7 +720,13 @@ def _support_page(token: str) -> HTMLResponse:
       <button id="send" class="iconbtn" type="button">➤</button>
       <input id="file" type="file" accept="image/*" style="display:none" />
     </div>
-    <div id="attach-info" class="attach-info"></div>
+    <div id="attach-preview-wrap" class="attach-preview-wrap">
+      <div class="attach-preview">
+        <button id="attach-rm" class="rm" type="button" title="Убрать вложение">✕</button>
+        <img id="attach-thumb" src="" alt="Превью"/>
+        <span id="attach-fname" class="fname"></span>
+      </div>
+    </div>
   </div>
   <nav class="hotbar">
     <div class="hotbar-inner">
@@ -723,7 +745,11 @@ def _support_page(token: str) -> HTMLResponse:
     const send = document.getElementById('send');
     const pick = document.getElementById('pick');
     const file = document.getElementById('file');
-    const attachInfo = document.getElementById('attach-info');
+    const attachPreviewWrap = document.getElementById('attach-preview-wrap');
+    const attachThumb = document.getElementById('attach-thumb');
+    const attachFname = document.getElementById('attach-fname');
+    const attachRm = document.getElementById('attach-rm');
+    let attachObjectUrl = null;
     const lb = document.getElementById('img-lb');
     const lbImg = document.getElementById('img-lb-src');
     const lbClose = document.getElementById('img-lb-close');
@@ -796,9 +822,26 @@ def _support_page(token: str) -> HTMLResponse:
         render(await r.json());
       }} catch (_e) {{}}
     }}
-    function updateAttachInfo() {{
-      if (!attachInfo || !file) return;
-      attachInfo.textContent = file.files && file.files[0] ? ('Файл: ' + file.files[0].name) : '';
+    function clearAttachPreview() {{
+      if (attachObjectUrl) {{ URL.revokeObjectURL(attachObjectUrl); attachObjectUrl = null; }}
+      if (attachThumb) attachThumb.removeAttribute('src');
+      if (attachFname) attachFname.textContent = '';
+      if (attachPreviewWrap) attachPreviewWrap.classList.remove('visible');
+    }}
+    function updateAttachPreview() {{
+      if (!file) return;
+      const f = file.files && file.files[0];
+      clearAttachPreview();
+      if (!f) return;
+      if (attachFname) attachFname.textContent = f.name || '';
+      if (f.type && f.type.startsWith('image/') && attachThumb) {{
+        attachObjectUrl = URL.createObjectURL(f);
+        attachThumb.src = attachObjectUrl;
+      }} else if (attachThumb) {{
+        attachThumb.src = '';
+        attachThumb.alt = 'Файл';
+      }}
+      if (attachPreviewWrap) attachPreviewWrap.classList.add('visible');
     }}
     async function sendMsg() {{
       const t = (txt.value||'').trim();
@@ -814,7 +857,7 @@ def _support_page(token: str) -> HTMLResponse:
         if (!r.ok) throw new Error('send failed');
         txt.value='';
         if (file) file.value = '';
-        updateAttachInfo();
+        clearAttachPreview();
         await load();
       }} finally {{
         send.disabled = false;
@@ -841,7 +884,13 @@ def _support_page(token: str) -> HTMLResponse:
     }});
     if (pick && file) {{
       pick.addEventListener('click', () => file.click());
-      file.addEventListener('change', updateAttachInfo);
+      file.addEventListener('change', updateAttachPreview);
+    }}
+    if (attachRm) {{
+      attachRm.addEventListener('click', () => {{
+        if (file) file.value = '';
+        clearAttachPreview();
+      }});
     }}
     send.addEventListener('click', sendMsg);
     txt.addEventListener('keydown', (e)=>{{ if (e.key==='Enter') {{ e.preventDefault(); sendMsg(); }} }});
@@ -1554,7 +1603,7 @@ async def public_subscription_renew_post(
             await session.commit()
             return RedirectResponse(f"/sub/{token}", status_code=303)
         await session.rollback()
-    plain_msg = msg.replace("*", "").replace("_", "").replace("`", "") if isinstance(msg, str) else str(msg)
+    plain_msg = strip_for_popup_alert(msg) if isinstance(msg, str) else str(msg)
     if kind == "insufficient":
         plain_msg = f"{plain_msg} Пополните баланс и повторите."
     return _renew_response(error=plain_msg[:500])

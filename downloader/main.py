@@ -44,11 +44,14 @@ def main() -> None:
         if chat_id is not None and (not isinstance(chat_id, str) or chat_id.strip()):
             boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
             try:
+                from shared.md2 import bold, join_lines, plain
+
+                boot_text = join_lines("🎬 " + bold("Reels bot запущен"), plain(boot_ts))
                 await bot.send_message(
                     chat_id=chat_id,
                     message_thread_id=settings.admin_log_topic_boot or settings.admin_log_topic_id,
-                    text=f"🎬 Reels bot запущен\n{boot_ts}",
-                    parse_mode=None,
+                    text=boot_text,
+                    parse_mode="MarkdownV2",
                 )
             except Exception:
                 logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление downloader-бота")

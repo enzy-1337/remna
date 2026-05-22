@@ -58,11 +58,14 @@ def main() -> None:
                 return
             thread_id = settings.admin_log_topic_boot or settings.admin_log_topic_id
             boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
+            from shared.md2 import bold, join_lines, plain
+
+            boot_text = join_lines("🛟 " + bold("Support bot запущен"), plain(boot_ts))
             await bot.send_message(
                 chat_id=chat_id,
                 message_thread_id=thread_id,
-                text=f"🛟 Support bot запущен\n{boot_ts}",
-                parse_mode=None,
+                text=boot_text,
+                parse_mode="MarkdownV2",
             )
             logging.getLogger(__name__).info(
                 "Уведомление о запуске бота поддержки отправлено от имени самого бота (тема BOOT)."

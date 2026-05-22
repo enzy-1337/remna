@@ -8,6 +8,8 @@ from typing import Any
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_FLOOR, Decimal
 
+from shared.datetime_msk import fmt_dt_msk
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -801,7 +803,7 @@ async def purchase_plan_with_balance(
         plain("Оплачен пакет: ") + bold(purchased_plan.name),
         plain("Учётный тариф: ") + bold(base_plan.name),
         plain("Действует до: ")
-        + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
+        + bold(fmt_dt_msk(new_expires)),
     )
     if discount_percent > 0 and discount_amount > 0:
         msg = join_lines(
@@ -836,7 +838,7 @@ async def purchase_plan_with_balance(
         lines=[
             plain("Пакет: ") + bold(purchased_plan.name),
             plain("Списано: ") + bold(str(price)) + plain(" ₽"),
-            plain("До: ") + bold(new_expires.strftime("%d.%m.%Y %H:%M") + " UTC"),
+            plain("До: ") + bold(fmt_dt_msk(new_expires)),
         ],
         event_type="purchase_plan",
         topic=AdminLogTopic.SUBSCRIPTIONS,

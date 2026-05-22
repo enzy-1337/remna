@@ -21,10 +21,11 @@ from bot.utils.screen_photo import (
     send_profile_screen,
 )
 from shared.config import get_settings
-from shared.md2 import bold, code, join_lines, plain
+from shared.md2 import bold, join_lines, plain
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import notify_admin
+from shared.promo_admin_lines import promo_apply_admin_notify_lines
 from shared.services.promo_service import apply_promo_code_for_user
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
@@ -145,21 +146,7 @@ async def msg_promo_code(
 
     if ok:
         if meta:
-            mt = (meta.get("type") or "").strip().lower()
-            lines: list[str]
-            if mt == "topup_bonus_percent":
-                lines = [
-                    f"Код: {code(meta['code'])}",
-                    "Тип: " + code(meta["type"]),
-                    plain("Бонус: +") + bold(str(meta["value"])) + plain("%"),
-                    plain("Сработает 1 раз на первое пополнение после активации."),
-                ]
-            else:
-                lines = [
-                    f"Код: {code(meta['code'])}",
-                    f"Тип: {code(meta['type'])}",
-                    f"Сумма: {bold(str(meta['value']))} ₽",
-                ]
+            lines = promo_apply_admin_notify_lines(meta)
             await notify_admin(
                 settings,
                 title="🎁 " + bold("Промокод применён"),
