@@ -6156,7 +6156,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     personal_pricing_block = f"""
     <div class="rounded-2xl border border-secondary/30 bg-base-200/30 p-4 mt-3">
       <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Персональные тарифы</h3>
-      <p class="text-xs opacity-70 mb-3">Действуют только для этого пользователя при покупке тарифов в боте. Своя цена имеет приоритет над скидкой.</p>
+      <p class="text-xs opacity-70 mb-3">Действуют только для этого пользователя. Своя цена и скидка % суммируются (скидка применяется к персональной цене).</p>
       <div class="flex flex-wrap items-end gap-3">
         <form method="post" action="/admin/users/{user_id}/personal-pricing/custom-month-price" class="flex flex-wrap items-end gap-2">
           <label class="form-control">

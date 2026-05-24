@@ -134,26 +134,29 @@ async def resolve_user_plan_price_rub(
 ) -> Decimal:
     """
     Цена тарифа для конкретного пользователя.
-    Приоритет: персональная база ₽/мес → персональная скидка % → каталог.
+    Сначала персональная база ₽/мес (если задана), затем персональная скидка % поверх.
     """
+    catalog = await resolve_plan_price_rub(session, plan)
     custom_base = user_custom_month_price_rub(user)
     if custom_base is not None:
         ref = await get_one_month_reference_plan(session)
         if ref is not None and plan.id == ref.id:
-            return custom_base
-        if is_one_month_duration(plan.duration_days):
-            return custom_base
-        return calculate_tariff_price_from_base_month(
-            custom_base,
-            duration_days=int(plan.duration_days),
-            discount_percent=plan.discount_percent,
-        )
-    catalog = await resolve_plan_price_rub(session, plan)
+            base_price = custom_base
+        elif is_one_month_duration(plan.duration_days):
+            base_price = custom_base
+        else:
+            base_price = calculate_tariff_price_from_base_month(
+                custom_base,
+                duration_days=int(plan.duration_days),
+                discount_percent=plan.discount_percent,
+            )
+    else:
+        base_price = catalog
     disc = user_personal_discount_percent(user)
     if disc > 0:
-        _, _, final = calculate_discounted_plan_price(plan, disc, price_rub=catalog)
+        _, _, final = calculate_discounted_plan_price(plan, disc, price_rub=base_price)
         return final
-    return catalog
+    return base_price
 
 
 def effective_tariff_discount_percent_for_user(

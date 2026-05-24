@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
@@ -26,17 +26,65 @@ from shared.services.referral_service import grant_referrer_reward_from_topup
 logger = logging.getLogger(__name__)
 
 
-def _format_topup_invoice_description(*, provider_name: str, user: User) -> str:
+def _format_topup_invoice_description(
+    *,
+    provider_name: str,
+    user: User,
+    payment_number: int,
+) -> str:
     """
     Текст описания счёта у провайдера (Platega обрезает description до 512 символов на стороне API).
     """
+    _ = provider_name
     tag = (user.username or "").strip().lstrip("@")
     if tag:
         who = f"@{tag}"
     else:
         who = "TG без username"
-    text = f"акк #{user.id} · {who} · tg {user.telegram_id}"
+    text = f"№{payment_number} · акк #{user.id} · {who} · tg {user.telegram_id}"
     return text[:512]
+
+
+async def _next_topup_payment_number(session: AsyncSession, user_id: int) -> int:
+    """Порядковый номер следующего пополнения пользователя (1, 2, 3…)."""
+    n = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Transaction)
+                .where(
+                    Transaction.user_id == user_id,
+                    Transaction.type == "topup",
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    return n + 1
+
+
+async def topup_payment_ordinal(session: AsyncSession, txn: Transaction) -> int:
+    """Порядковый номер пополнения по счёту (по id транзакции)."""
+    stored = (txn.meta or {}).get("topup_payment_number")
+    if stored is not None:
+        try:
+            return int(stored)
+        except (TypeError, ValueError):
+            pass
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Transaction)
+                .where(
+                    Transaction.user_id == txn.user_id,
+                    Transaction.type == "topup",
+                    Transaction.id <= txn.id,
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
 
 
 async def try_apply_smart_cart_after_topup(
@@ -95,7 +143,12 @@ async def create_topup_payment(
     if amount_rub < settings.billing_min_topup_rub:
         raise ValueError(f"Минимальная сумма пополнения: {settings.billing_min_topup_rub} ₽")
     prov = get_payment_provider(provider_name, settings)
-    invoice_description = _format_topup_invoice_description(provider_name=provider_name, user=user)
+    payment_number = await _next_topup_payment_number(session, user.id)
+    invoice_description = _format_topup_invoice_description(
+        provider_name=provider_name,
+        user=user,
+        payment_number=payment_number,
+    )
     txn = Transaction(
         user_id=user.id,
         type="topup",
@@ -105,7 +158,7 @@ async def create_topup_payment(
         payment_id=None,
         status="pending",
         description=invoice_description,
-        meta={"telegram_id": telegram_id},
+        meta={"telegram_id": telegram_id, "topup_payment_number": payment_number},
     )
     session.add(txn)
     await session.flush()

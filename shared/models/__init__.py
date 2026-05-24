@@ -10,6 +10,7 @@ from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.device_history import DeviceHistory
 from shared.models.downloader_user_topic import DownloaderUserTopic
+from shared.models.music_user_topic import MusicUserTopic
 from shared.models.notification_log import NotificationLog
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoUsage
@@ -31,6 +32,7 @@ __all__ = [
     "BillingDailySummary",
     "DeviceHistory",
     "DownloaderUserTopic",
+    "MusicUserTopic",
     "RemnawaveWebhookEvent",
     "User",
     "Plan",

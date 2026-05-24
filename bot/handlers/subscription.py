@@ -353,7 +353,17 @@ async def _render_tariff_list(
         body = join_lines(banner, "", body)
     custom_month = user_custom_month_price_rub(db_user)
     personal_disc = user_personal_discount_percent(db_user)
-    if custom_month is not None:
+    if custom_month is not None and personal_disc > 0:
+        body = join_lines(
+            body,
+            "",
+            plain("💰 Персональная цена ")
+            + bold(str(custom_month.quantize(Decimal("0.01"))))
+            + plain(" ₽/мес и скидка ")
+            + bold(str(personal_disc))
+            + plain("% (применяются вместе)."),
+        )
+    elif custom_month is not None:
         body = join_lines(
             body,
             "",

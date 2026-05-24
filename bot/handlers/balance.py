@@ -30,6 +30,7 @@ from shared.services.topup_service import (
     create_topup_payment,
     manual_check_and_apply_topup,
     notify_topup_success,
+    topup_payment_ordinal,
 )
 
 logger = logging.getLogger(__name__)
@@ -148,9 +149,12 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
             )
         else:
             prov = _ru_payment_provider(t.payment_provider)
+            pay_no = await topup_payment_ordinal(session, t)
             lines.append(
                 "• "
-                + plain("Пополнение ")
+                + plain("№")
+                + bold(str(pay_no))
+                + plain(" · Пополнение ")
                 + bold(amt_s)
                 + plain(" ₽ · ")
                 + prov
@@ -448,12 +452,14 @@ async def cb_topup_provider(
 
     await cq.answer()
     label = "CryptoBot" if prov_name == "cryptobot" else "Platega"
+    pay_no = int((txn.meta or {}).get("topup_payment_number") or 0)
     text = join_lines(
         plain("💳 Счёт через ")
         + bold(label)
         + plain(" на ")
         + bold(amount_s)
         + plain(" ₽ создан."),
+        plain("Номер платежа: ") + bold(f"№{pay_no}"),
         "",
         plain("Нажмите кнопку ниже, чтобы перейти к оплате."),
         "",

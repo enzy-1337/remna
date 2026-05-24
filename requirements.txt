@@ -13,3 +13,5 @@ segno>=1.6.1
 aiosqlite>=0.20
 pyotp>=2.9
 yt-dlp>=2025.1.0
+shazamio>=0.6.0
+mutagen>=1.47.0

@@ -19,9 +19,7 @@ from shared.integrations.rw_traffic import (
 )
 from shared.md2 import bold, code, esc, italic, join_lines, plain
 from shared.models.user import User
-from shared.services.billing_v2.balance_runway_service import compute_balance_runway
-from shared.services.billing_v2.detail_service import user_has_tariff_subscription_charges
-from shared.services.subscription_service import TRIAL_PLAN_NAME, count_devices, get_active_subscription
+from shared.services.subscription_service import count_devices, get_active_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +72,9 @@ async def build_subscription_detail_caption(
             "🔑 " + bold("Подписка"),
             "",
             plain("Нет активной записи подписки."),
-            plain("При гибридном биллинге после пополнения баланса доступ PAYG включается автоматически."),
-            plain("Пакетный тариф — кнопка «Тарифы» ниже, если нужен фиксированный пакет."),
         ]
         if settings.trial_enabled:
-            lines.append(plain("Пополните баланс и оформите тариф в «Моя подписка»."))
+            lines.append(plain("Оформите тариф в разделе «Моя подписка»."))
         return (join_lines(*lines), None)
 
     plan = sub.plan
@@ -185,52 +181,13 @@ async def build_subscription_detail_caption(
         ]
     )
 
-    is_trial_plan = plan is not None and plan.name == TRIAL_PLAN_NAME
-    payg_balance_view = (
-        settings.billing_v2_enabled
-        and user.billing_mode == "hybrid"
-        and not is_trial_plan
-        and not await user_has_tariff_subscription_charges(session, user.id)
+    quote_lines.append(
+        plain("🗓️ До: ")
+        + bold(exp_msk)
+        + plain(" (")
+        + esc(left_phrase)
+        + plain(")"),
     )
-    if payg_balance_view:
-        runway = await compute_balance_runway(session, user=user, settings=settings)
-        if runway is None:
-            quote_lines.append(
-                plain("⏱️ ")
-                + bold("Баланс")
-                + plain(
-                    ": оценка «на сколько дней хватит» появится после минимум трёх календарных дней "
-                    "с ненулевыми списаниями PAYG (см. детализацию)."
-                )
-            )
-        else:
-            quote_lines.extend(
-                [
-                    plain("⏱️ ")
-                    + bold("Баланс")
-                    + plain(": ~")
-                    + bold(str(runway.estimated_days_int))
-                    + plain(" дн. до нижнего порога."),
-                    plain("📅 Ориентир: до ")
-                    + bold(runway.until_day.strftime("%d.%m.%Y"))
-                    + plain(" (")
-                    + esc(settings.billing_calendar_timezone)
-                    + plain(")."),
-                ]
-            )
-        quote_lines.append(
-            italic(
-                "Срок «До» в панели технический для PAYG; без купленного пакетного тарифа ориентируйтесь на баланс."
-            )
-        )
-    else:
-        quote_lines.append(
-            plain("🗓️ До: ")
-            + bold(exp_msk)
-            + plain(" (")
-            + esc(left_phrase)
-            + plain(")"),
-        )
     quoted_block = "\n".join("> " + line for line in quote_lines)
     caption = join_lines(header, "", quoted_block)
     if sub_url:

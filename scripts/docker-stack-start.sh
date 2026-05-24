@@ -26,7 +26,7 @@ log "Running database migrations..."
 "${COMPOSE[@]}" run --rm migrate
 
 log "Starting application services..."
-"${COMPOSE[@]}" up -d bot api tickets-bot downloader-bot idbot
+"${COMPOSE[@]}" up -d bot api tickets-bot downloader-bot music-bot idbot
 
 log "Stack status:"
 "${COMPOSE[@]}" ps
