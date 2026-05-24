@@ -11,6 +11,8 @@ class AdminSubscriptionStates(StatesGroup):
     waiting_add_months = State()
     waiting_add_days = State()
     waiting_add_balance = State()
+    waiting_custom_month_price = State()
+    waiting_personal_discount = State()
     waiting_rw_lookup_query = State()
     waiting_manual_bind_subscription_id = State()
 

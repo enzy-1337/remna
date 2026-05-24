@@ -59,10 +59,15 @@ from shared.services.referral_service import count_invited_users
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.subscription_service import (
+    MAX_DEVICES,
+    MIN_DEVICES,
     admin_adjust_subscription_days,
+    admin_adjust_subscription_device_slots,
     admin_convert_monthly_subscriptions_to_payg_balance,
     get_base_subscription_plan,
     resolve_legacy_transition_base_month_rub,
+    user_custom_month_price_rub,
+    user_personal_discount_percent,
 )
 
 logger = logging.getLogger(__name__)
@@ -877,12 +882,32 @@ async def _build_user_card(
         plain("Причина блока: ") + reason,
         sep,
     ]
+    custom_price = user_custom_month_price_rub(u)
+    personal_disc = user_personal_discount_percent(u)
+    if custom_price is not None or personal_disc > 0:
+        lines.append("🏷 " + bold("Персональные тарифы"))
+        if custom_price is not None:
+            lines.append(
+                plain("Своя цена ₽/мес: ")
+                + bold(str(custom_price.quantize(Decimal("0.01"))))
+                + plain(" ₽")
+            )
+        else:
+            lines.append(plain("Своя цена ₽/мес: ") + italic("не задана"))
+        if personal_disc > 0:
+            lines.append(plain("Скидка на тарифы: ") + bold(str(personal_disc)) + plain("%"))
+        else:
+            lines.append(plain("Скидка на тарифы: ") + italic("не задана"))
+        lines.append(plain("────────────────────────"))
     if sub is None:
         lines.append("📋 " + bold("Подписка"))
         lines.append(plain("Нет активной или отключённой записи для действий."))
     else:
         lines.append("📋 " + bold("Подписка"))
         lines.extend(_subscription_caption_lines(sub, plan))
+        lines.append(
+            plain("Слотов устройств: ") + bold(str(sub.devices_count)) + plain(f" (мин. {MIN_DEVICES}, макс. {MAX_DEVICES})")
+        )
 
     b = InlineKeyboardBuilder()
     if u.is_blocked:
@@ -936,6 +961,51 @@ async def _build_user_card(
                 callback_data=f"admin:days:{u.id}:{sub.id}",
             )
         )
+        slot_row: list[InlineKeyboardButton] = []
+        if int(sub.devices_count) < MAX_DEVICES:
+            slot_row.append(
+                InlineKeyboardButton(
+                    text="➕ Слот",
+                    callback_data=f"admin:slot+:{u.id}:{sub.id}",
+                )
+            )
+        if int(sub.devices_count) > MIN_DEVICES:
+            slot_row.append(
+                InlineKeyboardButton(
+                    text="➖ Слот",
+                    callback_data=f"admin:slot-:{u.id}:{sub.id}",
+                )
+            )
+        if slot_row:
+            b.row(*slot_row)
+
+    b.row(
+        InlineKeyboardButton(
+            text="💰 Своя цена ₽/мес",
+            callback_data=f"admin:cp:{u.id}",
+        ),
+        InlineKeyboardButton(
+            text="🏷 Скидка %",
+            callback_data=f"admin:pd:{u.id}",
+        ),
+    )
+    clr_row: list[InlineKeyboardButton] = []
+    if custom_price is not None:
+        clr_row.append(
+            InlineKeyboardButton(
+                text="✖ Цена",
+                callback_data=f"admin:cpclr:{u.id}",
+            )
+        )
+    if personal_disc > 0:
+        clr_row.append(
+            InlineKeyboardButton(
+                text="✖ Скидка",
+                callback_data=f"admin:pdclr:{u.id}",
+            )
+        )
+    if clr_row:
+        b.row(*clr_row)
 
     b.row(
         InlineKeyboardButton(
@@ -2520,6 +2590,278 @@ async def msg_admin_add_balance(
         caption=join_lines(plain(f"✅ Баланс пополнен на +{amount} ₽"), "", cap),
         reply_markup=kb,
         settings=settings,
+        delete_message=None,
+        photo_key="admin:users:card",
+    )
+
+
+@router.callback_query(F.data.startswith("admin:slot+:") | F.data.startswith("admin:slot-:"))
+async def cb_admin_adjust_slot(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) < 4:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[2])
+        sub_id = int(parts[3])
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    delta = 1 if parts[1] == "slot+" else -1
+    settings = get_settings()
+    ok, msg = await admin_adjust_subscription_device_slots(
+        session,
+        user_id=user_id,
+        sub_id=sub_id,
+        delta=delta,
+        settings=settings,
+    )
+    if not ok:
+        await cq.answer(strip_for_popup_alert(str(msg))[:200], show_alert=True)
+        return
+    await session.commit()
+    await cq.answer(str(msg)[:200])
+    await _render_user_card(cq, session, user_id=user_id)
+
+
+@router.callback_query(F.data.startswith("admin:cpclr:"))
+async def cb_admin_clear_custom_price(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    u = await session.get(User, uid)
+    if u is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    u.custom_subscription_month_price_rub = None
+    await session.commit()
+    await cq.answer("Своя цена снята")
+    await _render_user_card(cq, session, user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:pdclr:"))
+async def cb_admin_clear_personal_discount(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    u = await session.get(User, uid)
+    if u is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    u.personal_tariff_discount_percent = None
+    await session.commit()
+    await cq.answer("Скидка снята")
+    await _render_user_card(cq, session, user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:cp:"))
+async def cb_admin_custom_price_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_custom_month_price)
+    await cq.answer()
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc(
+                "Введите персональную цену ₽/мес для тарифа «1 месяц» "
+                "(например 150). Для снятия отправьте 0."
+            ),
+        )
+        await state.update_data(
+            admin_custom_price_user_id=uid,
+            admin_custom_price_prompt_mid=sent.message_id,
+        )
+    else:
+        await state.update_data(admin_custom_price_user_id=uid)
+
+
+@router.callback_query(F.data.startswith("admin:pd:"))
+async def cb_admin_personal_discount_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        uid = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_personal_discount)
+    await cq.answer()
+    if cq.message and cq.bot:
+        chat_id = cq.message.chat.id
+        await _try_delete_message(cq.bot, chat_id, cq.message.message_id)
+        sent = await cq.bot.send_message(
+            chat_id,
+            esc("Введите персональную скидку на тарифы в % (например 10). Для снятия отправьте 0."),
+        )
+        await state.update_data(
+            admin_personal_discount_user_id=uid,
+            admin_personal_discount_prompt_mid=sent.message_id,
+        )
+    else:
+        await state.update_data(admin_personal_discount_user_id=uid)
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_custom_month_price), F.text)
+async def msg_admin_custom_month_price(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    user_id = data.get("admin_custom_price_user_id")
+    prompt_mid = data.get("admin_custom_price_prompt_mid")
+    if not isinstance(user_id, int):
+        await state.clear()
+        return
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        await message.answer("Нужно число, например 150 или 0 для сброса.")
+        return
+    u = await session.get(User, user_id)
+    if u is None:
+        await state.clear()
+        await message.answer("Пользователь не найден.")
+        return
+    if message.bot:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        if prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
+    if amount <= 0:
+        u.custom_subscription_month_price_rub = None
+        note = "Своя цена снята."
+    else:
+        u.custom_subscription_month_price_rub = amount.quantize(Decimal("0.01"))
+        note = f"Установлена своя цена: {u.custom_subscription_month_price_rub} ₽/мес."
+    await session.commit()
+    built = await _build_user_card(
+        session, user_id=user_id, viewer_telegram_id=message.from_user.id
+    )
+    if built is None or message.bot is None:
+        await message.answer(note)
+        return
+    cap, kb = built
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(plain(f"✅ {note}"), "", cap),
+        reply_markup=kb,
+        settings=get_settings(),
+        delete_message=None,
+        photo_key="admin:users:card",
+    )
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_personal_discount), F.text)
+async def msg_admin_personal_discount(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    if message.from_user is None or not _is_admin(message.from_user.id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    user_id = data.get("admin_personal_discount_user_id")
+    prompt_mid = data.get("admin_personal_discount_prompt_mid")
+    if not isinstance(user_id, int):
+        await state.clear()
+        return
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        pct = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        await message.answer("Нужно число, например 10 или 0 для сброса.")
+        return
+    u = await session.get(User, user_id)
+    if u is None:
+        await state.clear()
+        await message.answer("Пользователь не найден.")
+        return
+    if message.bot:
+        await _try_delete_message(message.bot, message.chat.id, message.message_id)
+        if prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
+    if pct <= 0:
+        u.personal_tariff_discount_percent = None
+        note = "Персональная скидка снята."
+    elif pct > 100:
+        await message.answer("Скидка не может быть больше 100%.")
+        return
+    else:
+        u.personal_tariff_discount_percent = pct.quantize(Decimal("0.01"))
+        note = f"Установлена скидка: {u.personal_tariff_discount_percent}%."
+    await session.commit()
+    built = await _build_user_card(
+        session, user_id=user_id, viewer_telegram_id=message.from_user.id
+    )
+    if built is None or message.bot is None:
+        await message.answer(note)
+        return
+    cap, kb = built
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(plain(f"✅ {note}"), "", cap),
+        reply_markup=kb,
+        settings=get_settings(),
         delete_message=None,
         photo_key="admin:users:card",
     )

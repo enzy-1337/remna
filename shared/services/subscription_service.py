@@ -36,7 +36,7 @@ from shared.services.feature_flags import tariff_purchases_enabled
 logger = logging.getLogger(__name__)
 
 MIN_DEVICES = 2
-MAX_DEVICES = 10
+MAX_DEVICES = 15
 
 ONE_MONTH_DURATION_MIN = 28
 ONE_MONTH_DURATION_MAX = 35
@@ -109,6 +109,62 @@ async def resolve_plan_price_rub(session: AsyncSession, plan: Plan) -> Decimal:
         duration_days=int(plan.duration_days),
         discount_percent=plan.discount_percent,
     )
+
+
+def user_custom_month_price_rub(user: User) -> Decimal | None:
+    """Персональная базовая цена ₽/мес; None — не задана."""
+    raw = user.custom_subscription_month_price_rub
+    if raw is None or raw <= 0:
+        return None
+    return raw
+
+
+def user_personal_discount_percent(user: User) -> Decimal:
+    """Персональная скидка на тарифы (%); 0 — не задана."""
+    raw = user.personal_tariff_discount_percent
+    if raw is None or raw <= 0:
+        return Decimal("0")
+    return raw
+
+
+async def resolve_user_plan_price_rub(
+    session: AsyncSession,
+    user: User,
+    plan: Plan,
+) -> Decimal:
+    """
+    Цена тарифа для конкретного пользователя.
+    Приоритет: персональная база ₽/мес → персональная скидка % → каталог.
+    """
+    custom_base = user_custom_month_price_rub(user)
+    if custom_base is not None:
+        ref = await get_one_month_reference_plan(session)
+        if ref is not None and plan.id == ref.id:
+            return custom_base
+        if is_one_month_duration(plan.duration_days):
+            return custom_base
+        return calculate_tariff_price_from_base_month(
+            custom_base,
+            duration_days=int(plan.duration_days),
+            discount_percent=plan.discount_percent,
+        )
+    catalog = await resolve_plan_price_rub(session, plan)
+    disc = user_personal_discount_percent(user)
+    if disc > 0:
+        _, _, final = calculate_discounted_plan_price(plan, disc, price_rub=catalog)
+        return final
+    return catalog
+
+
+def effective_tariff_discount_percent_for_user(
+    user: User,
+    *,
+    promo_discount_percent: Decimal = Decimal("0"),
+) -> Decimal:
+    """Скидка для отображения в UI: промокод или персональная (не обе сразу)."""
+    if promo_discount_percent > 0:
+        return promo_discount_percent
+    return user_personal_discount_percent(user)
 
 
 async def assign_plan_catalog_price(
@@ -615,7 +671,7 @@ async def purchase_plan_with_balance(
     if base_plan is None:
         return False, plain("В БД не настроен тариф «Базовый» (seed планов)."), "error"
 
-    original_price = await resolve_plan_price_rub(session, purchased_plan)
+    original_price = await resolve_user_plan_price_rub(session, user, purchased_plan)
     price = original_price
     discount_usage, discount_percent = await get_pending_purchase_discount_percent(session, user_id=user.id)
     discount_amount = Decimal("0")
@@ -729,6 +785,12 @@ async def purchase_plan_with_balance(
             "final_price_rub": str(price),
             "discount_percent": str(discount_percent),
             "discount_amount_rub": str(discount_amount),
+            "personal_discount_percent": str(user_personal_discount_percent(user)),
+            "custom_month_price_rub": (
+                str(user_custom_month_price_rub(user))
+                if user_custom_month_price_rub(user) is not None
+                else None
+            ),
         },
     )
     session.add(purchase_txn)
@@ -1231,6 +1293,50 @@ async def admin_adjust_subscription_days(
         except RemnaWaveError as e:
             logger.warning("admin_adjust_subscription_days RW failed: %s", e)
     return True, ""
+
+
+async def admin_adjust_subscription_device_slots(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    sub_id: int,
+    delta: int,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Изменить лимит слотов подписки на ±1 (админ, без списания с баланса)."""
+    if delta not in (-1, 1):
+        return False, "Допустимо только +1 или −1 слот."
+    sub = (
+        await session.execute(
+            select(Subscription).where(
+                Subscription.id == sub_id,
+                Subscription.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if sub is None:
+        return False, "Подписка не найдена."
+    new_count = int(sub.devices_count) + delta
+    if new_count < MIN_DEVICES:
+        return False, f"Минимум слотов: {MIN_DEVICES}."
+    if new_count > MAX_DEVICES:
+        return False, f"Максимум слотов: {MAX_DEVICES}."
+    sub.devices_count = new_count
+    if delta > 0:
+        await ensure_placeholder_devices(session, sub)
+    u = await session.get(User, user_id)
+    if u is not None and u.remnawave_uuid is not None and not settings.remnawave_stub:
+        rw = RemnaWaveClient(settings)
+        try:
+            await update_rw_user_respecting_hwid_limit(
+                rw,
+                str(u.remnawave_uuid),
+                devices_limit_for_panel=sub.devices_count,
+            )
+        except RemnaWaveError as e:
+            return False, f"Панель VPN: {e}"
+    verb = "Добавлен" if delta > 0 else "Снят"
+    return True, f"{verb} слот. Всего: {sub.devices_count}."
 
 
 async def admin_disable_subscription_record(

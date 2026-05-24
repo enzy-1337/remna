@@ -74,6 +74,13 @@ class User(Base):
         Integer, default=0, server_default="0"
     )
 
+    personal_tariff_discount_percent: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), nullable=True, default=None
+    )
+    custom_subscription_month_price_rub: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True, default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

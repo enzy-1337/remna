@@ -44,7 +44,10 @@ from shared.services.subscription_service import (
     plan_tariff_button_label_with_discount,
     purchase_plan_with_balance,
     resolve_plan_price_rub,
+    resolve_user_plan_price_rub,
     set_subscription_auto_renew,
+    user_custom_month_price_rub,
+    user_personal_discount_percent,
 )
 
 from shared.services.billing_v2.billing_calendar import (
@@ -348,6 +351,24 @@ async def _render_tariff_list(
         body = join_lines(extend_hint, "", body)
     if banner:
         body = join_lines(banner, "", body)
+    custom_month = user_custom_month_price_rub(db_user)
+    personal_disc = user_personal_discount_percent(db_user)
+    if custom_month is not None:
+        body = join_lines(
+            body,
+            "",
+            plain("💰 Ваша персональная цена: ")
+            + bold(str(custom_month.quantize(Decimal("0.01"))))
+            + plain(" ₽/мес (вместо каталога)."),
+        )
+    elif personal_disc > 0:
+        body = join_lines(
+            body,
+            "",
+            plain("🏷 Ваша персональная скидка: ")
+            + bold(str(personal_disc))
+            + plain("% на все тарифы."),
+        )
     if discount_percent > 0 and promo_code:
         body = join_lines(
             body,
@@ -360,12 +381,19 @@ async def _render_tariff_list(
         )
     b = InlineKeyboardBuilder()
     for p in plans:
-        eff_price = await resolve_plan_price_rub(session, p)
-        label = (
-            plan_tariff_button_label_with_discount(p, discount_percent, price_rub=eff_price)
-            if discount_percent > 0
-            else plan_tariff_button_label(p, price_rub=eff_price)
-        )
+        eff_price = await resolve_user_plan_price_rub(session, db_user, p)
+        catalog_price = await resolve_plan_price_rub(session, p)
+        if discount_percent > 0 and promo_code:
+            label = plan_tariff_button_label_with_discount(
+                p, discount_percent, price_rub=eff_price
+            )
+        elif eff_price != catalog_price:
+            label = (
+                f"{plan_tariff_button_label(p, price_rub=catalog_price)} "
+                f"→ {eff_price.quantize(Decimal('0.01'))} ₽"
+            )
+        else:
+            label = plan_tariff_button_label(p, price_rub=eff_price)
         buy_cb = f"sub:buy:{p.id}" if extension_allowed else "sub:renewal:blocked"
         b.row(
             InlineKeyboardButton(
@@ -670,7 +698,8 @@ async def cb_buy_plan(
         )
         return
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
-    eff_price = await resolve_plan_price_rub(session, plan)
+    eff_price = await resolve_user_plan_price_rub(session, db_user, plan)
+    catalog_price = await resolve_plan_price_rub(session, plan)
     original, discount_amount, final = calculate_discounted_plan_price(
         plan, discount_percent, price_rub=eff_price
     )
@@ -679,8 +708,17 @@ async def cb_buy_plan(
         "🧾 " + bold("Подтверждение покупки"),
         "",
         plain("Тариф: ") + bold(plan.name),
-        plain("Цена: ") + bold(str(original)) + plain(" ₽"),
     ]
+    if eff_price != catalog_price:
+        lines.append(
+            plain("Цена в каталоге: ")
+            + bold(str(catalog_price))
+            + plain(" ₽ · ваша: ")
+            + bold(str(eff_price))
+            + plain(" ₽")
+        )
+    else:
+        lines.append(plain("Цена: ") + bold(str(original)) + plain(" ₽"))
     if discount_percent > 0 and promo_code:
         lines.append(
             plain("Скидка: ")

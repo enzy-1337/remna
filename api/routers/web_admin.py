@@ -98,6 +98,7 @@ from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
     BASE_SUBSCRIPTION_PLAN_NAME,
     MIN_DEVICES,
+    MAX_DEVICES,
     assign_plan_catalog_price,
     default_one_month_tariff_price_rub,
     get_one_month_reference_plan,
@@ -107,6 +108,7 @@ from shared.services.subscription_service import (
     admin_convert_monthly_subscriptions_to_payg_balance,
     admin_disable_subscription_record,
     admin_adjust_subscription_days,
+    admin_adjust_subscription_device_slots,
     admin_enable_subscription_record,
     count_devices,
     get_active_subscription,
@@ -1558,7 +1560,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -5913,6 +5915,8 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             risk_notified_1h_at=user.risk_notified_1h_at,
             avg_daily_spend=avg_daily_spend,
             eta_to_floor_hours=eta_to_floor_hours,
+            personal_tariff_discount_percent=user.personal_tariff_discount_percent,
+            custom_subscription_month_price_rub=user.custom_subscription_month_price_rub,
         )
         referrer_sn = (
             SimpleNamespace(id=referrer.id, first_name=referrer.first_name, username=referrer.username)
@@ -6139,6 +6143,49 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             "<code class=\"bg-base-300 px-1 rounded text-[11px]\">ADMIN_TELEGRAM_IDS</code>.</p>"
         )
 
+    custom_price_cur = (
+        str(ud.custom_subscription_month_price_rub)
+        if ud.custom_subscription_month_price_rub is not None
+        else ""
+    )
+    personal_disc_cur = (
+        str(ud.personal_tariff_discount_percent)
+        if ud.personal_tariff_discount_percent is not None
+        else ""
+    )
+    personal_pricing_block = f"""
+    <div class="rounded-2xl border border-secondary/30 bg-base-200/30 p-4 mt-3">
+      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Персональные тарифы</h3>
+      <p class="text-xs opacity-70 mb-3">Действуют только для этого пользователя при покупке тарифов в боте. Своя цена имеет приоритет над скидкой.</p>
+      <div class="flex flex-wrap items-end gap-3">
+        <form method="post" action="/admin/users/{user_id}/personal-pricing/custom-month-price" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Своя цена ₽/мес</span>
+            <input type="text" name="price_rub" inputmode="decimal" placeholder="150" value="{_esc(custom_price_cur)}" class="input input-bordered input-sm h-9 min-h-9 w-28" />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
+        </form>
+        <form method="post" action="/admin/users/{user_id}/personal-pricing/custom-month-price" class="inline">
+          <input type="hidden" name="price_rub" value="" />
+          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">Сбросить цену</button>
+        </form>
+      </div>
+      <div class="flex flex-wrap items-end gap-3 mt-3">
+        <form method="post" action="/admin/users/{user_id}/personal-pricing/discount" class="flex flex-wrap items-end gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs opacity-70">Скидка на тарифы %</span>
+            <input type="text" name="discount_percent" inputmode="decimal" placeholder="10" value="{_esc(personal_disc_cur)}" class="input input-bordered input-sm h-9 min-h-9 w-24" />
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
+        </form>
+        <form method="post" action="/admin/users/{user_id}/personal-pricing/discount" class="inline">
+          <input type="hidden" name="discount_percent" value="" />
+          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">Сбросить скидку</button>
+        </form>
+      </div>
+    </div>
+    """
+
     negative_risk_block = f"""
     <div class="rounded-2xl border border-warning/30 bg-base-200/30 p-4">
       <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Риск ухода в минус</h3>
@@ -6246,14 +6293,27 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         <p class="text-sm font-medium">Лимит устройств (слоты)</p>
         <p class="text-xs opacity-70 mb-2">Меняет <code class="text-xs bg-base-300 px-1 rounded">devices_count</code> в записи подписки и лимит HWID в Remnawave (если в панели не отключён лимит).</p>
         <p class="text-xs opacity-60 mb-2">Плановый биллинг (не в боте): до {_esc(str(settings.subscription_included_device_slots))} устр. без отдельной доплаты; сверх — {_esc(str(settings.extra_device_monthly_rub))} ₽/мес за слот. При текущем лимите предпросмотр: <b>{_esc(dev_bill_preview_rub)}</b> ₽/мес.</p>
+        <p class="text-xs opacity-60 mb-2">Минимум {MIN_DEVICES} слота (базовая подписка), максимум {MAX_DEVICES}. Без списания с баланса.</p>
         <form method="post" action="/admin/users/{user_id}/subscription/set-device-slots" class="flex flex-wrap items-end gap-2">
           <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
           <label class="form-control w-32">
             <span class="label-text text-xs">Слотов</span>
-            <input type="number" name="devices_count" min="2" max="64" value="{int(active_snap['devices_count'])}" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
+            <input type="number" name="devices_count" min="{MIN_DEVICES}" max="{MAX_DEVICES}" value="{int(active_snap['devices_count'])}" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
           </label>
           <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
         </form>
+        <div class="flex flex-wrap gap-2 mt-2">
+          <form method="post" action="/admin/users/{user_id}/subscription/adjust-device-slots" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}" />
+            <input type="hidden" name="delta" value="1" />
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) >= MAX_DEVICES else ""}>+1 слот</button>
+          </form>
+          <form method="post" action="/admin/users/{user_id}/subscription/adjust-device-slots" class="inline">
+            <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}" />
+            <input type="hidden" name="delta" value="-1" />
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) <= MIN_DEVICES else ""}>−1 слот</button>
+          </form>
+        </div>
         <div class="divider my-0"></div>
         <p class="text-sm opacity-80">Полное отключение (как в Telegram-админке): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> в БД и <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> в панели.</p>
         <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_snap['id']}">Отключить подписку</button>
@@ -6417,6 +6477,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
               </button>
             </form>
           </div>
+          {personal_pricing_block}
           {negative_risk_block}
           {billing_detail_block}
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
@@ -7005,9 +7066,9 @@ async def admin_user_subscription_set_device_slots(
     if denied is not None:
         return denied
     dc = int(devices_count)
-    if dc < 2 or dc > 64:
+    if dc < MIN_DEVICES or dc > MAX_DEVICES:
         return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('Слотов: целое число от 2 до 64')}",
+            f"/admin/users/{user_id}?err={quote_plus(f'Слотов: целое число от {MIN_DEVICES} до {MAX_DEVICES}')}",
             status_code=303,
         )
     settings = get_settings()
@@ -7042,6 +7103,106 @@ async def admin_user_subscription_set_device_slots(
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=device_slots_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/adjust-device-slots")
+async def admin_user_subscription_adjust_device_slots(
+    request: Request,
+    user_id: int,
+    subscription_id: int = Form(...),
+    delta: int = Form(...),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        ok, msg = await admin_adjust_subscription_device_slots(
+            session,
+            user_id=user_id,
+            sub_id=int(subscription_id),
+            delta=int(delta),
+            settings=settings,
+        )
+        if not ok:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus(str(msg))}",
+                status_code=303,
+            )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=device_slots_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/personal-pricing/custom-month-price")
+async def admin_user_set_custom_month_price(
+    request: Request,
+    user_id: int,
+    price_rub: str = Form(""),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    raw = (price_rub or "").strip().replace(",", ".")
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        if not raw:
+            user.custom_subscription_month_price_rub = None
+        else:
+            try:
+                amount = Decimal(raw)
+            except InvalidOperation:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Некорректная цена')}",
+                    status_code=303,
+                )
+            if amount <= 0:
+                user.custom_subscription_month_price_rub = None
+            else:
+                user.custom_subscription_month_price_rub = amount.quantize(Decimal("0.01"))
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=personal_price_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/personal-pricing/discount")
+async def admin_user_set_personal_discount(
+    request: Request,
+    user_id: int,
+    discount_percent: str = Form(""),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    raw = (discount_percent or "").strip().replace(",", ".")
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        if not raw:
+            user.personal_tariff_discount_percent = None
+        else:
+            try:
+                pct = Decimal(raw)
+            except InvalidOperation:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Некорректная скидка')}",
+                    status_code=303,
+                )
+            if pct <= 0:
+                user.personal_tariff_discount_percent = None
+            elif pct > 100:
+                return RedirectResponse(
+                    f"/admin/users/{user_id}?err={quote_plus('Скидка не может быть больше 100%')}",
+                    status_code=303,
+                )
+            else:
+                user.personal_tariff_discount_percent = pct.quantize(Decimal("0.01"))
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=personal_discount_ok", status_code=303)
 
 
 @router.post("/users/{user_id}/unlink-hwid")
