@@ -339,7 +339,6 @@ async def cb_pick(
                 FSInputFile(path),
                 title=track.title[:64],
                 performer=track.artist[:64],
-                caption=join_lines(plain(f"[{track.source_label}] "), esc(title)),
                 reply_markup=kb,
             )
         finally:
