@@ -253,6 +253,8 @@ def extract_first_url(text: str) -> str | None:
 
 def detect_platform(url: str) -> str:
     u = (url or "").lower()
+    if "pinterest." in u or "pin.it/" in u:
+        return "Pinterest"
     if "instagram.com" in u:
         return "Instagram Reels"
     if "tiktok.com" in u:
@@ -275,6 +277,8 @@ def is_supported_url(url: str) -> bool:
             "vk.com/clip",
             "clips.vk.com",
             "vk.ru/clip",
+            "pinterest.",
+            "pin.it/",
         )
     )
 
@@ -293,6 +297,7 @@ def is_short_url(url: str) -> bool:
             "cutt.ly/",
             "is.gd/",
             "tiny.one/",
+            "pin.it/",
         )
     )
 
@@ -310,6 +315,28 @@ async def resolve_short_url(url: str) -> str:
 
 
 def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
+    from shared.services.media_search.pinterest import (
+        PinterestEmbedPin,
+        download_pinterest_sync,
+        is_pinterest_url,
+    )
+
+    if is_pinterest_url(url):
+        try:
+            pin_media = download_pinterest_sync(url, temp_dir)
+            return DownloadedVideo(
+                path=pin_media.path,
+                platform=detect_platform(url),
+                duration_sec=pin_media.duration_sec,
+                size_bytes=pin_media.size_bytes,
+                original_url=url,
+                photo_paths=pin_media.photo_paths,
+            )
+        except PinterestEmbedPin:
+            logger.info("Pinterest embed pin, fallback to yt-dlp url=%s", url)
+        except Exception:
+            logger.exception("Pinterest custom downloader failed url=%s, trying yt-dlp", url)
+
     outtmpl = str(Path(temp_dir) / "%(id)s.%(ext)s")
     ydl_opts: dict[str, Any] = {
         "format": "bestvideo+bestaudio/best",
@@ -414,6 +441,14 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
 
 
 async def download_video(url: str) -> tuple[DownloadedVideo, tempfile.TemporaryDirectory[str]]:
+    from shared.services.media_search.pinterest import is_pinterest_url, resolve_pinterest_url
+
+    if is_pinterest_url(url):
+        resolved = await resolve_pinterest_url(url)
+        if resolved != url:
+            logger.info("Pinterest URL resolved: %s -> %s", url, resolved)
+        url = resolved
+
     temp_dir = tempfile.TemporaryDirectory(prefix="tg-video-")
     try:
         result = await asyncio.to_thread(_download_sync, url, temp_dir.name)

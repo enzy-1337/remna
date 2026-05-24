@@ -174,16 +174,7 @@ def _build_results_keyboard(session_id: str, page: int, total_pages: int, n_item
 def _results_caption(query: str, tracks: list[MediaTrack], page: int, per_page: int) -> str:
     start = page * per_page
     chunk = tracks[start : start + per_page]
-    lines = [bold(query), ""]
-    for i, t in enumerate(chunk, start=1):
-        lines.append(plain(t.display_line(i)))
-    return join_lines(*lines)
-
-
-def _results_caption_plain(query: str, tracks: list[MediaTrack], page: int, per_page: int) -> str:
-    start = page * per_page
-    chunk = tracks[start : start + per_page]
-    lines = [plain(query), ""]
+    lines = [bold(esc(query)), ""]
     for i, t in enumerate(chunk, start=1):
         lines.append(plain(t.display_line(i)))
     return join_lines(*lines)
@@ -221,14 +212,7 @@ async def _run_search_and_reply(message: Message, query: str, settings: MusicBot
     )
     cap = _results_caption(q, tracks, 0, per_page)
     kb = _build_results_keyboard(session_id, 0, total_pages, min(per_page, len(tracks)))
-    try:
-        await wait.edit_text(cap, reply_markup=kb)
-    except TelegramBadRequest as e:
-        if "can't parse entities" not in str(e).lower():
-            raise
-        logger.warning("MarkdownV2 caption failed for query %r: %s", q, e)
-        cap = _results_caption_plain(q, tracks, 0, per_page)
-        await wait.edit_text(cap, reply_markup=kb)
+    await wait.edit_text(cap, reply_markup=kb)
 
 
 async def _log_to_topic(
@@ -311,12 +295,8 @@ async def cb_page(cq: CallbackQuery) -> None:
     kb = _build_results_keyboard(session_id, page, total_pages, n_items)
     try:
         await cq.message.edit_text(cap, reply_markup=kb)
-    except TelegramBadRequest as e:
-        if "can't parse entities" not in str(e).lower():
-            raise
-        logger.warning("MarkdownV2 caption failed for query %r: %s", query, e)
-        cap = _results_caption_plain(query, tracks, page, per_page)
-        await cq.message.edit_text(cap, reply_markup=kb)
+    except TelegramBadRequest:
+        pass
     await cq.answer()
 
 
