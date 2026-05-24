@@ -15,7 +15,7 @@ _MD2_SPECIAL = frozenset(r"_*[]()~`>#+-=|{}.!")
 
 def esc(text: str) -> str:
     """Экранирование произвольного пользовательского текста для MarkdownV2."""
-    return "".join("\\" + c if c in _MD2_SPECIAL else c for c in text)
+    return "".join("\\" + c if c == "\\" or c in _MD2_SPECIAL else c for c in text)
 
 
 def plain(text: str) -> str:
