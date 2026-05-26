@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     gnupg \
     proxychains4 \
+    tzdata \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \

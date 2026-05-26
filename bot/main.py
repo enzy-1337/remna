@@ -53,14 +53,16 @@ async def main() -> None:
     bg_tasks = start_background_loops(settings, stop_event)
     try:
         boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
-        await notify_admin(
-            settings,
-            title="🚀 " + bold("Основной бот запущен (polling)"),
-            lines=[plain(boot_ts)],
-            topic=AdminLogTopic.BOOT,
-            event_type="bot_startup",
-        )
-        log.info("Уведомление о запуске отправлено в админ-чат (тема BOOT).")
+        try:
+            await notify_admin(
+                settings,
+                title="🚀 " + bold("Основной бот запущен (polling)"),
+                lines=[plain(boot_ts)],
+                topic=AdminLogTopic.BOOT,
+                event_type="bot_startup",
+            )
+        except Exception:
+            log.exception("BOOT-уведомление не отправлено (бот продолжит работу)")
         await dp.start_polling(bot)
     finally:
         stop_event.set()
