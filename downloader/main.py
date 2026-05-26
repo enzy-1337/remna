@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -8,15 +9,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+from aiogram.types import BotCommand
 
 from bot.handlers.downloader import router as downloader_router
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from downloader.config import get_downloader_settings
 from downloader.middlewares.db_session import DownloaderDbSessionMiddleware
+from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online
 
 
-def main() -> None:
+async def _run() -> None:
     settings = get_downloader_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -36,9 +38,10 @@ def main() -> None:
     dp.include_router(downloader_router)
 
     async def _on_startup(*_args, **_kwargs) -> None:
-        await bot.set_my_commands(
-            commands=[BotCommand(command="start", description="Начать работу с ботом")],
-            scope=BotCommandScopeAllPrivateChats(),
+        await safe_set_bot_commands(
+            bot,
+            service="downloader",
+            private_commands=[BotCommand(command="start", description="Начать работу с ботом")],
         )
         chat_id = settings.admin_log_chat_id
         if chat_id is not None and (not isinstance(chat_id, str) or chat_id.strip()):
@@ -57,7 +60,12 @@ def main() -> None:
                 logging.getLogger(__name__).exception("Не удалось отправить BOOT-уведомление downloader-бота")
 
     dp.startup.register(_on_startup)
-    dp.run_polling(bot)
+    await wait_telegram_online(bot, service="downloader")
+    await dp.start_polling(bot)
+
+
+def main() -> None:
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

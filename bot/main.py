@@ -26,6 +26,7 @@ from shared.config import get_settings
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.md2 import bold, join_lines, plain
 from shared.services.admin_notify import notify_admin
+from shared.telegram_connect import wait_telegram_online
 
 
 async def main() -> None:
@@ -63,6 +64,7 @@ async def main() -> None:
             )
         except Exception:
             log.exception("BOOT-уведомление не отправлено (бот продолжит работу)")
+        await wait_telegram_online(bot, service="bot")
         await dp.start_polling(bot)
     finally:
         stop_event.set()

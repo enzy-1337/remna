@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, MenuButtonCommands
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.handlers.admin import router as admin_router
 from bot.handlers.admin_promo import router as admin_promo_router
@@ -82,11 +82,13 @@ async def create_bot_and_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
     )
-    await bot.set_my_commands(
-        commands=_private_chat_commands(),
-        scope=BotCommandScopeAllPrivateChats(),
+    from shared.telegram_connect import safe_set_bot_commands
+
+    await safe_set_bot_commands(
+        bot,
+        service="bot",
+        private_commands=_private_chat_commands(),
     )
-    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     short = ((settings.bot_profile_short_description or "").strip() or BOT_PROFILE_SHORT_DEFAULT)[:120]
     long_desc = ((settings.bot_profile_description or "").strip() or BOT_PROFILE_LONG_DEFAULT)[:512]
     try:

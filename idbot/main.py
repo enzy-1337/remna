@@ -29,12 +29,9 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
-    BotCommandScopeAllGroupChats,
-    BotCommandScopeAllPrivateChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    MenuButtonCommands,
     Message,
 )
 
@@ -52,6 +49,7 @@ from idbot.group_id_prompt import (  # noqa: E402
 from idbot.id_card import cta_keyboard, format_user_telegram_card  # noqa: E402
 from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
 from shared.md2 import bold, join_lines, plain  # noqa: E402
+from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online  # noqa: E402
 
 logger = logging.getLogger("idbot")
 
@@ -243,26 +241,20 @@ async def cb_choose_destination(cq: CallbackQuery) -> None:
 
 
 async def _on_startup(bot: Bot, settings: IdBotSettings) -> None:
-    try:
-        await bot.set_my_commands(
-            commands=[
-                BotCommand(command="start", description="Показать ваш Telegram ID"),
-                BotCommand(command="id", description="Узнать ID по @username или ответу"),
-            ],
-            scope=BotCommandScopeAllPrivateChats(),
-        )
-        await bot.set_my_commands(
-            commands=[
-                BotCommand(
-                    command="id",
-                    description="Ответьте на сообщение или /id @username",
-                ),
-            ],
-            scope=BotCommandScopeAllGroupChats(),
-        )
-        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    except Exception:
-        logger.exception("idbot: set_my_commands / menu button failed")
+    await safe_set_bot_commands(
+        bot,
+        service="idbot",
+        private_commands=[
+            BotCommand(command="start", description="Показать ваш Telegram ID"),
+            BotCommand(command="id", description="Узнать ID по @username или ответу"),
+        ],
+        group_commands=[
+            BotCommand(
+                command="id",
+                description="Ответьте на сообщение или /id @username",
+            ),
+        ],
+    )
 
     chat_id = settings.admin_log_chat_id
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
@@ -303,6 +295,7 @@ async def _run() -> None:
     dp.include_router(id_lookup_router)
 
     await _on_startup(bot, settings)
+    await wait_telegram_online(bot, service="idbot")
 
     allowed_updates = dp.resolve_used_update_types()
     await dp.start_polling(bot, allowed_updates=allowed_updates)

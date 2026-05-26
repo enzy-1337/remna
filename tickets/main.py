@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -8,16 +9,18 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, MenuButtonCommands
+from aiogram.types import BotCommand
 
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from shared.config import get_settings
+from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online
 from tickets.config import config
 from tickets.router import tickets_router
 from tickets.scheduler import TicketScheduler
 
-def main() -> None:
+
+async def _run() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -42,14 +45,11 @@ def main() -> None:
     scheduler = TicketScheduler(bot)
 
     async def _on_startup(*_args, **_kwargs) -> None:
-        try:
-            await bot.set_my_commands(
-                [BotCommand(command="start", description="Поддержка и тикеты")],
-                scope=BotCommandScopeAllPrivateChats(),
-            )
-            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-        except Exception:
-            log.exception("support bot: set_my_commands / menu button failed")
+        await safe_set_bot_commands(
+            bot,
+            service="tickets",
+            private_commands=[BotCommand(command="start", description="Поддержка и тикеты")],
+        )
         await scheduler.start()
         try:
             settings = get_settings()
@@ -57,7 +57,9 @@ def main() -> None:
             if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
                 return
             thread_id = settings.admin_log_topic_boot or settings.admin_log_topic_id
-            boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S | %d-%m-%Y | МСК")
+            boot_ts = datetime.now(UTC).astimezone(ZoneInfo("Europe/Moscow")).strftime(
+                "%H:%M:%S | %d-%m-%Y | МСК"
+            )
             from shared.md2 import bold, join_lines, plain
 
             boot_text = join_lines("🛟 " + bold("Support bot запущен"), plain(boot_ts))
@@ -82,9 +84,14 @@ def main() -> None:
     dp.update.middleware(PrivateChatOnlyMiddleware(allowed_chat_ids={int(config.support_group_id)}))
     dp.update.middleware(DbSessionMiddleware())
     dp.include_router(tickets_router())
-    dp.run_polling(bot)
+
+    await wait_telegram_online(bot, service="tickets")
+    await dp.start_polling(bot)
+
+
+def main() -> None:
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
     main()
-
