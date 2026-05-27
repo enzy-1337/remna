@@ -59,6 +59,7 @@ from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
+from shared.models.web_admin_browser_session import WebAdminBrowserSession
 from shared.services.billing_calculator import (
     estimate_pay_per_use_30d_rub,
     plan_fields_for_ppu_estimate,
@@ -98,6 +99,7 @@ from shared.services.web_admin_session_service import (
     browser_fingerprint,
     clear_login_hint_cookie,
     create_browser_session,
+    find_active_browser_session_for_user_safe,
     get_browser_session,
     list_user_browser_sessions_safe,
     try_get_browser_session,
@@ -1744,6 +1746,38 @@ async def _bind_web_admin_session(
     await _notify_admin_login(settings, user=user, method_kind=method_kind, used_totp=used_totp)
 
 
+async def _redirect_after_browser_session_restore(
+    request: Request,
+    *,
+    row: WebAdminBrowserSession,
+    user: User,
+    new_exp: datetime,
+) -> RedirectResponse:
+    snap = row.auth_snapshot if isinstance(row.auth_snapshot, dict) else {}
+    if snap:
+        request.session["wauth"] = restore_wauth_from_snapshot(snap)
+    request.session["wauth_user_id"] = int(user.id)
+    request.session["wauth_session_token"] = str(row.session_token)
+    request.session["wauth_session_exp"] = int(new_exp.timestamp())
+    request.session["wauth_login_kind"] = str(row.login_kind or request.session.get("wauth_login_kind") or "web")
+    return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
+
+
+async def _restore_browser_session_row(request: Request, row: WebAdminBrowserSession) -> RedirectResponse | None:
+    fp = browser_fingerprint(request)
+    if row.fingerprint_hash != fp:
+        return None
+    async with await _session() as session:
+        fresh = await try_get_browser_session(session, token=str(row.session_token), fingerprint_hash=fp)
+        if fresh is None:
+            return None
+        new_exp = await touch_browser_session(session, fresh)
+        user = await session.get(User, fresh.user_id)
+    if user is None:
+        return None
+    return await _redirect_after_browser_session_restore(request, row=fresh, user=user, new_exp=new_exp)
+
+
 async def _maybe_restore_browser_session(request: Request) -> RedirectResponse | None:
     """Продление/восстановление 24-часовой сессии этого браузера без повторного OAuth."""
     token = str(request.session.get("wauth_session_token") or "").strip()
@@ -1752,20 +1786,37 @@ async def _maybe_restore_browser_session(request: Request) -> RedirectResponse |
     fp = browser_fingerprint(request)
     async with await _session() as session:
         row = await try_get_browser_session(session, token=token, fingerprint_hash=fp)
-        if row is None:
-            return None
-        new_exp = await touch_browser_session(session, row)
-        user = await session.get(User, row.user_id)
-    if user is None:
+    if row is None:
         return None
-    snap = row.auth_snapshot if isinstance(row.auth_snapshot, dict) else {}
-    if snap:
-        request.session["wauth"] = restore_wauth_from_snapshot(snap)
-    request.session["wauth_user_id"] = int(user.id)
-    request.session["wauth_session_token"] = token
-    request.session["wauth_session_exp"] = int(new_exp.timestamp())
-    request.session["wauth_login_kind"] = str(row.login_kind or request.session.get("wauth_login_kind") or "web")
-    return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
+    return await _restore_browser_session_row(request, row)
+
+
+async def _resume_login_from_hint(request: Request, hint: dict) -> RedirectResponse:
+    """Вход по карточке «последний аккаунт»: живая браузерная сессия или OAuth того же способа."""
+    try:
+        user_id = int(hint.get("user_id"))
+    except (TypeError, ValueError):
+        return RedirectResponse("/admin/login", status_code=303)
+    fp = browser_fingerprint(request)
+    token = str(request.session.get("wauth_session_token") or "").strip()
+    async with await _session() as session:
+        row = None
+        if token:
+            row = await try_get_browser_session(session, token=token, fingerprint_hash=fp)
+            if row is not None and int(row.user_id) != user_id:
+                row = None
+        if row is None:
+            row = await find_active_browser_session_for_user_safe(
+                session, user_id=user_id, fingerprint_hash=fp
+            )
+    if row is not None:
+        restored = await _restore_browser_session_row(request, row)
+        if restored is not None:
+            return restored
+    kind = str(hint.get("login_kind") or "telegram").strip().lower()
+    if kind == "github":
+        return RedirectResponse("/admin/login/github/start", status_code=303)
+    return RedirectResponse("/admin/login/telegram/start", status_code=303)
 
 
 async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
@@ -1819,12 +1870,31 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
     </div>"""
 
 
-def _login_last_account_html(hint: dict | object | None) -> str:
+def _web_admin_role_title(
+    settings: Settings,
+    *,
+    telegram_id: object = None,
+    github_login: str = "",
+) -> str:
+    try:
+        tid = int(telegram_id) if telegram_id is not None else None
+    except (TypeError, ValueError):
+        tid = None
+    if tid is not None and tid in settings.admin_telegram_ids:
+        return "Администратор"
+    gh = (github_login or "").strip()
+    if gh and _admin_allowed_by_gh(gh):
+        return "Администратор"
+    return "Администратор"
+
+
+def _login_last_account_html(hint: dict | object | None, *, role_title: str = "") -> str:
     if not isinstance(hint, dict) or not hint.get("label"):
         return ""
     label = _esc(str(hint.get("label") or ""))
     kind = str(hint.get("login_kind") or "telegram")
     avatar = str(hint.get("avatar_url") or "").strip()
+    role = _esc((role_title or "Администратор").strip() or "Администратор")
     icon = (
         '<i class="fa-brands fa-telegram text-2xl text-[#229ED9]" aria-hidden="true"></i>'
         if kind == "telegram"
@@ -1836,16 +1906,18 @@ def _login_last_account_html(hint: dict | object | None) -> str:
         else f'<span class="flex h-12 w-12 items-center justify-center rounded-full bg-base-200">{icon}</span>'
     )
     return f"""
-    <div class="w-full rounded-xl border border-primary/25 bg-primary/5 p-4 text-left">
-      <p class="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">Последний вход</p>
-      <div class="flex items-center gap-3">
-        {avatar_html}
-        <div class="min-w-0 flex-1">
-          <p class="truncate font-semibold">{label}</p>
-          <p class="text-xs opacity-70">В этом браузере сессия 24 ч — OAuth не нужен, если вы не выходили.</p>
-        </div>
-      </div>
-    </div>
+    <form method="post" action="/admin/login/resume" class="w-full">
+      <button type="submit" class="login-last-account-btn w-full rounded-xl border border-primary/25 bg-primary/5 p-4 text-left transition hover:border-primary/45 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50">
+        <span class="flex items-center gap-3">
+          {avatar_html}
+          <span class="min-w-0 flex-1">
+            <span class="block truncate font-semibold">{label}</span>
+            <span class="block truncate text-sm opacity-70">{role}</span>
+          </span>
+          <i class="fa-solid fa-arrow-right-to-bracket shrink-0 text-lg opacity-50" aria-hidden="true"></i>
+        </span>
+      </button>
+    </form>
     """
 
 
@@ -2397,6 +2469,14 @@ def _jwt_payload_unverified(token: str) -> dict:
     return obj if isinstance(obj, dict) else {}
 
 
+@router.post("/login/resume")
+async def admin_login_resume(request: Request) -> RedirectResponse:
+    hint = read_login_hint(request)
+    if not isinstance(hint, dict) or not hint.get("label"):
+        return RedirectResponse("/admin/login", status_code=303)
+    return await _resume_login_from_hint(request, hint)
+
+
 @router.get("/login")
 async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     _remember_admin_next_from_query(request)
@@ -2409,6 +2489,13 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         if restored is not None:
             return restored
     login_hint = read_login_hint(request) if not link_mode else None
+    login_hint_role = ""
+    if isinstance(login_hint, dict) and login_hint.get("label"):
+        login_hint_role = _web_admin_role_title(
+            get_settings(),
+            telegram_id=login_hint.get("telegram_id"),
+            github_login=str(login_hint.get("github_login") or ""),
+        )
     if _is_logged(request) and not link_mode:
         uid_raw = request.session.get("wauth_user_id")
         token = str(request.session.get("wauth_session_token") or "").strip()
@@ -2555,7 +2642,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         <div class="flex w-full flex-col items-center gap-4">
           {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           {login_notice}
-          {_login_last_account_html(login_hint) if not link_mode else ""}
+          {_login_last_account_html(login_hint, role_title=login_hint_role) if not link_mode else ""}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
           <a class="btn gap-2 login-auth-btn login-auth-btn-github" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>

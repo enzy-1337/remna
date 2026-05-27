@@ -1179,6 +1179,7 @@ async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
         caption=text,
         reply_markup=await admin_panel_keyboard(),
         settings=settings,
+        photo_key="admin:panel",
     )
 
 
@@ -1209,7 +1210,13 @@ async def _render_admin_tariffs_shop_screen(cq: CallbackQuery, db_user: User) ->
             text="⬅️ Админ-панель", callback_data="admin:panel", style="danger"
         )
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=cap,
+        reply_markup=b.as_markup(),
+        settings=settings,
+        photo_key="admin:tariffs_shop",
+    )
 
 
 @router.callback_query(F.data == "admin:tariffs_shop")

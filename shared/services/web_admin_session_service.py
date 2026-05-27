@@ -145,6 +145,46 @@ async def try_get_browser_session(
         raise
 
 
+async def find_active_browser_session_for_user(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    fingerprint_hash: str,
+) -> WebAdminBrowserSession | None:
+    """Активная сессия этого пользователя в текущем браузере (для быстрого входа)."""
+    now = datetime.now(UTC)
+    row = (
+        await session.execute(
+            select(WebAdminBrowserSession)
+            .where(
+                WebAdminBrowserSession.user_id == int(user_id),
+                WebAdminBrowserSession.fingerprint_hash == fingerprint_hash,
+                WebAdminBrowserSession.revoked_at.is_(None),
+                WebAdminBrowserSession.expires_at > now,
+            )
+            .order_by(desc(WebAdminBrowserSession.last_seen_at))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row
+
+
+async def find_active_browser_session_for_user_safe(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    fingerprint_hash: str,
+) -> WebAdminBrowserSession | None:
+    try:
+        return await find_active_browser_session_for_user(
+            session, user_id=user_id, fingerprint_hash=fingerprint_hash
+        )
+    except ProgrammingError as exc:
+        if _missing_browser_sessions_table(exc):
+            return None
+        raise
+
+
 async def list_user_browser_sessions_safe(
     session: AsyncSession,
     user_id: int,

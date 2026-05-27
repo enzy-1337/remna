@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, FSInputFile, InputFile, Message, URLInp
 
 if TYPE_CHECKING:
     from shared.config import Settings
+from shared.admin_background import admin_bot_screen_uses_web_background, resolve_admin_background_photo
 from shared.md2 import strip_for_popup_alert
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,11 @@ def _photo_name_for_key(photo_key: str) -> str | None:
 
 def resolve_section_photo(settings: Settings, *, photo_key: str | None = None) -> InputFile | None:
     """Фото экрана по ключу раздела; fallback: path/url/default."""
+    key = (photo_key or "").strip().lower()
+    if admin_bot_screen_uses_web_background(key):
+        admin_bg = resolve_admin_background_photo(settings)
+        if admin_bg is not None:
+            return admin_bg
     named = _photo_name_for_key(photo_key or "")
     if named:
         candidate = Path(__file__).resolve().parent.parent.parent / "assets" / "banners" / named
