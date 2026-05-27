@@ -208,10 +208,17 @@ def _admin_profile_section_keyboard(user: User) -> InlineKeyboardMarkup:
             style="danger" if enabled else "success",
         )
     )
+    b.row(
+        InlineKeyboardButton(
+            text="🌐 Сессии web-admin",
+            callback_data="admin:profile:sessions",
+            style="primary",
+        )
+    )
     if _has_active_web_admin_session(user):
         b.row(
             InlineKeyboardButton(
-                text="🚪 Отключить web-admin сессию",
+                text="🚪 Отключить все сессии сайта",
                 callback_data="admin:profile:web_session:disable",
                 style="danger",
             )
@@ -501,7 +508,7 @@ async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None) -> N
         caption=join_lines(
             "👨‍💼 " + bold("Админ-профиль"),
             "",
-            plain("Управление GitHub-входом, Google Auth и web-admin сессией."),
+            plain("GitHub, Google Auth, сессии входа на сайт (24 ч)."),
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
@@ -578,20 +585,100 @@ async def cb_admin_profile_disable_web_session(
     if not _has_active_web_admin_session(db_user):
         await cq.answer("Активной web-admin сессии нет.", show_alert=True)
         return
-    db_user.web_admin_session_token = None
-    db_user.web_admin_session_expires_at = None
-    await session.commit()
-    await cq.answer("Сессия отключена.")
+    from shared.services.web_admin_session_service import revoke_all_user_browser_sessions
+
+    n = await revoke_all_user_browser_sessions(session, db_user.id)
+    await cq.answer(f"Отозвано сессий: {n}.")
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
             "👨‍💼 " + bold("Админ-профиль"),
             "",
-            plain("Активная web-admin сессия отключена. Для входа потребуется новая авторизация."),
+            plain("Все web-admin сессии отозваны. Повторный вход — через Telegram/GitHub и 2FA."),
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
     )
+
+
+@router.callback_query(F.data == "admin:profile:sessions")
+async def cb_admin_profile_sessions(
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    from shared.services.web_admin_session_service import list_user_browser_sessions
+
+    now = datetime.now(timezone.utc)
+    rows = await list_user_browser_sessions(session, db_user.id, limit=15)
+    lines = ["🌐 " + bold("Сессии web-admin"), ""]
+    if not rows:
+        lines.append(plain("Нет сохранённых браузерных сессий."))
+    b = InlineKeyboardBuilder()
+    for i, row in enumerate(rows[:8], start=1):
+        exp = row.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        active = row.revoked_at is None and exp > now
+        ua = (row.user_agent or "")[:40]
+        ip = row.ip_address or "—"
+        status = "✅" if active else "⛔"
+        lines.append(
+            plain(f"{i}. {status} ")
+            + bold(str(row.login_kind))
+            + plain(f" · {ip} · до ")
+            + bold(exp.strftime("%d.%m %H:%M"))
+        )
+        if ua:
+            lines.append(plain(f"   {ua}"))
+        if active:
+            b.row(
+                InlineKeyboardButton(
+                    text=f"Отозвать #{row.id}",
+                    callback_data=f"admin:profile:session_revoke:{row.id}",
+                    style="danger",
+                )
+            )
+    b.row(
+        InlineKeyboardButton(
+            text="⬅️ Назад", callback_data="admin:section:profile", style="danger"
+        )
+    )
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(*lines),
+        reply_markup=b.as_markup(),
+        settings=get_settings(),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:profile:session_revoke:"))
+async def cb_admin_profile_session_revoke(
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+) -> None:
+    if cq.from_user is None or not _is_admin(cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        sid = int((cq.data or "").split(":")[-1])
+    except ValueError:
+        await cq.answer("Ошибка", show_alert=True)
+        return
+    from shared.services.web_admin_session_service import revoke_browser_session_by_id
+
+    ok = await revoke_browser_session_by_id(session, user_id=db_user.id, session_row_id=sid)
+    if not ok:
+        await cq.answer("Сессия не найдена.", show_alert=True)
+        return
+    await cq.answer("Сессия отозвана.")
+    await cb_admin_profile_sessions(cq, session, db_user)
 
 
 @router.callback_query(F.data == "admin:section:analytics")

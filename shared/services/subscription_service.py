@@ -729,6 +729,10 @@ async def purchase_plan_with_balance(
     rb_dc = active.devices_count if active else None
     rb_active_id = active.id if active else None
 
+    from shared.services.subscription_repeat_bonus import count_completed_subscription_purchases
+
+    prior_subscription_purchases = await count_completed_subscription_purchases(session, user.id)
+
     traffic_bytes = 0
     if purchased_plan.traffic_limit_gb is not None and purchased_plan.traffic_limit_gb > 0:
         traffic_bytes = int(purchased_plan.traffic_limit_gb) * (1024**3)
@@ -798,6 +802,17 @@ async def purchase_plan_with_balance(
     )
     session.add(purchase_txn)
     await session.flush()
+
+    from shared.services.subscription_repeat_bonus import grant_repeat_subscription_purchase_bonus
+
+    repeat_bonus = await grant_repeat_subscription_purchase_bonus(
+        session,
+        user=user,
+        price_rub=price,
+        settings=settings,
+        purchase_txn_id=purchase_txn.id,
+        is_repeat_purchase=prior_subscription_purchases >= 1,
+    )
 
     if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
         from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
@@ -884,6 +899,13 @@ async def purchase_plan_with_balance(
         )
     if sub_url:
         msg += "\n\n" + link("Ссылка подписки", sub_url)
+    if repeat_bonus > 0:
+        msg = join_lines(
+            msg,
+            plain("Бонус за повторную покупку: ")
+            + bold(str(repeat_bonus))
+            + plain(" ₽ на баланс."),
+        )
 
     from shared.services.admin_notify import notify_admin
 
@@ -927,15 +949,29 @@ async def set_subscription_auto_renew(
     )
 
 
-async def add_paid_device_slot(
+async def add_paid_device_slots(
     session: AsyncSession,
     *,
     user: User,
     settings: Settings,
+    quantity: int = 1,
     idempotency_key: str | None = None,
 ) -> tuple[bool, str]:
+    from shared.services.device_slots_pricing import (
+        is_admin_unlimited_devices,
+        price_for_extra_device_slots,
+        slots_available_to_buy,
+    )
+
     if settings.billing_v2_enabled and user.billing_mode == "hybrid":
-        return False, plain("Для hybrid-пользователей покупка дополнительного устройства недоступна.")
+        return False, plain("Для hybrid-пользователей покупка дополнительных устройств недоступна.")
+    if is_admin_unlimited_devices(user, settings):
+        return False, plain("Для администратора лимит устройств не ограничен — докупка не нужна.")
+
+    qty = int(quantity)
+    if qty < 1:
+        return False, plain("Укажите количество слотов (от 1).")
+
     if idempotency_key:
         existing_txn = (
             await session.execute(
@@ -950,28 +986,40 @@ async def add_paid_device_slot(
             )
         ).scalar_one_or_none()
         if existing_txn is not None:
-            return True, plain("Слот уже был добавлен ранее по этому подтверждению.")
+            return True, plain("Слоты уже были добавлены ранее по этому подтверждению.")
 
     sub = await get_active_subscription(session, user.id)
     if not sub:
         return False, plain("Сначала оформите подписку.")
-    if sub.devices_count >= MAX_DEVICES:
-        return False, plain("Уже максимум слотов: ") + bold(str(MAX_DEVICES)) + plain(".")
 
-    price = settings.extra_device_price_rub
-    if user.balance - price < settings.billing_balance_floor_rub:
+    can_buy = slots_available_to_buy(int(sub.devices_count), MAX_DEVICES)
+    if qty > can_buy:
+        if can_buy <= 0:
+            return False, plain("Уже максимум слотов: ") + bold(str(MAX_DEVICES)) + plain(".")
+        return (
+            False,
+            plain("Можно докупить не больше ")
+            + bold(str(can_buy))
+            + plain(" сл.")
+            + plain(f" (лимит {MAX_DEVICES}, сейчас {sub.devices_count})."),
+        )
+
+    total_price, unit_price, discount_pct = price_for_extra_device_slots(settings, qty)
+    if user.balance - total_price < settings.billing_balance_floor_rub:
         return (
             False,
             plain("Нужно ")
-            + bold(str(price))
-            + plain(" ₽ на балансе для дополнительного устройства."),
+            + bold(str(total_price))
+            + plain(" ₽ на балансе для ")
+            + bold(str(qty))
+            + plain(" сл."),
         )
 
     if user.remnawave_uuid is None:
         return False, plain("Нет учётной записи VPN. Активируйте триал или купите подписку.")
 
     rw = RemnaWaveClient(settings)
-    new_limit = sub.devices_count + 1
+    new_limit = int(sub.devices_count) + qty
     try:
         await update_rw_user_respecting_hwid_limit(
             rw,
@@ -981,29 +1029,41 @@ async def add_paid_device_slot(
     except RemnaWaveError as e:
         return False, join_lines(plain("Панель VPN:"), esc(str(e)))
 
-    new_idx = await count_devices(session, sub.id) + 1
+    base_idx = await count_devices(session, sub.id)
     sub.devices_count = new_limit
-    user.balance -= price
-    dev = Device(
-        subscription_id=sub.id,
-        user_id=user.id,
-        name=f"Устройство {new_idx}",
-    )
-    session.add(dev)
+    user.balance -= total_price
+    device_ids: list[int] = []
+    for off in range(qty):
+        dev = Device(
+            subscription_id=sub.id,
+            user_id=user.id,
+            name=f"Устройство {base_idx + off + 1}",
+        )
+        session.add(dev)
+        await session.flush()
+        device_ids.append(int(dev.id))
+
+    desc = f"Доп. устройства ×{qty}" if qty > 1 else "Дополнительное устройство"
     slot_txn = Transaction(
         user_id=user.id,
         type="manual_add",
-        amount=price,
+        amount=total_price,
         currency="RUB",
         payment_provider="balance",
         payment_id=idempotency_key,
         status="completed",
-        description="Дополнительное устройство",
-        meta={"subscription_id": sub.id},
+        description=desc,
+        meta={
+            "subscription_id": sub.id,
+            "slots_added": qty,
+            "unit_price_rub": str(unit_price),
+            "discount_percent": str(discount_pct),
+        },
     )
     session.add(slot_txn)
     await session.flush()
-    slot_txn.meta = {**(slot_txn.meta or {}), "device_id": dev.id}
+    if device_ids:
+        slot_txn.meta = {**(slot_txn.meta or {}), "device_ids": device_ids, "device_id": device_ids[0]}
     await session.flush()
     if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
         from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
@@ -1012,16 +1072,44 @@ async def add_paid_device_slot(
     await grant_referrer_percent_of_referred_payment(
         session,
         referred_user=user,
-        payment_amount_rub=price,
+        payment_amount_rub=total_price,
         settings=settings,
         idempotency_key=f"referral_pct:device_slot:{slot_txn.id}",
         reward_source="payment_pct_device",
     )
-    return True, join_lines(
-        plain("Добавлен слот устройства (−")
-        + bold(str(price))
+    msg = join_lines(
+        plain("Добавлено слотов: ")
+        + bold(str(qty))
+        + plain(" (−")
+        + bold(str(total_price))
         + plain(" ₽)."),
         plain("Всего слотов: ") + bold(str(sub.devices_count)) + plain("."),
+    )
+    if discount_pct > 0:
+        msg = join_lines(
+            msg,
+            plain("Скидка за объём: ")
+            + bold(str(discount_pct))
+            + plain("% (база ")
+            + bold(str(unit_price))
+            + plain(" ₽/слот)."),
+        )
+    return True, msg
+
+
+async def add_paid_device_slot(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+    idempotency_key: str | None = None,
+) -> tuple[bool, str]:
+    return await add_paid_device_slots(
+        session,
+        user=user,
+        settings=settings,
+        quantity=1,
+        idempotency_key=idempotency_key,
     )
 
 

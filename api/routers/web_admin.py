@@ -93,6 +93,22 @@ from shared.services.web_admin_notify import (
     web_admin_actor_notify_line,
     web_admin_target_user_line,
 )
+from shared.services.web_admin_session_service import (
+    auth_snapshot_from_wauth,
+    browser_fingerprint,
+    clear_login_hint_cookie,
+    create_browser_session,
+    get_browser_session,
+    list_user_browser_sessions,
+    login_hint_payload,
+    read_login_hint,
+    restore_wauth_from_snapshot,
+    revoke_all_user_browser_sessions,
+    revoke_browser_session,
+    revoke_browser_session_by_id,
+    set_login_hint_cookie,
+    touch_browser_session,
+)
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
 from shared.services.topup_service import apply_balance_credit_followups
 from shared.services.subscription_service import (
@@ -141,6 +157,7 @@ _TRANSACTION_TYPE_HINTS_RU: dict[str, str] = {
     "referral_signup_invited": "Приветственное начисление приглашённому по реферальной ссылке",
     "referral_payment_percent": "Процент на баланс пригласившему от платежа приглашённого",
     "purchase_refund": "Возврат на баланс при отмене покупки тарифа или слота устройства администратором",
+    "subscription_repeat_bonus": "Бонус на баланс при повторной покупке тарифа с баланса (2-я и далее)",
 }
 
 
@@ -1701,21 +1718,134 @@ async def _bind_web_admin_session(
     used_totp: bool,
 ) -> None:
     settings = get_settings()
+    wauth = request.session.get("wauth")
+    if not isinstance(wauth, dict):
+        wauth = {}
     token = token_urlsafe(24)
-    expires_at = datetime.now(UTC) + _WEB_ADMIN_SESSION_TTL
     async with await _session() as session:
         db_user = await session.get(User, user.id)
         if db_user is None:
             _clear_web_admin_session(request)
             return
-        db_user.web_admin_session_token = token
-        db_user.web_admin_session_expires_at = expires_at
-        await session.commit()
+        row = await create_browser_session(
+            session,
+            user=db_user,
+            request=request,
+            session_token=token,
+            login_kind=method_kind,
+            auth_snapshot=auth_snapshot_from_wauth(wauth),
+        )
+        expires_at = row.expires_at
     request.session["wauth_user_id"] = int(user.id)
     request.session["wauth_session_token"] = token
     request.session["wauth_session_exp"] = int(expires_at.timestamp())
     request.session["wauth_login_kind"] = method_kind
     await _notify_admin_login(settings, user=user, method_kind=method_kind, used_totp=used_totp)
+
+
+async def _maybe_restore_browser_session(request: Request) -> RedirectResponse | None:
+    """Продление/восстановление 24-часовой сессии этого браузера без повторного OAuth."""
+    token = str(request.session.get("wauth_session_token") or "").strip()
+    if not token:
+        return None
+    fp = browser_fingerprint(request)
+    async with await _session() as session:
+        row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+        if row is None:
+            return None
+        new_exp = await touch_browser_session(session, row)
+        user = await session.get(User, row.user_id)
+    if user is None:
+        return None
+    snap = row.auth_snapshot if isinstance(row.auth_snapshot, dict) else {}
+    if snap:
+        request.session["wauth"] = restore_wauth_from_snapshot(snap)
+    request.session["wauth_user_id"] = int(user.id)
+    request.session["wauth_session_token"] = token
+    request.session["wauth_session_exp"] = int(new_exp.timestamp())
+    request.session["wauth_login_kind"] = str(row.login_kind or request.session.get("wauth_login_kind") or "web")
+    return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
+
+
+async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
+    current_tok = str(request.session.get("wauth_session_token") or "").strip()
+    now = datetime.now(UTC)
+    async with await _session() as session:
+        rows = await list_user_browser_sessions(session, user_id, limit=20)
+    if not rows:
+        return """
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-2">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч)</h3>
+        <p class="text-sm opacity-80">Нет активных записей. После входа на сайт здесь появятся устройства; отзыв — повторный OAuth и 2FA.</p>
+      </div>
+    </div>"""
+    items = []
+    for row in rows:
+        exp = row.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        active = row.revoked_at is None and exp > now
+        is_current = active and row.session_token == current_tok
+        status = "текущая" if is_current else ("активна" if active else "отозвана")
+        ua = _esc((row.user_agent or "")[:72])
+        ip = _esc(row.ip_address or "—")
+        btn = ""
+        if active and not is_current:
+            btn = (
+                f'<form method="post" action="/admin/profile/sessions/{int(row.id)}/revoke" class="inline">'
+                f'<button type="submit" class="btn btn-ghost btn-xs text-error">Отозвать</button></form>'
+            )
+        elif active and is_current:
+            btn = '<span class="text-xs opacity-60">это устройство</span>'
+        items.append(
+            f"<li class='py-2 border-b border-base-content/10 text-sm'>"
+            f"<b>{_esc(status)}</b> · {_esc(row.login_kind)} · {ip}<br/>"
+            f"<span class='opacity-70'>{ua}</span><br/>"
+            f"<span class='opacity-60'>до {_esc(exp.strftime('%d.%m.%Y %H:%M'))} UTC</span> {btn}"
+            f"</li>"
+        )
+    return f"""
+    <div class="card bg-base-100 border border-base-content/10 shadow-lg">
+      <div class="card-body gap-3">
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч)</h3>
+        <p class="text-sm opacity-80">Отзыв сессии отключает вход без повторного Telegram/GitHub и кода 2FA на этом браузере.</p>
+        <ul class="list-none p-0 m-0">{''.join(items)}</ul>
+        <form method="post" action="/admin/profile/sessions/revoke-all" data-remna-confirm-msg="Отозвать все сессии кроме текущей?">
+          <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9">Отозвать все другие</button>
+        </form>
+      </div>
+    </div>"""
+
+
+def _login_last_account_html(hint: dict | object | None) -> str:
+    if not isinstance(hint, dict) or not hint.get("label"):
+        return ""
+    label = _esc(str(hint.get("label") or ""))
+    kind = str(hint.get("login_kind") or "telegram")
+    avatar = str(hint.get("avatar_url") or "").strip()
+    icon = (
+        '<i class="fa-brands fa-telegram text-2xl text-[#229ED9]" aria-hidden="true"></i>'
+        if kind == "telegram"
+        else '<i class="fa-brands fa-github text-2xl" aria-hidden="true"></i>'
+    )
+    avatar_html = (
+        f'<img src="{_esc_attr(avatar)}" alt="" class="h-12 w-12 rounded-full object-cover ring-2 ring-primary/40" />'
+        if avatar
+        else f'<span class="flex h-12 w-12 items-center justify-center rounded-full bg-base-200">{icon}</span>'
+    )
+    return f"""
+    <div class="w-full rounded-xl border border-primary/25 bg-primary/5 p-4 text-left">
+      <p class="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">Последний вход</p>
+      <div class="flex items-center gap-3">
+        {avatar_html}
+        <div class="min-w-0 flex-1">
+          <p class="truncate font-semibold">{label}</p>
+          <p class="text-xs opacity-70">В этом браузере сессия 24 ч — OAuth не нужен, если вы не выходили.</p>
+        </div>
+      </div>
+    </div>
+    """
 
 
 async def _linked_bot_user_for_admin(request: Request) -> User | None:
@@ -2273,6 +2403,11 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     show_2fa = pending_2fa or (request.query_params.get("totp") == "1")
     totp_err = request.query_params.get("err") == "totp"
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
+    if not link_mode and not show_2fa:
+        restored = await _maybe_restore_browser_session(request)
+        if restored is not None:
+            return restored
+    login_hint = read_login_hint(request) if not link_mode else None
     if _is_logged(request) and not link_mode:
         uid_raw = request.session.get("wauth_user_id")
         token = str(request.session.get("wauth_session_token") or "").strip()
@@ -2285,12 +2420,12 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             valid = False
         else:
             now = datetime.now(UTC)
+            fp = browser_fingerprint(request)
             if token and exp > int(now.timestamp()):
                 async with await _session() as session:
-                    user = await session.get(User, uid)
-                if user is not None and (user.web_admin_session_token or "") == token:
-                    db_exp = user.web_admin_session_expires_at
-                    if db_exp is not None:
+                    row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+                    if row is not None and int(row.user_id) == uid:
+                        db_exp = row.expires_at
                         if db_exp.tzinfo is None:
                             db_exp = db_exp.replace(tzinfo=UTC)
                         valid = db_exp > now
@@ -2419,6 +2554,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         <div class="flex w-full flex-col items-center gap-4">
           {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           {login_notice}
+          {_login_last_account_html(login_hint) if not link_mode else ""}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
           <a class="btn gap-2 login-auth-btn login-auth-btn-github" href="{_esc(github_href)}">
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
@@ -2940,19 +3076,44 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
 @router.post("/logout")
 async def admin_logout(request: Request):
     uid_raw = request.session.get("wauth_user_id")
+    token = str(request.session.get("wauth_session_token") or "").strip()
+    wauth = request.session.get("wauth")
     try:
         uid = int(uid_raw)
     except (TypeError, ValueError):
         uid = 0
-    if uid:
+    hint_payload: dict | None = None
+    if uid and isinstance(wauth, dict):
         async with await _session() as session:
             user = await session.get(User, uid)
             if user is not None:
+                if token:
+                    await revoke_browser_session(session, token=token)
                 user.web_admin_session_token = None
                 user.web_admin_session_expires_at = None
                 await session.commit()
-    request.session.clear()
-    return RedirectResponse("/admin/login", status_code=303)
+                kind = str(wauth.get("kind") or request.session.get("wauth_login_kind") or "telegram")
+                label = str(wauth.get("label") or user.username or user.first_name or str(user.telegram_id))
+                tid = wauth.get("telegram_id") or wauth.get("id") or user.telegram_id
+                try:
+                    tid_i = int(tid)
+                except (TypeError, ValueError):
+                    tid_i = int(user.telegram_id)
+                hint_payload = login_hint_payload(
+                    user_id=user.id,
+                    login_kind=kind,
+                    label=label,
+                    avatar_url=str(wauth.get("avatar_url") or ""),
+                    telegram_id=tid_i,
+                    github_login=str(wauth.get("github_login") or wauth.get("login") or user.github_username or ""),
+                )
+    _clear_web_admin_session(request)
+    resp = RedirectResponse("/admin/login", status_code=303)
+    if hint_payload:
+        set_login_hint_cookie(resp, hint_payload)
+    else:
+        clear_login_hint_cookie(resp)
+    return resp
 
 
 async def _admin_broadcast_job(
@@ -7368,6 +7529,8 @@ async def admin_profile(request: Request) -> HTMLResponse:
         profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA включена для входа в web-admin.</span></div>"
     elif ncode == "2fa_off":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA отключена.</span></div>"
+    elif ncode == "session_revoked" or ncode.startswith("sessions_revoked_"):
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Сессия отозвана. Повторный вход потребует OAuth и 2FA.</span></div>"
     elif err:
         profile_notice = (
             "<div class='alert alert-error shadow-sm'><span>"
@@ -7387,6 +7550,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     vpn_block = ""
     profile_balance_block = ""
     profile_2fa_block = ""
+    profile_sessions_block = ""
     setup_secret = str(request.session.get("admin_2fa_setup_secret") or "").strip()
     setup_uid_raw = request.session.get("admin_2fa_setup_user_id")
     try:
@@ -7394,6 +7558,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     except (TypeError, ValueError):
         setup_uid = 0
     if linked is not None:
+        profile_sessions_block = await _profile_browser_sessions_html(request, linked.id)
         link_badges = ""
         if linked.github_username:
             gh = _esc(linked.github_username)
@@ -7560,6 +7725,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
       </div>
     </div>
     {profile_2fa_block}
+    {profile_sessions_block}
     {profile_balance_block}
     {vpn_block}
     </div>
@@ -7572,6 +7738,39 @@ async def admin_profile(request: Request) -> HTMLResponse:
         sidebar_avatar_url=_user_avatar_photo_src(linked) if linked is not None else None,
         sidebar_user_label=linked.first_name if linked is not None and linked.first_name else None,
     )
+
+
+@router.post("/profile/sessions/{session_id}/revoke")
+async def admin_profile_revoke_session(request: Request, session_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Нет профиля бота"), status_code=303)
+    async with await _session() as session:
+        ok = await revoke_browser_session_by_id(
+            session, user_id=linked.id, session_row_id=session_id
+        )
+    if not ok:
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Сессия не найдена"), status_code=303)
+    return RedirectResponse("/admin/profile?n=session_revoked", status_code=303)
+
+
+@router.post("/profile/sessions/revoke-all")
+async def admin_profile_revoke_all_sessions(request: Request) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Нет профиля бота"), status_code=303)
+    current = str(request.session.get("wauth_session_token") or "").strip()
+    async with await _session() as session:
+        n = await revoke_all_user_browser_sessions(
+            session, linked.id, except_token=current or None
+        )
+    return RedirectResponse(f"/admin/profile?n=sessions_revoked_{n}", status_code=303)
 
 
 @router.post("/profile/add-balance")

@@ -37,7 +37,20 @@ from shared.services.billing_v2.detail_service import user_has_tariff_subscripti
 from shared.models.plan import Plan
 from shared.services.feature_flags import tariff_purchases_enabled
 from shared.services.topup_service import create_topup_payment
+from shared.services.device_slots_pricing import (
+    is_admin_unlimited_devices,
+    price_for_extra_device_slots,
+    slots_available_to_buy,
+)
+from shared.services.hwid_devices_service import (
+    connected_devices_count,
+    device_display_title,
+    fetch_panel_hwid_context,
+    panel_devices_unlimited,
+)
 from shared.services.subscription_service import (
+    MAX_DEVICES,
+    add_paid_device_slots,
     can_renew_subscription_with_tariff,
     get_active_subscription,
     list_paid_plans,
@@ -139,11 +152,20 @@ def _subscription_page(
     balance_rub: Decimal | int | float | None,
     bot_open_url: str | None,
     show_renew_button: bool = False,
+    devices_used: int | None = None,
+    devices_max_label: str | None = None,
 ) -> HTMLResponse:
     bot_href = _esc((bot_open_url or "").strip()) or "#"
     bot_btn_disabled = " opacity-60 pointer-events-none" if not (bot_open_url or "").strip() else ""
     topup_href = f"/sub/{_esc(token)}/topup"
     renew_href = f"/sub/{_esc(token)}/renew"
+    devices_href = f"/sub/{_esc(token)}/devices"
+    devices_row = ""
+    if devices_used is not None and devices_max_label:
+        devices_row = (
+            f'<div class="row"><div class="label">Устройства</div>'
+            f'<div class="value">{devices_used} / {devices_max_label}</div></div>'
+        )
     renew_btn_html = (
         f'<a class="btn btn-primary" href="{renew_href}">Продлить подписку</a>'
         if show_renew_button
@@ -272,8 +294,8 @@ def _subscription_page(
       max-width: 430px;
       margin: 0 auto;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
     }}
     .hotbtn {{
       text-decoration: none;
@@ -284,7 +306,7 @@ def _subscription_page(
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 600;
       background: rgba(15, 26, 52, 0.55);
     }}
@@ -308,6 +330,7 @@ def _subscription_page(
       <div class="row"><div class="label">Действует до</div><div class="value">{_esc(_fmt_dt(expires_at))}</div></div>
       <div class="row"><div class="label">Создана</div><div class="value">{_esc(_fmt_dt(created_at))}</div></div>
       <div class="row"><div class="label">Баланс</div><div class="value">{_esc(_format_rub(balance_rub))}</div></div>
+      {devices_row}
     </section>
     <section class="actions">
       {renew_btn_html}
@@ -317,7 +340,8 @@ def _subscription_page(
   </main>
   <nav class="hotbar">
     <div class="hotbar-inner">
-      <a class="hotbtn active" href="/sub/{_esc(token)}">Моя подписка</a>
+      <a class="hotbtn active" href="/sub/{_esc(token)}">Подписка</a>
+      <a class="hotbtn" href="{devices_href}">Устройства</a>
       <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>
     </div>
   </nav>
@@ -697,7 +721,7 @@ def _support_page(token: str) -> HTMLResponse:
       background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
       z-index:35;
     }}
-    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }}
     .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:rgba(15,26,52,.55); }}
     .hotbtn.active {{ color:#fff; border-color:rgba(124,108,255,.55); background:rgba(124,108,255,.25); }}
   </style>
@@ -730,7 +754,8 @@ def _support_page(token: str) -> HTMLResponse:
   </div>
   <nav class="hotbar">
     <div class="hotbar-inner">
-      <a class="hotbtn" href="/sub/{token_esc}">Моя подписка</a>
+      <a class="hotbtn" href="/sub/{token_esc}">Подписка</a>
+      <a class="hotbtn" href="/sub/{token_esc}/devices">Устройства</a>
       <a class="hotbtn active" href="/sub/{token_esc}/support">Поддержка</a>
     </div>
   </nav>
@@ -1202,6 +1227,16 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
     show_renew = False
     if db_user is not None and sub is not None and await tariff_purchases_enabled(settings):
         show_renew = True
+    devices_used: int | None = None
+    devices_max_label: str | None = None
+    if db_user is not None and sub is not None:
+        is_admin = is_admin_unlimited_devices(db_user, settings)
+        uinf, hw_devices, _err = await fetch_panel_hwid_context(db_user, settings)
+        devices_used = connected_devices_count(uinf, hw_devices)
+        if is_admin or panel_devices_unlimited(uinf, is_bot_admin=is_admin):
+            devices_max_label = "∞"
+        else:
+            devices_max_label = str(sub.devices_count)
     return _subscription_page(
         token=token,
         headline_value=headline_value,
@@ -1211,6 +1246,8 @@ async def public_subscription_card(subscription_key: str) -> HTMLResponse:
         balance_rub=db_user.balance if db_user is not None else Decimal("0"),
         bot_open_url=bot_open_url,
         show_renew_button=show_renew,
+        devices_used=devices_used,
+        devices_max_label=devices_max_label,
     )
 
 
@@ -1693,3 +1730,212 @@ async def public_subscription_topup(
             error_message=f"Не удалось создать платеж: {str(exc)[:160]}",
         )
     return RedirectResponse(url=pay_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _devices_hotbar(token: str, active: str) -> str:
+    t = _esc(token)
+    def cls(tab: str) -> str:
+        return " active" if tab == active else ""
+
+    return f"""
+  <nav class="hotbar">
+    <div class="hotbar-inner">
+      <a class="hotbtn{cls('sub')}" href="/sub/{t}">Подписка</a>
+      <a class="hotbtn{cls('devices')}" href="/sub/{t}/devices">Устройства</a>
+      <a class="hotbtn{cls('support')}" href="/sub/{t}/support">Поддержка</a>
+    </div>
+  </nav>"""
+
+
+def _devices_page(
+    *,
+    token: str,
+    devices_used: int,
+    devices_max_label: str,
+    can_buy: int,
+    unit_price: Decimal,
+    balance_rub: Decimal,
+    devices: list[dict],
+    error_message: str | None = None,
+    success_message: str | None = None,
+) -> HTMLResponse:
+    err_html = f'<div class="error-box">{_esc(error_message)}</div>' if error_message else ""
+    ok_html = f'<div class="ok-box">{_esc(success_message)}</div>' if success_message else ""
+    dev_items = ""
+    if not devices:
+        dev_items = '<p class="muted">Нет привязанных устройств в панели.</p>'
+    else:
+        for i, d in enumerate(devices, start=1):
+            title = _esc(device_display_title(d, i))
+            plat = _esc(str(d.get("platform") or "—"))
+            dev_items += f'<div class="dev-item"><div class="dev-title">{title}</div><div class="dev-meta">{plat}</div></div>'
+
+    qty_buttons = ""
+    if can_buy > 0:
+        for n in range(1, can_buy + 1):
+            total, _u, disc = price_for_extra_device_slots(get_settings(), n)
+            disc_note = f" (−{disc:g}%)" if disc > 0 else ""
+            qty_buttons += (
+                f'<button type="submit" name="quantity" value="{n}" class="btn btn-qty">'
+                f"+{n} · {_esc(str(total))} ₽{disc_note}</button>"
+            )
+    else:
+        qty_buttons = '<p class="muted">Достигнут лимит слотов или докупка недоступна.</p>'
+
+    page = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Устройства — Flux Network</title>
+  <style>
+    :root {{ --bg:#060b18; --card:#0c1428; --line:#1a2744; --text:#e8eef8; --muted:#8fa3c8; --blue:#3b82f6; }}
+    body {{ margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }}
+    .wrap {{ max-width:430px; margin:0 auto; padding:18px 14px 100px; }}
+    .card {{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }}
+    .stat {{ font-size:28px; font-weight:700; }}
+    .muted {{ color:var(--muted); font-size:14px; }}
+    .dev-item {{ border-top:1px solid var(--line); padding:10px 0; }}
+    .dev-title {{ font-weight:600; }}
+    .dev-meta {{ color:var(--muted); font-size:13px; }}
+    .btn-qty {{ width:100%; min-height:44px; margin:6px 0; border-radius:10px; border:1px solid var(--line); background:rgba(59,130,246,.2); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }}
+    .error-box {{ background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.4); padding:10px; border-radius:10px; margin-bottom:10px; }}
+    .ok-box {{ background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.35); padding:10px; border-radius:10px; margin-bottom:10px; }}
+    .hotbar {{ position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line); background:rgba(7,12,28,.95); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); }}
+    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }}
+    .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }}
+    .hotbtn.active {{ color:#fff; border-color:rgba(86,135,255,.45); background:rgba(39,101,224,.35); }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 style="font-size:24px;margin:0 0 12px">🖥 Устройства</h1>
+    {err_html}{ok_html}
+    <section class="card">
+      <div class="muted">Привязано / лимит слотов</div>
+      <div class="stat">{devices_used} / {_esc(devices_max_label)}</div>
+      <p class="muted">Баланс: {_esc(_format_rub(balance_rub))} · слот: {_esc(str(unit_price))} ₽ (скидка от 3 шт.)</p>
+    </section>
+    <section class="card">
+      <div class="muted" style="margin-bottom:8px">Привязанные устройства</div>
+      {dev_items}
+    </section>
+    <section class="card">
+      <div class="muted" style="margin-bottom:8px">Докупить слоты</div>
+      <form method="post" action="/sub/{_esc(token)}/devices/buy">
+        {qty_buttons}
+      </form>
+    </section>
+  </main>
+  {_devices_hotbar(token, "devices")}
+</body>
+</html>"""
+    return HTMLResponse(page)
+
+
+@router.get("/sub/{subscription_key}/devices")
+async def public_subscription_devices_page(subscription_key: str) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>/devices")
+    settings = get_settings()
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None or sub is None:
+        return render_not_found_page(f"/sub/{token}/devices")
+
+    is_admin = is_admin_unlimited_devices(db_user, settings)
+    uinf, devices, err = await fetch_panel_hwid_context(db_user, settings)
+    used = connected_devices_count(uinf, devices) if not err else 0
+    unlimited = is_admin or panel_devices_unlimited(uinf, is_bot_admin=is_admin)
+    max_label = "∞" if unlimited else str(sub.devices_count)
+    can_buy = 0
+    if not unlimited and not (settings.billing_v2_enabled and db_user.billing_mode == "hybrid"):
+        can_buy = slots_available_to_buy(int(sub.devices_count), MAX_DEVICES)
+
+    return _devices_page(
+        token=token,
+        devices_used=used,
+        devices_max_label=max_label,
+        can_buy=can_buy,
+        unit_price=settings.extra_device_price_rub,
+        balance_rub=db_user.balance,
+        devices=devices if not err else [],
+        error_message=err,
+    )
+
+
+@router.post("/sub/{subscription_key}/devices/buy")
+async def public_subscription_devices_buy(
+    subscription_key: str,
+    request: Request,
+    quantity: str = Form(...),
+) -> HTMLResponse:
+    token = (subscription_key or "").strip()
+    if not token:
+        return render_not_found_page("/sub/<empty>/devices")
+    settings = get_settings()
+    panel_user, db_user, sub = await _resolve_subscription_context(token)
+    if panel_user is None or db_user is None or sub is None:
+        return render_not_found_page(f"/sub/{token}/devices")
+
+    try:
+        qty = int((quantity or "").strip())
+    except ValueError:
+        qty = 0
+
+    is_admin = is_admin_unlimited_devices(db_user, settings)
+    uinf, devices, err = await fetch_panel_hwid_context(db_user, settings)
+    used = connected_devices_count(uinf, devices) if not err else 0
+    unlimited = is_admin or panel_devices_unlimited(uinf, is_bot_admin=is_admin)
+    max_label = "∞" if unlimited else str(sub.devices_count)
+    can_buy = 0 if unlimited else slots_available_to_buy(int(sub.devices_count), MAX_DEVICES)
+
+    success_msg: str | None = None
+    error_msg: str | None = None
+
+    if unlimited:
+        error_msg = "Для администратора докупка слотов не требуется."
+    elif settings.billing_v2_enabled and db_user.billing_mode == "hybrid":
+        error_msg = "Для PAYG докупка слотов недоступна на сайте."
+    else:
+        idem = secrets.token_hex(8)
+        factory = get_session_factory()
+        async with factory() as session:
+            user = await session.get(User, db_user.id)
+            if user is None:
+                error_msg = "Пользователь не найден."
+            else:
+                ok, msg = await add_paid_device_slots(
+                    session,
+                    user=user,
+                    settings=settings,
+                    quantity=qty,
+                    idempotency_key=f"webdev:{user.id}:{idem}",
+                )
+                if ok:
+                    await session.commit()
+                    success_msg = msg.replace("*", "").replace("\\", "")[:200]
+                    sub = await get_active_subscription(session, user.id)
+                    db_user = user
+                else:
+                    await session.rollback()
+                    error_msg = msg.replace("*", "").replace("\\", "")[:200]
+
+    if sub is not None:
+        can_buy = 0 if unlimited else slots_available_to_buy(int(sub.devices_count), MAX_DEVICES)
+        max_label = "∞" if unlimited else str(sub.devices_count)
+
+    uinf2, devices2, err2 = await fetch_panel_hwid_context(db_user, settings)
+    used2 = connected_devices_count(uinf2, devices2) if not err2 else used
+
+    return _devices_page(
+        token=token,
+        devices_used=used2,
+        devices_max_label=max_label,
+        can_buy=can_buy,
+        unit_price=settings.extra_device_price_rub,
+        balance_rub=db_user.balance,
+        devices=devices2 if not err2 else [],
+        error_message=error_msg or err2,
+        success_message=success_msg,
+    )

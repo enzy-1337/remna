@@ -422,7 +422,11 @@ class Settings(BaseSettings):
     trial_traffic_gb: int = Field(default=1, validation_alias="TRIAL_TRAFFIC_GB")
 
     # Подписка / устройства (шаг 8)
-    extra_device_price_rub: Decimal = Field(default=Decimal("65"), validation_alias="EXTRA_DEVICE_PRICE_RUB")
+    extra_device_price_rub: Decimal = Field(
+        default=Decimal("50"),
+        validation_alias="EXTRA_DEVICE_PRICE_RUB",
+        description="Стоимость одного дополнительного слота устройства при покупке с баланса (₽ за слот).",
+    )
     subscription_included_device_slots: int = Field(
         default=2,
         ge=1,
@@ -431,9 +435,9 @@ class Settings(BaseSettings):
         description="Сколько слотов устройств входит в базовую подписку без отдельной доплаты (закладка под месячный биллинг; бот пока не списывает).",
     )
     extra_device_monthly_rub: Decimal = Field(
-        default=Decimal("70"),
+        default=Decimal("50"),
         validation_alias="EXTRA_DEVICE_MONTHLY_RUB",
-        description="Планируемая цена ₽/мес за каждое устройство сверх SUBSCRIPTION_INCLUDED_DEVICE_SLOTS (бот пока не списывает).",
+        description="Справочная цена ₽/мес за слот сверх включённых (отображение; списание — EXTRA_DEVICE_PRICE_RUB).",
     )
     subscription_autorenew_enabled: bool = Field(
         default=True,
@@ -459,6 +463,13 @@ class Settings(BaseSettings):
         le=90,
         validation_alias="SUBSCRIPTION_RENEWAL_WINDOW_DAYS",
         description="Продление тарифом с баланса: только если до конца подписки осталось не больше N дней (0 = без ограничения)",
+    )
+    subscription_repeat_purchase_bonus_percent: Decimal = Field(
+        default=Decimal("5"),
+        ge=0,
+        le=100,
+        validation_alias="SUBSCRIPTION_REPEAT_PURCHASE_BONUS_PERCENT",
+        description="Бонус на основной баланс при 2-й и далее покупке тарифа с баланса, % от списанной суммы (0 = выкл.)",
     )
     subscription_expiry_notify_enabled: bool = Field(
         default=True,

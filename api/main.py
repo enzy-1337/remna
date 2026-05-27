@@ -32,6 +32,12 @@ from api.routers import public_pages, tickets_api, web_admin, webhooks
 from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.models.user import User
+from shared.services.web_admin_session_service import (
+    browser_fingerprint,
+    get_browser_session,
+    restore_wauth_from_snapshot,
+    touch_browser_session,
+)
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.md2 import bold, plain
 from shared.services.admin_notify import notify_admin
@@ -65,26 +71,39 @@ class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
                         invalid = True
                     else:
                         factory = get_session_factory()
+                        fp = browser_fingerprint(request)
                         async with factory() as session:
-                            user = await session.get(User, uid)
-                            if (
-                                user is None
-                                or (user.web_admin_session_token or "") != token
-                                or user.web_admin_session_expires_at is None
-                            ):
-                                invalid = True
-                            else:
-                                db_exp = user.web_admin_session_expires_at
-                                if db_exp.tzinfo is None:
-                                    db_exp = db_exp.replace(tzinfo=timezone.utc)
-                                now_utc = datetime.now(timezone.utc)
-                                if db_exp <= now_utc:
+                            row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+                            if row is None:
+                                user = await session.get(User, uid)
+                                if (
+                                    user is None
+                                    or (user.web_admin_session_token or "") != token
+                                    or user.web_admin_session_expires_at is None
+                                ):
                                     invalid = True
-                                elif not invalid:
-                                    new_exp = now_utc + timedelta(hours=24)
-                                    user.web_admin_session_expires_at = new_exp
-                                    await session.commit()
-                                    request.session["wauth_session_exp"] = int(new_exp.timestamp())
+                                else:
+                                    db_exp = user.web_admin_session_expires_at
+                                    if db_exp.tzinfo is None:
+                                        db_exp = db_exp.replace(tzinfo=timezone.utc)
+                                    if db_exp <= datetime.now(timezone.utc):
+                                        invalid = True
+                            else:
+                                if int(row.user_id) != uid:
+                                    invalid = True
+                                else:
+                                    db_exp = row.expires_at
+                                    if db_exp.tzinfo is None:
+                                        db_exp = db_exp.replace(tzinfo=timezone.utc)
+                                    now_utc = datetime.now(timezone.utc)
+                                    if db_exp <= now_utc:
+                                        invalid = True
+                                    elif not invalid:
+                                        new_exp = await touch_browser_session(session, row)
+                                        request.session["wauth_session_exp"] = int(new_exp.timestamp())
+                                        snap = row.auth_snapshot
+                                        if isinstance(snap, dict) and snap and not request.session.get("wauth"):
+                                            request.session["wauth"] = restore_wauth_from_snapshot(snap)
                 if invalid:
                     path = request.url.path or ""
                     q = request.url.query or ""
