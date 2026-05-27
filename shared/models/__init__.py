@@ -19,6 +19,7 @@ from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.models.web_admin_browser_session import WebAdminBrowserSession
 
 __all__ = [
     "Base",
@@ -35,6 +36,7 @@ __all__ = [
     "MusicUserTopic",
     "RemnawaveWebhookEvent",
     "User",
+    "WebAdminBrowserSession",
     "Plan",
     "Subscription",
     "Device",

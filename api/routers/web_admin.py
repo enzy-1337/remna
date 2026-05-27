@@ -99,7 +99,8 @@ from shared.services.web_admin_session_service import (
     clear_login_hint_cookie,
     create_browser_session,
     get_browser_session,
-    list_user_browser_sessions,
+    list_user_browser_sessions_safe,
+    try_get_browser_session,
     login_hint_payload,
     read_login_hint,
     restore_wauth_from_snapshot,
@@ -1750,7 +1751,7 @@ async def _maybe_restore_browser_session(request: Request) -> RedirectResponse |
         return None
     fp = browser_fingerprint(request)
     async with await _session() as session:
-        row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+        row = await try_get_browser_session(session, token=token, fingerprint_hash=fp)
         if row is None:
             return None
         new_exp = await touch_browser_session(session, row)
@@ -1771,7 +1772,7 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
     current_tok = str(request.session.get("wauth_session_token") or "").strip()
     now = datetime.now(UTC)
     async with await _session() as session:
-        rows = await list_user_browser_sessions(session, user_id, limit=20)
+        rows = await list_user_browser_sessions_safe(session, user_id, limit=20)
     if not rows:
         return """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
@@ -2423,7 +2424,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             fp = browser_fingerprint(request)
             if token and exp > int(now.timestamp()):
                 async with await _session() as session:
-                    row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+                    row = await try_get_browser_session(session, token=token, fingerprint_hash=fp)
                     if row is not None and int(row.user_id) == uid:
                         db_exp = row.expires_at
                         if db_exp.tzinfo is None:

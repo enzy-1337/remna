@@ -34,9 +34,9 @@ from shared.database import get_session_factory
 from shared.models.user import User
 from shared.services.web_admin_session_service import (
     browser_fingerprint,
-    get_browser_session,
     restore_wauth_from_snapshot,
     touch_browser_session,
+    try_get_browser_session,
 )
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.md2 import bold, plain
@@ -73,7 +73,7 @@ class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
                         factory = get_session_factory()
                         fp = browser_fingerprint(request)
                         async with factory() as session:
-                            row = await get_browser_session(session, token=token, fingerprint_hash=fp)
+                            row = await try_get_browser_session(session, token=token, fingerprint_hash=fp)
                             if row is None:
                                 user = await session.get(User, uid)
                                 if (

@@ -10,6 +10,7 @@ from typing import Any
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import desc, select, update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
@@ -92,6 +93,13 @@ def clear_login_hint_cookie(response) -> None:
     response.delete_cookie(LOGIN_HINT_COOKIE)
 
 
+def _missing_browser_sessions_table(exc: BaseException) -> bool:
+    err = str(exc).lower()
+    return "web_admin_browser_sessions" in err and (
+        "does not exist" in err or "undefinedtable" in err or "no such table" in err
+    )
+
+
 async def get_browser_session(
     session: AsyncSession,
     *,
@@ -117,6 +125,39 @@ async def get_browser_session(
     if fingerprint_hash is not None and row.fingerprint_hash != fingerprint_hash:
         return None
     return row
+
+
+async def try_get_browser_session(
+    session: AsyncSession,
+    *,
+    token: str,
+    fingerprint_hash: str | None = None,
+) -> WebAdminBrowserSession | None:
+    """Как get_browser_session, но без падения, если миграция 0029 ещё не применена."""
+    try:
+        return await get_browser_session(session, token=token, fingerprint_hash=fingerprint_hash)
+    except ProgrammingError as exc:
+        if _missing_browser_sessions_table(exc):
+            logger.warning(
+                "Таблица web_admin_browser_sessions отсутствует — выполните: docker compose run --rm migrate"
+            )
+            return None
+        raise
+
+
+async def list_user_browser_sessions_safe(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    limit: int = 30,
+) -> list[WebAdminBrowserSession]:
+    try:
+        return await list_user_browser_sessions(session, user_id, limit=limit)
+    except ProgrammingError as exc:
+        if _missing_browser_sessions_table(exc):
+            logger.warning("web_admin_browser_sessions missing (list)")
+            return []
+        raise
 
 
 async def touch_browser_session(session: AsyncSession, row: WebAdminBrowserSession) -> datetime:
