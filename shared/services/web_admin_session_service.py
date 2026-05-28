@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy import desc, select, update
+from sqlalchemy import and_, delete, desc, or_, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -21,6 +21,7 @@ from shared.models.web_admin_browser_session import WebAdminBrowserSession
 logger = logging.getLogger(__name__)
 
 SESSION_TTL = timedelta(hours=24)
+SESSION_HISTORY_RETENTION = timedelta(days=3)
 LOGIN_HINT_MAX_AGE_SEC = 60 * 60 * 24 * 30
 LOGIN_HINT_COOKIE = "remna_login_hint"
 
@@ -309,6 +310,25 @@ async def list_user_browser_sessions(
     *,
     limit: int = 30,
 ) -> list[WebAdminBrowserSession]:
+    now = datetime.now(UTC)
+    history_cutoff = now - SESSION_HISTORY_RETENTION
+    cleanup_res = await session.execute(
+        delete(WebAdminBrowserSession).where(
+            WebAdminBrowserSession.user_id == user_id,
+            or_(
+                and_(
+                    WebAdminBrowserSession.revoked_at.is_not(None),
+                    WebAdminBrowserSession.revoked_at < history_cutoff,
+                ),
+                and_(
+                    WebAdminBrowserSession.revoked_at.is_(None),
+                    WebAdminBrowserSession.expires_at < history_cutoff,
+                ),
+            ),
+        )
+    )
+    if (cleanup_res.rowcount or 0) > 0:
+        await session.commit()
     rows = (
         await session.execute(
             select(WebAdminBrowserSession)

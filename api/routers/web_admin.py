@@ -1272,14 +1272,22 @@ def _layout(
       var ic=el.querySelector('i');if(ic){var c=ic.className;ic.className='fa-solid fa-check text-xs';setTimeout(function(){ic.className=c;},850);}
     });
   });
-  document.addEventListener('click',function(e){
+    document.addEventListener('click',function(e){
     var nav=e.target&&e.target.closest&&e.target.closest('a[href]');
     if(nav){
       var href=(nav.getAttribute('href')||'').trim();
       var htmxNav=nav.hasAttribute('hx-get')||nav.hasAttribute('hx-post')||nav.hasAttribute('hx-put')||nav.hasAttribute('hx-patch')||nav.hasAttribute('hx-delete');
+        var isExternalScheme=/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && !/^https?:/i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href);
       if(href && !href.startsWith('#') && !nav.hasAttribute('data-no-loading')){
         if(!(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) && nav.getAttribute('target')!=='_blank'){
           if(!htmxNav){window.remnaShowLoading&&window.remnaShowLoading();}
+            if(isExternalScheme){
+              setTimeout(function(){
+                if(document.hidden)return;
+                window.remnaHideLoading&&window.remnaHideLoading();
+                window.remnaToast&&window.remnaToast('error','Не удалось открыть приложение. Попробуйте еще раз.');
+              },5000);
+            }
         }
       }
     }
@@ -1828,8 +1836,8 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
         return """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч)</h3>
-        <p class="text-sm opacity-80">Нет активных записей. После входа на сайт здесь появятся устройства; отзыв — повторный OAuth и 2FA.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч + история 3 дня)</h3>
+        <p class="text-sm opacity-80">Нет записей. Активная сессия живет 24 часа, а неактивные/отозванные устройства хранятся в истории до 3 дней.</p>
       </div>
     </div>"""
     items = []
@@ -1839,7 +1847,7 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
             exp = exp.replace(tzinfo=UTC)
         active = row.revoked_at is None and exp > now
         is_current = active and row.session_token == current_tok
-        status = "текущая" if is_current else ("активна" if active else "отозвана")
+        status = "текущая" if is_current else ("активна" if active else ("отозвана" if row.revoked_at else "истекла"))
         ua = _esc((row.user_agent or "")[:72])
         ip = _esc(row.ip_address or "—")
         btn = ""
@@ -1854,14 +1862,14 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
             f"<li class='py-2 border-b border-base-content/10 text-sm'>"
             f"<b>{_esc(status)}</b> · {_esc(row.login_kind)} · {ip}<br/>"
             f"<span class='opacity-70'>{ua}</span><br/>"
-            f"<span class='opacity-60'>до {_esc(exp.strftime('%d.%m.%Y %H:%M'))} UTC</span> {btn}"
+            f"<span class='opacity-60'>до {_esc(_fmt_dt_msk(exp))}</span> {btn}"
             f"</li>"
         )
     return f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч)</h3>
-        <p class="text-sm opacity-80">Отзыв сессии отключает вход без повторного Telegram/GitHub и кода 2FA на этом браузере.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч + история 3 дня)</h3>
+        <p class="text-sm opacity-80">Отзыв сессии отключает вход без повторного Telegram/GitHub и кода 2FA. История неактивных сессий хранится 3 дня.</p>
         <ul class="list-none p-0 m-0">{''.join(items)}</ul>
         <form method="post" action="/admin/profile/sessions/revoke-all" data-remna-confirm-msg="Отозвать все сессии кроме текущей?">
           <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9">Отозвать все другие</button>
