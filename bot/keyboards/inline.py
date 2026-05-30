@@ -54,6 +54,7 @@ def main_menu_keyboard(
         InlineKeyboardButton(text="📖 Инструкции", callback_data="menu:instructions"),
     )
     builder.row(InlineKeyboardButton(text="ℹ️ Информация", callback_data="menu:info"))
+    builder.row(InlineKeyboardButton(text="👨‍👩‍👧 Семейная подписка", callback_data="menu:family"))
     return builder.as_markup()
 
 

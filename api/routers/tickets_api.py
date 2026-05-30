@@ -108,7 +108,7 @@ class TicketStatusIn(BaseModel):
 
 
 class TicketAssignIn(BaseModel):
-    assigned_admin_id: int | None = None
+    operator_id: int | None = None
     telegram_assigned_admin_id: int | None = None
 
 
@@ -202,12 +202,12 @@ async def api_tickets_list(
         params["tpid"] = int(topic_id)
     asg = (assigned or "").strip().lower()
     if asg == "none":
-        where.append("t.assigned_admin_id IS NULL")
+        where.append("t.operator_id IS NULL")
     elif asg == "me" and me_uid > 0:
-        where.append("t.assigned_admin_id = :asgme")
+        where.append("t.operator_id = :asgme")
         params["asgme"] = me_uid
     elif asg.isdigit():
-        where.append("t.assigned_admin_id = :asgn")
+        where.append("t.operator_id = :asgn")
         params["asgn"] = int(asg)
     ub = (user_billing or "").strip().lower()
     if ub in ("hybrid", "legacy"):
@@ -216,7 +216,7 @@ async def api_tickets_list(
     ord_dir = "ASC" if sort.strip().lower() == "asc" else "DESC"
     sql = f"""
         SELECT
-            t.id, t.status, t.topic_id, t.assigned_admin_id, t.telegram_assigned_admin_id,
+            t.id, t.status, t.topic_id, t.operator_id, t.telegram_assigned_admin_id,
             t.created_at, t.updated_at, t.closed_at, t.last_activity,
             u.id AS user_id, u.telegram_id, u.username, u.first_name, u.last_name,
             m0.text AS first_text
@@ -242,7 +242,7 @@ async def api_tickets_list(
                 "id": int(r["id"]),
                 "status": r["status"],
                 "topic_id": r["topic_id"],
-                "assigned_admin_id": r["assigned_admin_id"],
+                "operator_id": r["operator_id"],
                 "telegram_assigned_admin_id": r["telegram_assigned_admin_id"],
                 "created_at": _to_iso(r["created_at"]),
                 "updated_at": _to_iso(r["updated_at"]),
@@ -275,7 +275,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             await session.execute(
                 text(
                     """
-                    SELECT id,status,topic_id,user_id,telegram_user_id,assigned_admin_id,telegram_assigned_admin_id,
+                    SELECT id,status,topic_id,user_id,telegram_user_id,operator_id,telegram_assigned_admin_id,
                            created_at,updated_at,closed_at,last_activity
                     FROM tickets WHERE id = :tid
                     """
@@ -546,7 +546,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                 """
                 UPDATE tickets
                 SET status = CASE WHEN status='open' THEN 'in_progress' ELSE status END,
-                    assigned_admin_id = COALESCE(:aid, assigned_admin_id),
+                    operator_id = COALESCE(:aid, operator_id),
                     telegram_assigned_admin_id = COALESCE(:atg, telegram_assigned_admin_id),
                     updated_at=:now, last_activity=:now
                 WHERE id=:tid
@@ -776,7 +776,7 @@ async def api_ticket_reply_media(
                 """
                 UPDATE tickets
                 SET status = CASE WHEN status='open' THEN 'in_progress' ELSE status END,
-                    assigned_admin_id = COALESCE(:aid, assigned_admin_id),
+                    operator_id = COALESCE(:aid, operator_id),
                     telegram_assigned_admin_id = COALESCE(:atg, telegram_assigned_admin_id),
                     updated_at=:now, last_activity=:now
                 WHERE id=:tid
@@ -940,13 +940,13 @@ async def api_ticket_assign(request: Request, ticket_id: int, body: TicketAssign
             text(
                 """
                 UPDATE tickets
-                SET assigned_admin_id=:aid,
+                SET operator_id=:aid,
                     telegram_assigned_admin_id=:atg,
                     updated_at=:now
                 WHERE id=:tid
                 """
             ),
-            {"aid": body.assigned_admin_id, "atg": body.telegram_assigned_admin_id, "now": now, "tid": ticket_id},
+            {"aid": body.operator_id, "atg": body.telegram_assigned_admin_id, "now": now, "tid": ticket_id},
         )
         await session.commit()
     _invalidate_tickets_list_cache()
@@ -976,7 +976,7 @@ async def api_user_profile_with_tickets(request: Request, user_id: int) -> dict:
                 text(
                     """
                     SELECT t.id,t.status,t.created_at,t.closed_at,t.last_activity,
-                           (SELECT tr.rating FROM ticket_ratings tr WHERE tr.ticket_id=t.id ORDER BY tr.id DESC LIMIT 1) AS rating
+                           (SELECT tr.value FROM ticket_ratings tr WHERE tr.ticket_id=t.id LIMIT 1) AS rating
                     FROM tickets t
                     WHERE t.user_id=:uid
                     ORDER BY t.id DESC

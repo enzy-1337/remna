@@ -77,6 +77,9 @@ async def build_subscription_detail_caption(
             lines.append(plain("Оформите тариф в разделе «Моя подписка»."))
         return (join_lines(*lines), None)
 
+    from shared.services.family_service import resolve_account_user
+
+    account_user = await resolve_account_user(session, user)
     plan = sub.plan
     status_human = "🟢 Активна" if sub.status in ("active", "trial") else f"⚪ {esc(sub.status)}"
 
@@ -85,16 +88,16 @@ async def build_subscription_detail_caption(
     hwid_list_ok = False
     hwid_devices_count = 0
 
-    if user.remnawave_uuid:
+    if account_user.remnawave_uuid:
         rw = RemnaWaveClient(settings)
         try:
-            uinf = await rw.get_user(str(user.remnawave_uuid))
+            uinf = await rw.get_user(str(account_user.remnawave_uuid))
             sub_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
         except RemnaWaveError:
             logger.warning("RW get_user failed for subscription screen user=%s", user.id)
             uinf = None
         try:
-            devs = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
+            devs = await rw.get_user_hwid_devices(str(account_user.remnawave_uuid))
             hwid_list_ok = True
             hwid_devices_count = len(devs)
         except RemnaWaveError:
@@ -111,7 +114,7 @@ async def build_subscription_detail_caption(
             max_part = bold(f"{lim_gb:.1f}") if lim_gb is not None else plain("—")
         traffic_line = plain("📊 Трафик: ") + used_part + plain(" / ") + max_part + plain(" ГБ")
     else:
-        if user.remnawave_uuid is None:
+        if user.remnawave_uuid is None and account_user.remnawave_uuid is None:
             traffic_line = plain("📊 Трафик: ") + italic("(нет учётной записи VPN)")
         else:
             limit_hint = (
@@ -144,8 +147,8 @@ async def build_subscription_detail_caption(
     )
 
     opt_route_lines: list = []
-    if settings.billing_v2_enabled and user.billing_mode == "hybrid":
-        if user.optimized_route_enabled:
+    if settings.billing_v2_enabled and account_user.billing_mode == "hybrid":
+        if account_user.optimized_route_enabled:
             opt_route_lines.append(
                 plain("🛰 Маршрут: ") + bold("оптимизированный")
             )

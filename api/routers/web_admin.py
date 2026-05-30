@@ -2035,24 +2035,36 @@ async def _finalize_login_with_2fa(
         return RedirectResponse("/admin/login", status_code=303)
     async with await _session() as session:
         user = await _resolve_2fa_user_from_auth(session, auth)
-    if (
-        user is not None
-        and bool(user.web_admin_totp_enabled)
-        and bool((user.web_admin_totp_secret or "").strip())
-    ):
-        request.session["wauth_pending"] = auth
-        request.session["wauth_pending_user_id"] = int(user.id)
-        request.session["wauth_pending_ts"] = int(time.time())
-        request.session.pop("wauth", None)
-        return RedirectResponse("/admin/login?totp=1", status_code=303)
-    _clear_pending_2fa(request)
-    if user is not None:
-        await _bind_web_admin_session(
-            request,
-            user=user,
-            method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
-            used_totp=False,
-        )
+        if (
+            user is not None
+            and bool(user.web_admin_totp_enabled)
+            and bool((user.web_admin_totp_secret or "").strip())
+        ):
+            request.session["wauth_pending"] = auth
+            request.session["wauth_pending_user_id"] = int(user.id)
+            request.session["wauth_pending_ts"] = int(time.time())
+            request.session.pop("wauth", None)
+            return RedirectResponse("/admin/login?totp=1", status_code=303)
+        _clear_pending_2fa(request)
+        if user is not None:
+            settings = get_settings()
+            from shared.services.admin_rbac_service import can_access_web_admin, ensure_superadmin_record
+
+            if not await can_access_web_admin(session, settings, user=user):
+                request.session.clear()
+                return RedirectResponse("/admin/login", status_code=303)
+            if (
+                settings.effective_superadmin_telegram_id is not None
+                and int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id)
+            ):
+                await ensure_superadmin_record(session, settings)
+                await session.commit()
+            await _bind_web_admin_session(
+                request,
+                user=user,
+                method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
+                used_totp=False,
+            )
     return RedirectResponse(_login_success_destination(request, explicit=success_redirect), status_code=303)
 
 
@@ -2340,7 +2352,11 @@ def _promo_expires_from_form(expires_unlimited: str, expires_at_date: str) -> da
 
 
 def _admin_allowed_by_tg(tg_id: int) -> bool:
-    return tg_id in get_settings().admin_telegram_ids
+    settings = get_settings()
+    sid = settings.effective_superadmin_telegram_id
+    if sid is not None and int(tg_id) == int(sid):
+        return True
+    return tg_id in settings.admin_telegram_ids
 
 
 def _admin_allowed_by_gh(login: str) -> bool:
@@ -4885,7 +4901,34 @@ async def admin_tickets(request: Request) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
-    body = """
+    ops_block = ""
+    async with await _session() as session:
+        from shared.services.ticket_operator_stats_service import list_operator_stats
+
+        stats = await list_operator_stats(session)
+        if stats:
+            rows = []
+            for s in stats:
+                score = int(s.get("score") or 0)
+                score_cls = "text-success" if score > 0 else ("text-error" if score < 0 else "")
+                label = (s.get("first_name") or s.get("username") or f"#{s.get('user_id')}").strip()
+                un = f" @{s['username']}" if s.get("username") else ""
+                rows.append(
+                    f"<tr><td>{_esc(label)}{_esc(un)}</td>"
+                    f"<td class='{_esc(score_cls)} font-semibold'>{score:+d}</td>"
+                    f"<td><span class='text-success'>{int(s.get('likes') or 0)}</span> / "
+                    f"<span class='text-error'>{int(s.get('dislikes') or 0)}</span></td>"
+                    f"<td>{int(s.get('closed_tickets') or 0)}</td></tr>"
+                )
+            ops_block = (
+                "<div class='card bg-base-100 border border-base-content/10 shadow-lg mb-4'>"
+                "<div class='card-body gap-3'>"
+                "<h3 class='card-title text-lg'><i class='fa-solid fa-user-check text-primary mr-2'></i>Операторы</h3>"
+                "<div class='overflow-x-auto'><table class='table table-sm'>"
+                "<thead><tr><th>Оператор</th><th>Рейтинг</th><th>👍 / 👎</th><th>Закрыто</th></tr></thead>"
+                "<tbody>" + "".join(rows) + "</tbody></table></div></div></div>"
+            )
+    body = ops_block + """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -4977,7 +5020,7 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         var uname=u.username?('@'+u.username):'—';
         var nm=(u.first_name||u.username||('user#'+u.id||'—'));
         var prev=esc((t.preview||'').slice(0,180));
-        var ass=t.assigned_admin_id?('#'+t.assigned_admin_id):'—';
+        var ass=t.operator_id?('#'+t.operator_id):'—';
         var top=(t.topic_id!==undefined&&t.topic_id!==null)?('<span class=\"badge badge-ghost badge-xs\">topic '+esc(String(t.topic_id))+'</span>'):'';
         return ''
           +'<div class=\"card bg-base-100 border border-base-content/10 shadow-md hover:shadow-lg transition-shadow\">'
@@ -5480,7 +5523,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       document.getElementById('tk-assign-save').addEventListener('click', async function(){{
         var tg=assign.value||'';
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
-        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{assigned_admin_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{failToast('Не удалось сохранить назначение');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{operator_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{failToast('Не удалось сохранить назначение');}}
       }});
       if(txt){{
         txt.addEventListener('input', autosizeText);
@@ -6046,7 +6089,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 text(
                     """
                     SELECT t.id, t.status, t.created_at, t.closed_at,
-                           (SELECT tr.rating FROM ticket_ratings tr WHERE tr.ticket_id = t.id ORDER BY tr.id DESC LIMIT 1) AS rating
+                           (SELECT tr.value FROM ticket_ratings tr WHERE tr.ticket_id = t.id LIMIT 1) AS rating
                     FROM tickets t
                     WHERE t.user_id = :uid
                     ORDER BY t.id DESC

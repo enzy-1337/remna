@@ -80,6 +80,7 @@ def _sub_main_keyboard(
     show_optimized_toggle: bool = False,
     optimized_on: bool = False,
     show_reissue_subscription: bool = False,
+    show_transfer_subscription: bool = False,
     show_tariffs: bool = True,
     show_renewal_controls: bool = True,
 ) -> InlineKeyboardBuilder:
@@ -128,6 +129,13 @@ def _sub_main_keyboard(
                     callback_data="sub:reissue:ask",
                 )
             )
+        if show_transfer_subscription:
+            b.row(
+                InlineKeyboardButton(
+                    text="📤 Передать подписку",
+                    callback_data="sub:transfer",
+                )
+            )
         if show_renewal_controls:
             b.row(
                 InlineKeyboardButton(
@@ -152,29 +160,39 @@ def _sub_main_keyboard(
 
 
 async def _sub_main_markup(
+    session: AsyncSession,
     settings: Settings,
     db_user: User,
     *,
     has_active: bool,
     subscription_url: str | None,
 ) -> InlineKeyboardMarkup:
+    from shared.services.family_service import get_family_membership, resolve_account_user
+
+    account_user = await resolve_account_user(session, db_user)
     show = (
         settings.billing_v2_enabled
-        and db_user.billing_mode == "hybrid"
+        and account_user.billing_mode == "hybrid"
         and has_active
         and optimized_route_panel_ready(settings)
     )
-    show_detail = settings.billing_v2_enabled and db_user.billing_mode == "hybrid" and has_active
-    show_reissue = bool(has_active and db_user.remnawave_uuid is not None)
+    show_detail = settings.billing_v2_enabled and account_user.billing_mode == "hybrid" and has_active
+    show_reissue = bool(has_active and account_user.remnawave_uuid is not None)
     show_tariffs = await tariff_purchases_enabled(settings)
     show_renewal_controls = show_tariffs
+    show_transfer = bool(
+        has_active
+        and await get_family_membership(session, user_id=db_user.id) is None
+        and await get_active_subscription(session, db_user.id, account_scope=False) is not None
+    )
     return _sub_main_keyboard(
         has_active=has_active,
         subscription_url=subscription_url,
         show_billing_detail=show_detail,
         show_optimized_toggle=show,
-        optimized_on=db_user.optimized_route_enabled,
+        optimized_on=account_user.optimized_route_enabled,
         show_reissue_subscription=show_reissue,
+        show_transfer_subscription=show_transfer,
         show_tariffs=show_tariffs,
         show_renewal_controls=show_renewal_controls,
     ).as_markup()
@@ -434,6 +452,7 @@ async def _show_subscription_main(
     )
     sub = await get_active_subscription(session, db_user.id)
     kb = await _sub_main_markup(
+        session,
         settings,
         db_user,
         has_active=sub is not None,
@@ -833,6 +852,7 @@ async def cb_buy_plan_confirm(
         full = msg + "\n\n" + cap
         sub = await get_active_subscription(session, db_user.id)
         kb = await _sub_main_markup(
+            session,
             settings,
             db_user,
             has_active=sub is not None,

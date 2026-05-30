@@ -99,7 +99,7 @@ async def get_ticket_brief(session: AsyncSession, *, ticket_id: int) -> dict | N
         text(
             """
             SELECT id, status, topic_id, user_id, telegram_user_id,
-                   assigned_admin_id, telegram_assigned_admin_id
+                   operator_id, telegram_assigned_admin_id, rating_requested
             FROM tickets
             WHERE id = :tid
             """
@@ -115,7 +115,7 @@ async def get_ticket_by_topic(session: AsyncSession, *, topic_id: int) -> dict |
         text(
             """
             SELECT id, status, topic_id, user_id, telegram_user_id,
-                   assigned_admin_id, telegram_assigned_admin_id
+                   operator_id, telegram_assigned_admin_id, rating_requested
             FROM tickets
             WHERE topic_id = :tp
             ORDER BY id DESC
@@ -276,7 +276,7 @@ async def assign_ticket_admin(
     session: AsyncSession,
     *,
     ticket_id: int,
-    admin_user_id: int,
+    operator_id: int | None,
     admin_telegram_id: int,
 ) -> None:
     now = datetime.now(timezone.utc)
@@ -284,13 +284,13 @@ async def assign_ticket_admin(
         text(
             """
             UPDATE tickets
-            SET assigned_admin_id = :aid,
+            SET operator_id = :oid,
                 telegram_assigned_admin_id = :atg,
                 updated_at = :now
             WHERE id = :tid
             """
         ),
-        {"aid": admin_user_id, "atg": admin_telegram_id, "now": now, "tid": ticket_id},
+        {"oid": operator_id, "atg": admin_telegram_id, "now": now, "tid": ticket_id},
     )
 
 
@@ -310,6 +310,13 @@ async def build_ticket_topic_open_html(
     disp = (display_name or "Пользователь").strip()
     user_line = f'<a href="tg://user?id={int(telegram_user_id)}">{html.escape(disp)}</a>'
     un = ("@" + username) if username else ""
+    from shared.services.ticket_user_info_service import (
+        format_ticket_user_info_html,
+        get_ticket_user_info_cached,
+    )
+
+    info = await get_ticket_user_info_cached(session, db_user=db_user, settings=settings)
+    info_html = format_ticket_user_info_html(info)
     billing_html = await format_hybrid_billing_today_for_support_topic(
         session, user=db_user, settings=settings
     )
@@ -318,6 +325,7 @@ async def build_ticket_topic_open_html(
         f"<b>🎫 Тикет #{ticket_id}</b>\n"
         f"Пользователь: {user_line} {html.escape(un)}\n"
         f"{created_line}\n\n"
+        f"{info_html}\n\n"
         f"<blockquote>{body}</blockquote>"
     )
     if billing_html:
@@ -371,10 +379,17 @@ async def open_ticket_forum_topic(
     return topic_id
 
 
-async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: bool) -> bool:
+async def save_ticket_rating(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    user_id: int,
+    operator_id: int | None,
+    value: int,
+) -> bool:
     """Возвращает True, если оценка добавлена впервые."""
     check = await session.execute(
-        text("SELECT id FROM ticket_ratings WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1"),
+        text("SELECT id FROM ticket_ratings WHERE ticket_id = :tid LIMIT 1"),
         {"tid": ticket_id},
     )
     if check.first() is not None:
@@ -382,11 +397,48 @@ async def save_ticket_rating(session: AsyncSession, *, ticket_id: int, rating: b
     await session.execute(
         text(
             """
-            INSERT INTO ticket_ratings (ticket_id, rating, created_at)
-            VALUES (:tid, :r, :now)
+            INSERT INTO ticket_ratings (ticket_id, operator_id, user_id, value, created_at)
+            VALUES (:tid, :oid, :uid, :val, :now)
             """
         ),
-        {"tid": ticket_id, "r": bool(rating), "now": datetime.now(timezone.utc)},
+        {
+            "tid": ticket_id,
+            "oid": operator_id,
+            "uid": user_id,
+            "val": int(value),
+            "now": datetime.now(timezone.utc),
+        },
     )
     return True
+
+
+async def mark_rating_requested(session: AsyncSession, *, ticket_id: int) -> None:
+    await session.execute(
+        text("UPDATE tickets SET rating_requested = true WHERE id = :tid"),
+        {"tid": ticket_id},
+    )
+
+
+async def request_ticket_rating_if_needed(
+    session: AsyncSession,
+    *,
+    ticket_id: int,
+    user_telegram_id: int,
+    bot: Bot,
+) -> None:
+    row = await session.execute(
+        text("SELECT rating_requested FROM tickets WHERE id = :tid"),
+        {"tid": ticket_id},
+    )
+    first = row.first()
+    if first is not None and bool(first[0]):
+        return
+    from tickets.keyboards import rating_keyboard
+
+    await bot.send_message(
+        chat_id=user_telegram_id,
+        text=f"Оцените работу поддержки по тикету #{ticket_id}:",
+        reply_markup=rating_keyboard(ticket_id),
+    )
+    await mark_rating_requested(session, ticket_id=ticket_id)
 

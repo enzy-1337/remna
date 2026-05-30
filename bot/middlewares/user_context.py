@@ -46,8 +46,22 @@ class UserContextMiddleware(BaseMiddleware):
         if db_user is not None:
             db_user.last_activity_at = datetime.now(timezone.utc)
 
+        billing_user = db_user
+        if db_user is not None and session is not None:
+            from shared.services.family_service import resolve_account_user
+
+            billing_user = await resolve_account_user(session, db_user)
+
         data["db_user"] = db_user
+        data["billing_user"] = billing_user
         data["tg_user"] = tg_user
         settings = get_settings()
-        data["is_bot_admin"] = tg_user.id in settings.admin_telegram_ids
+        is_admin = False
+        if session is not None:
+            from shared.services.admin_rbac_service import telegram_has_permission
+
+            is_admin = await telegram_has_permission(
+                session, settings, telegram_id=tg_user.id, permission="view_stats"
+            ) or tg_user.id in settings.admin_telegram_ids
+        data["is_bot_admin"] = is_admin
         return await handler(event, data)

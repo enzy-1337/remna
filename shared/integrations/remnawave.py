@@ -734,6 +734,16 @@ class RemnaWaveClient:
             json_body={"userUuid": user_uuid, "hwid": hwid},
         )
 
+    async def delete_all_user_hwid_devices(self, user_uuid: str) -> None:
+        """Удалить все HWID-устройства пользователя на панели."""
+        if self._s.remnawave_stub:
+            return
+        devs = await self.get_user_hwid_devices(user_uuid)
+        for d in devs:
+            hwid = d.get("hwid")
+            if hwid:
+                await self.delete_user_hwid_device(user_uuid, str(hwid))
+
     @staticmethod
     def default_expire(days: int) -> datetime:
         return datetime.now(timezone.utc) + timedelta(days=days)

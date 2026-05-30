@@ -406,9 +406,13 @@ async def resolve_legacy_transition_base_month_rub(session: AsyncSession, settin
 
 
 async def get_active_subscription_at(
-    session: AsyncSession, user_id: int, at: datetime
+    session: AsyncSession, user_id: int, at: datetime, *, account_scope: bool = True
 ) -> Subscription | None:
     """Подписка со статусом active/trial, действующая строго после момента `at`."""
+    if account_scope:
+        from shared.services.family_service import resolve_account_user_id
+
+        user_id = await resolve_account_user_id(session, user_id)
     r = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
@@ -423,8 +427,12 @@ async def get_active_subscription_at(
     return r.scalar_one_or_none()
 
 
-async def get_active_subscription(session: AsyncSession, user_id: int) -> Subscription | None:
-    return await get_active_subscription_at(session, user_id, datetime.now(timezone.utc))
+async def get_active_subscription(
+    session: AsyncSession, user_id: int, *, account_scope: bool = True
+) -> Subscription | None:
+    return await get_active_subscription_at(
+        session, user_id, datetime.now(timezone.utc), account_scope=account_scope
+    )
 
 
 async def get_admin_manageable_subscription(session: AsyncSession, user_id: int) -> Subscription | None:

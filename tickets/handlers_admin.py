@@ -102,10 +102,13 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
         await cq.answer("Тикет уже закрыт.", show_alert=True)
         return
     db_admin = await ensure_db_user(session, cq.from_user)
+    from shared.services.admin_rbac_service import resolve_operator_id
+
+    operator_id = await resolve_operator_id(session, user_id=db_admin.id)
     await assign_ticket_admin(
         session,
         ticket_id=ticket_id,
-        admin_user_id=db_admin.id,
+        operator_id=operator_id,
         admin_telegram_id=int(cq.from_user.id),
     )
     await set_ticket_status(session, ticket_id=ticket_id, status=status, close_now=False)
@@ -194,10 +197,10 @@ async def cb_close_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
         user_tg = 0
     if user_tg:
         await cq.bot.send_message(chat_id=user_tg, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
-        await cq.bot.send_message(
-            chat_id=user_tg,
-            text=f"Оцените работу поддержки по тикету #{ticket_id}:",
-            reply_markup=rating_keyboard(ticket_id),
+        from tickets.services import request_ticket_rating_if_needed
+
+        await request_ticket_rating_if_needed(
+            session, ticket_id=ticket_id, user_telegram_id=user_tg, bot=cq.bot
         )
 
     await cq.answer("Тикет закрыт")
@@ -261,10 +264,13 @@ async def msg_admin_reply(
 
     # Сохраняем сообщение админа.
     db_admin = await ensure_db_user(session, message.from_user)
+    from shared.services.admin_rbac_service import resolve_operator_id
+
+    operator_id = await resolve_operator_id(session, user_id=db_admin.id)
     await assign_ticket_admin(
         session,
         ticket_id=ticket_id,
-        admin_user_id=db_admin.id,
+        operator_id=operator_id,
         admin_telegram_id=int(message.from_user.id),
     )
     await add_ticket_message(
@@ -374,10 +380,13 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     db_admin = None
     if message.from_user is not None:
         db_admin = await ensure_db_user(session, message.from_user)
+        from shared.services.admin_rbac_service import resolve_operator_id
+
+        operator_id = await resolve_operator_id(session, user_id=db_admin.id)
         await assign_ticket_admin(
             session,
             ticket_id=int(t["id"]),
-            admin_user_id=db_admin.id,
+            operator_id=operator_id,
             admin_telegram_id=int(message.from_user.id),
         )
     await add_ticket_message(

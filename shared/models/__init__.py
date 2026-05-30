@@ -1,6 +1,11 @@
 """SQLAlchemy-модели (полная схема ТЗ)."""
 
+from shared.models.admin_role import AdminRole
+from shared.models.admin_user import AdminUser
 from shared.models.base import Base
+from shared.models.family_member import FamilyMember
+from shared.models.subscription_transfer import SubscriptionTransfer
+from shared.models.ticket_rating import TicketRating
 from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.billing_cron_checkpoint import BillingCronCheckpoint
 from shared.models.billing_daily_summary import BillingDailySummary
@@ -22,7 +27,12 @@ from shared.models.user import User
 from shared.models.web_admin_browser_session import WebAdminBrowserSession
 
 __all__ = [
+    "AdminRole",
+    "AdminUser",
     "Base",
+    "FamilyMember",
+    "SubscriptionTransfer",
+    "TicketRating",
     "BroadcastTemplate",
     "ScheduledBroadcast",
     "BroadcastHistory",

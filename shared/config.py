@@ -182,13 +182,18 @@ class Settings(BaseSettings):
     admin_telegram_id: int | None = Field(
         default=None,
         validation_alias="ADMIN_TELEGRAM_ID",
-        description="Один Telegram user id админа (альтернатива списку ADMIN_TELEGRAM_IDS)",
+        description="Устарело: используйте SUPERADMIN_TELEGRAM_ID. Оставлено для совместимости.",
+    )
+    superadmin_telegram_id: int | None = Field(
+        default=None,
+        validation_alias="SUPERADMIN_TELEGRAM_ID",
+        description="Единственный супер-админ (Telegram user id). Может назначать админов в веб-панели.",
     )
     # В .env строка «1,2,3» или пусто — не list[int] (иначе pydantic-settings ждёт JSON и падает на "")
     admin_telegram_ids_csv: str = Field(
         default="",
         validation_alias="ADMIN_TELEGRAM_IDS",
-        description="Несколько Telegram user id через запятую",
+        description="Устарело: список id для кнопки админ-панели; права задаются в admin_users.",
     )
 
     # Redis (кэш проверки подписки на канал)
@@ -758,6 +763,13 @@ class Settings(BaseSettings):
             return None
         return int(v)
 
+    @field_validator("superadmin_telegram_id", mode="before")
+    @classmethod
+    def _empty_superadmin_telegram_id(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
     @field_validator("admin_telegram_id", mode="before")
     @classmethod
     def _empty_admin_telegram_id(cls, v: object) -> object:
@@ -774,8 +786,18 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def effective_superadmin_telegram_id(self) -> int | None:
+        """SUPERADMIN_TELEGRAM_ID или legacy ADMIN_TELEGRAM_ID."""
+        if self.superadmin_telegram_id is not None:
+            return int(self.superadmin_telegram_id)
+        if self.admin_telegram_id is not None:
+            return int(self.admin_telegram_id)
+        return None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def admin_telegram_ids(self) -> list[int]:
-        """Итоговый список id админов: ADMIN_TELEGRAM_IDS + ADMIN_TELEGRAM_ID."""
+        """Итоговый список id админов (legacy + супер-админ)."""
         out: list[int] = []
         raw = (self.admin_telegram_ids_csv or "").strip()
         if raw:
@@ -784,8 +806,10 @@ class Settings(BaseSettings):
                 if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
                     out.append(int(p))
         if self.admin_telegram_id is not None:
-            out = list(dict.fromkeys([*out, self.admin_telegram_id]))
-        return out
+            out.append(int(self.admin_telegram_id))
+        if self.superadmin_telegram_id is not None:
+            out.append(int(self.superadmin_telegram_id))
+        return list(dict.fromkeys(out))
 
     @computed_field  # type: ignore[prop-decorator]
     @property

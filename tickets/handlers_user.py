@@ -268,12 +268,14 @@ async def cb_view_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
                 SELECT t.created_at,
                        t.status,
                        t.telegram_assigned_admin_id,
-                       t.assigned_admin_id,
+                       t.operator_id,
+                       au.user_id AS operator_user_id,
                        u.first_name AS admin_first_name,
                        u.username AS admin_username,
                        m.text AS initial_text
                 FROM tickets t
-                LEFT JOIN users u ON u.id = t.assigned_admin_id
+                LEFT JOIN admin_users au ON au.id = t.operator_id
+                LEFT JOIN users u ON u.id = au.user_id
                 LEFT JOIN LATERAL (
                   SELECT text FROM ticket_messages
                   WHERE ticket_id = t.id AND sender_role = 'user' AND COALESCE(is_internal,false)=false
@@ -294,7 +296,7 @@ async def cb_view_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
     opened = details.get("created_at")
     opened_s = opened.strftime("%d.%m.%Y %H:%M UTC") if opened is not None else "—"
     assigned_tg = int(details.get("telegram_assigned_admin_id") or 0)
-    admin_db_id = details.get("assigned_admin_id")
+    admin_db_id = details.get("operator_user_id")
     adm_first = str(details.get("admin_first_name") or "").strip()
     adm_un = str(details.get("admin_username") or "").strip()
     if admin_db_id:
@@ -376,16 +378,43 @@ async def cb_rate_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
         await cq.answer("Некорректные данные.", show_alert=True)
         return
 
-    ok = await save_ticket_rating(session, ticket_id=ticket_id, rating=rating_bool)
+    db_user = await ensure_db_user(session, cq.from_user)
+    value = 1 if parts[3] == "1" else -1
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    operator_id = t.get("operator_id")
+    ok = await save_ticket_rating(
+        session,
+        ticket_id=ticket_id,
+        user_id=db_user.id,
+        operator_id=int(operator_id) if operator_id is not None else None,
+        value=value,
+    )
     if not ok:
         await cq.answer("Оценка уже сохранена.", show_alert=True)
         return
 
+    label = "👍" if value > 0 else "👎"
+    topic_id = int(t.get("topic_id") or 0)
+    if topic_id:
+        try:
+            await cq.bot.send_message(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                text=f"Пользователь оценил работу: {label}",
+            )
+        except Exception:
+            pass
+
     await cq.answer("Спасибо за оценку!")
     if cq.message:
-        label = "👍" if rating_bool else "👎"
         try:
-            await cq.message.edit_text(f"Спасибо! Ваша оценка по тикету #{ticket_id}: {label}", reply_markup=None)
+            await cq.message.edit_text(
+                f"Спасибо! Ваша оценка по тикету #{ticket_id}: {label}",
+                reply_markup=None,
+            )
         except Exception:
             pass
 
