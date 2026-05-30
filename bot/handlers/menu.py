@@ -50,6 +50,7 @@ async def cb_main_menu(
     db_user: User | None,
     state: FSMContext,
     tg_user: TgUser | None,
+    billing_user: User | None = None,
     is_bot_admin: bool = False,
 ) -> None:
     await state.clear()
@@ -64,7 +65,9 @@ async def cb_main_menu(
     has_act = await get_active_subscription(session, db_user.id) is not None
     show_trial = bool(settings.trial_enabled and trial_eligible(db_user, has_act))
     # Кнопка покупки всегда доступна, если подписки нет.
-    cap = profile_caption(db_user, tg, is_admin=is_bot_admin)
+    cap = profile_caption(
+        db_user, tg, is_admin=is_bot_admin, billing_user=billing_user or db_user
+    )
     kb = profile_main_keyboard(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
@@ -79,6 +82,7 @@ async def cb_trial_activate(
     session: AsyncSession,
     db_user: User | None,
     tg_user: TgUser | None,
+    billing_user: User | None = None,
     is_bot_admin: bool = False,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -140,7 +144,9 @@ async def cb_trial_activate(
         plain("Ссылка подписки:"),
         code(sub_url),
         "",
-        profile_caption(db_user, tg, is_admin=is_bot_admin),
+        profile_caption(
+            db_user, tg, is_admin=is_bot_admin, billing_user=billing_user or db_user
+        ),
     )
     kb = profile_main_keyboard(
         show_trial=show_trial,

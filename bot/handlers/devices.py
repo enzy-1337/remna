@@ -288,10 +288,12 @@ async def cb_dev_buy_qty_confirm(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    billing_user: User | None = None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    bill = billing_user or db_user
     parts = cq.data.split(":")
     try:
         qty = int(parts[2])
@@ -321,7 +323,7 @@ async def cb_dev_buy_qty_confirm(
             cap,
             plain("Скидка: ") + bold(str(disc)) + plain("% (база ") + bold(str(unit)) + plain(" ₽/слот)"),
         )
-    cap = join_lines(cap, "", plain("Баланс: ") + bold(str(db_user.balance)) + plain(" ₽"))
+    cap = join_lines(cap, "", plain("Баланс: ") + bold(str(bill.balance)) + plain(" ₽"))
     kb = (
         InlineKeyboardBuilder()
         .row(

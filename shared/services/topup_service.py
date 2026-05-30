@@ -443,6 +443,9 @@ async def apply_topup_from_webhook(
     if user is None:
         return "not_found", None, None, None, None, None
 
+    from shared.services.billing_account_service import resolve_billing_user
+
+    user = await resolve_billing_user(session, user)
     user.balance += credited
 
     promo_bonus_total, ft_extra_total = await apply_balance_credit_followups(

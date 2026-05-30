@@ -121,3 +121,87 @@ async def list_admin_users(session: AsyncSession) -> list[AdminUser]:
         await session.execute(select(AdminUser).order_by(AdminUser.id.asc()))
     ).scalars()
     return list(rows.all())
+
+
+async def list_admin_roles(session: AsyncSession) -> list[AdminRole]:
+    rows = (
+        await session.execute(select(AdminRole).order_by(AdminRole.name.asc()))
+    ).scalars()
+    return list(rows.all())
+
+
+async def sync_session_permissions(request, session: AsyncSession, user: User, settings: Settings) -> None:
+    """Записать права в cookie-сессию для middleware и sidebar."""
+    admin = await get_admin_user_by_user_id(session, user.id)
+    if admin is None and settings.effective_superadmin_telegram_id is not None:
+        if int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id):
+            admin = await ensure_superadmin_record(session, settings)
+    is_super = bool(admin and admin.is_superadmin)
+    if not is_super and settings.effective_superadmin_telegram_id is not None:
+        is_super = int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id)
+    perms: set[str] = set()
+    if admin is not None:
+        perms = await effective_permissions(session, admin)
+    request.session["wauth_permissions"] = sorted(perms)
+    request.session["wauth_is_superadmin"] = is_super
+
+
+async def create_admin_role(session: AsyncSession, *, name: str, permissions: list[str]) -> AdminRole:
+    row = AdminRole(name=name.strip(), permissions=sorted(_normalize_permissions(permissions)))
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_admin_role(
+    session: AsyncSession,
+    role: AdminRole,
+    *,
+    name: str,
+    permissions: list[str],
+) -> AdminRole:
+    role.name = name.strip()
+    role.permissions = sorted(_normalize_permissions(permissions))
+    await session.flush()
+    return role
+
+
+async def delete_admin_role(session: AsyncSession, role: AdminRole) -> None:
+    await session.delete(role)
+
+
+async def create_admin_user(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    role_id: int | None,
+    extra_permissions: list[str],
+) -> AdminUser:
+    row = AdminUser(
+        user_id=user_id,
+        role_id=role_id,
+        extra_permissions=sorted(_normalize_permissions(extra_permissions)),
+        is_superadmin=False,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_admin_user(
+    session: AsyncSession,
+    admin: AdminUser,
+    *,
+    role_id: int | None,
+    extra_permissions: list[str],
+) -> AdminUser:
+    admin.role_id = role_id
+    admin.extra_permissions = sorted(_normalize_permissions(extra_permissions))
+    await session.flush()
+    return admin
+
+
+async def delete_admin_user(session: AsyncSession, admin: AdminUser) -> None:
+    if admin.is_superadmin:
+        raise ValueError("Нельзя удалить супер-администратора")
+    await session.delete(admin)

@@ -650,6 +650,9 @@ async def purchase_plan_with_balance(
     Покупка тарифа с баланса.
     Возвращает (ok, message, kind) где kind: success | insufficient | error
     """
+    from shared.services.billing_account_service import resolve_billing_user
+
+    user = await resolve_billing_user(session, user)
     if idempotency_key:
         existing_txn = (
             await session.execute(
@@ -965,12 +968,14 @@ async def add_paid_device_slots(
     quantity: int = 1,
     idempotency_key: str | None = None,
 ) -> tuple[bool, str]:
+    from shared.services.billing_account_service import resolve_billing_user
     from shared.services.device_slots_pricing import (
         is_admin_unlimited_devices,
         price_for_extra_device_slots,
         slots_available_to_buy,
     )
 
+    user = await resolve_billing_user(session, user)
     if settings.billing_v2_enabled and user.billing_mode == "hybrid":
         return False, plain("Для hybrid-пользователей покупка дополнительных устройств недоступна.")
     if is_admin_unlimited_devices(user, settings):

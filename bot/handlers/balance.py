@@ -165,12 +165,13 @@ async def _history_lines(session: AsyncSession, user_id: int, limit: int = 6) ->
     return lines
 
 
-def _balance_caption(user: User) -> str:
+def _balance_caption(user: User, *, family_shared: bool = False) -> str:
     bal = f"{user.balance:.2f}"
+    suffix = plain(" · семейный") if family_shared else plain("")
     return join_lines(
         "💰 " + bold("Баланс"),
         "",
-        plain("На счёте: ") + bold(bal) + plain(" ₽"),
+        plain("На счёте: ") + bold(bal) + plain(" ₽") + suffix,
     )
 
 
@@ -181,6 +182,11 @@ def _history_caption(history: list[str]) -> str:
         "",
         "\n".join(history),
     )
+
+
+def _balance_cap_for(db_user: User, billing_user: User | None) -> str:
+    bill = billing_user or db_user
+    return _balance_caption(bill, family_shared=bill.id != db_user.id)
 
 
 async def _edit_or_send_balance(
@@ -202,12 +208,14 @@ async def cb_balance_home(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    billing_user: User | None = None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    bill = billing_user or db_user
     settings = get_settings()
-    cap = _balance_caption(db_user)
+    cap = _balance_caption(bill, family_shared=bill.id != db_user.id)
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
@@ -221,21 +229,23 @@ async def cb_topup_back_amt(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    billing_user: User | None = None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
     await cq.answer()
     settings = get_settings()
+    cap = _balance_cap_for(db_user, billing_user)
     if cq.message and cq.message.photo:
         await cq.message.edit_caption(
-            caption=_balance_caption(db_user),
+            caption=cap,
             reply_markup=topup_amounts_keyboard(),
         )
     else:
         await answer_callback_with_photo_screen(
             cq,
-            caption=_balance_caption(db_user),
+            caption=cap,
             reply_markup=topup_amounts_keyboard(),
             settings=settings,
         )
@@ -246,12 +256,14 @@ async def cb_topup_history(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    billing_user: User | None = None,
 ) -> None:
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
         return
     assert db_user is not None
+    bill = billing_user or db_user
     await cq.answer()
-    rows = await _history_lines(session, db_user.id, limit=20)
+    rows = await _history_lines(session, bill.id, limit=20)
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="⬅️ К балансу", callback_data="menu:balance", style="danger")
@@ -315,6 +327,7 @@ async def cb_topup_cancel_fsm(
     session: AsyncSession,
     db_user: User | None,
     state: FSMContext,
+    billing_user: User | None = None,
 ) -> None:
     await state.clear()
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -322,15 +335,16 @@ async def cb_topup_cancel_fsm(
     assert db_user is not None
     await cq.answer()
     settings = get_settings()
+    cap = _balance_cap_for(db_user, billing_user)
     if cq.message and cq.message.photo:
         await cq.message.edit_caption(
-            caption=_balance_caption(db_user),
+            caption=cap,
             reply_markup=topup_amounts_keyboard(),
         )
     else:
         await answer_callback_with_photo_screen(
             cq,
-            caption=_balance_caption(db_user),
+            caption=cap,
             reply_markup=topup_amounts_keyboard(),
             settings=settings,
         )
@@ -484,6 +498,7 @@ async def cb_topup_check(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    billing_user: User | None = None,
 ) -> None:
     """Ручная проверка: вебхук мог зачислить платёж после показа счёта."""
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -536,7 +551,7 @@ async def cb_topup_check(
                 provider_name=str(txn.payment_provider or ""),
                 internal_transaction_id=int(txn.id),
             )
-    await session.refresh(db_user)
-    cap = _balance_caption(db_user)
+    await session.refresh(billing_user or db_user)
+    cap = _balance_cap_for(db_user, billing_user)
     await cq.answer("Баланс обновлён")
     await _edit_or_send_balance(cq, caption=cap, reply_markup=topup_amounts_keyboard())

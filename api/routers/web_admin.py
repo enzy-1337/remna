@@ -1073,10 +1073,25 @@ def _layout(
     main_cls = "min-h-screen px-3 py-5 pt-16 pb-24 sm:px-5 md:pt-[4.75rem] md:pb-8 md:pl-[calc(0.5rem+3.75rem+0.75rem)] md:pr-6 lg:pr-8"
 
     if show_nav and request is not None:
+        from shared.services.web_admin_rbac import ADMIN_NAV_ITEMS, has_nav_access
+
         user_label = (sidebar_user_label or "").strip() or _auth_label(request) or "admin"
         avatar = (sidebar_avatar_url or "").strip() or _auth_avatar(request)
         sidebar_avatar_inner = _simple_avatar_markup(url=avatar, label=user_label, px=36)
         logo_inner = _brand_logo_mark(settings)
+        perms_raw = request.session.get("wauth_permissions") or []
+        permissions = {str(x) for x in perms_raw}
+        is_superadmin = bool(request.session.get("wauth_is_superadmin"))
+        nav_desktop = "".join(
+            _sidebar_nav_item(href, icon, label, cur)
+            for href, icon, label, perm in ADMIN_NAV_ITEMS
+            if has_nav_access(perm, permissions=permissions, is_superadmin=is_superadmin)
+        )
+        nav_mobile = "".join(
+            _mob_drawer_link(href, icon, label, cur)
+            for href, icon, label, perm in ADMIN_NAV_ITEMS
+            if has_nav_access(perm, permissions=permissions, is_superadmin=is_superadmin)
+        )
         desktop_sidebar = f"""
     <aside class="group/sidebar fixed left-2 top-3 bottom-3 z-[60] hidden w-[3.75rem] min-w-[3.75rem] max-w-[3.75rem] flex-col overflow-x-hidden rounded-2xl border border-base-content/10 bg-base-300 shadow-xl transition-[width,max-width,min-width] duration-300 ease-out hover:w-64 hover:max-w-none hover:min-w-[16rem] md:flex">
       <div class="flex w-full shrink-0 items-center justify-start gap-2 px-[10px] pt-[10px] pb-[5px]">
@@ -1086,16 +1101,7 @@ def _layout(
         <span class="nav-label pointer-events-none max-h-0 min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap text-sm font-bold tracking-tight text-base-content opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-h-6 group-hover/sidebar:max-w-[12rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(brand_title)}</span>
       </div>
       <nav class="flex min-h-0 flex-1 flex-col items-center gap-[5px] overflow-y-auto overflow-x-hidden px-[10px] pt-[5px] pb-[10px] group-hover/sidebar:items-stretch">
-        {_sidebar_nav_item("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
-        {_sidebar_nav_item("/admin/topups", "fa-solid fa-money-bill-transfer", "Пополнения", cur)}
-        {_sidebar_nav_item("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
-        {_sidebar_nav_item("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
-        {_sidebar_nav_item("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
-        {_sidebar_nav_item("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
-        {_sidebar_nav_item("/admin/tariffs", "fa-solid fa-tags", "Тарифы", cur)}
-        {_sidebar_nav_item("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
-        {_sidebar_nav_item("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
-        {_sidebar_nav_item("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
+        {nav_desktop}
       </nav>
       <div class="mt-auto flex w-full flex-col items-center pt-2 pb-2 group-hover/sidebar:items-stretch">
         <div class="mx-[3px] mb-2 h-[1px] rounded-full bg-base-content/10"></div>
@@ -1119,16 +1125,7 @@ def _layout(
       <div class="absolute inset-0 bg-base-content/45 backdrop-blur-sm" data-remna-mnav-close></div>
       <aside class="absolute left-0 top-0 flex h-full w-[min(20rem,90vw)] flex-col gap-1 overflow-y-auto border-r border-base-content/10 bg-base-300 py-14 pl-2 pr-2 shadow-2xl" aria-label="Меню админки">
         <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-3 z-10" data-remna-mnav-close aria-label="Закрыть"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-        {_mob_drawer_link("/admin/dashboard", "fa-solid fa-chart-pie", "Дашборд", cur)}
-        {_mob_drawer_link("/admin/topups", "fa-solid fa-money-bill-transfer", "Пополнения", cur)}
-        {_mob_drawer_link("/admin/status", "fa-solid fa-heart-pulse", "Статус", cur)}
-        {_mob_drawer_link("/admin/users", "fa-solid fa-users", "Пользователи", cur)}
-        {_mob_drawer_link("/admin/tickets", "fa-solid fa-headset", "Тикеты", cur)}
-        {_mob_drawer_link("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", cur)}
-        {_mob_drawer_link("/admin/tariffs", "fa-solid fa-tags", "Тарифы", cur)}
-        {_mob_drawer_link("/admin/promos", "fa-solid fa-ticket", "Промокоды", cur)}
-        {_mob_drawer_link("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", cur)}
-        {_mob_drawer_link("/admin/settings", "fa-solid fa-gear", "Настройки", cur)}
+        {nav_mobile}
         {_mob_drawer_link("/admin/profile", "fa-solid fa-user", "Мой профиль", cur)}
         <form method="post" action="/admin/logout" class="mt-2 border-t border-base-content/10 pt-2"><button type="submit" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case text-error"><i class="fa-solid fa-right-from-bracket w-5 shrink-0 text-center text-base" aria-hidden="true"></i><span>Выйти</span></button></form>
       </aside>
@@ -1738,6 +1735,9 @@ async def _bind_web_admin_session(
         if db_user is None:
             _clear_web_admin_session(request)
             return
+        from shared.services.admin_rbac_service import sync_session_permissions
+
+        await sync_session_permissions(request, session, db_user, settings)
         row = await create_browser_session(
             session,
             user=db_user,
@@ -1768,6 +1768,14 @@ async def _redirect_after_browser_session_restore(
     request.session["wauth_session_token"] = str(row.session_token)
     request.session["wauth_session_exp"] = int(new_exp.timestamp())
     request.session["wauth_login_kind"] = str(row.login_kind or request.session.get("wauth_login_kind") or "web")
+    settings = get_settings()
+    async with await _session() as session:
+        from shared.services.admin_rbac_service import sync_session_permissions
+
+        db_user = await session.get(User, user.id)
+        if db_user is not None:
+            await sync_session_permissions(request, session, db_user, settings)
+            await session.commit()
     return RedirectResponse(_login_success_destination(request, explicit=None), status_code=303)
 
 

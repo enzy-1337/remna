@@ -28,7 +28,8 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
-from api.routers import public_pages, tickets_api, web_admin, webhooks
+from api.middleware.web_admin_rbac import WebAdminRbacMiddleware
+from api.routers import public_pages, tickets_api, web_admin, web_admin_rbac_pages, webhooks
 from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.models.user import User
@@ -208,6 +209,7 @@ app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(WebAdminSessionValidationMiddleware)
+app.add_middleware(WebAdminRbacMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.web_admin_session_secret,
@@ -220,6 +222,7 @@ app.add_middleware(
 
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")
+app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")
 

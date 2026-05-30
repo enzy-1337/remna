@@ -235,12 +235,15 @@ async def apply_promo_code_for_user_v2(
     )
 
     if promo.type in ("balance_rub", "bonus_rub"):
-        user.balance += value
+        from shared.services.billing_account_service import resolve_billing_user
+
+        billing_user = await resolve_billing_user(session, user)
+        billing_user.balance += value
         txn_type = "promo_balance" if promo.type == "balance_rub" else "promo_bonus"
         label = "на баланс"
         session.add(
             Transaction(
-                user_id=user.id,
+                user_id=billing_user.id,
                 type=txn_type,
                 amount=value,
                 currency="RUB",
