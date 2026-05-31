@@ -1735,8 +1735,9 @@ async def _bind_web_admin_session(
         if db_user is None:
             _clear_web_admin_session(request)
             return
-        from shared.services.admin_rbac_service import sync_session_permissions
+        from shared.services.admin_rbac_service import ensure_env_admin_records, sync_session_permissions
 
+        await ensure_env_admin_records(session, settings, db_user)
         await sync_session_permissions(request, session, db_user, settings)
         row = await create_browser_session(
             session,
@@ -2054,25 +2055,37 @@ async def _finalize_login_with_2fa(
             request.session.pop("wauth", None)
             return RedirectResponse("/admin/login?totp=1", status_code=303)
         _clear_pending_2fa(request)
-        if user is not None:
-            settings = get_settings()
-            from shared.services.admin_rbac_service import can_access_web_admin, ensure_superadmin_record
+        if user is None:
+            request.session.clear()
+            gh = str(auth.get("login") or auth.get("username") or "").strip()
+            if gh and _admin_allowed_by_gh(gh):
+                msg = "Сначала выполните /start в Telegram-боте и привяжите GitHub в профиле."
+            else:
+                msg = "Профиль пользователя не найден. Выполните /start в боте и войдите снова."
+            return RedirectResponse("/admin/login?err=" + quote_plus(msg), status_code=303)
+        settings = get_settings()
+        from shared.services.admin_rbac_service import (
+            can_access_web_admin,
+            ensure_env_admin_records,
+        )
 
-            if not await can_access_web_admin(session, settings, user=user):
-                request.session.clear()
-                return RedirectResponse("/admin/login", status_code=303)
-            if (
-                settings.effective_superadmin_telegram_id is not None
-                and int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id)
-            ):
-                await ensure_superadmin_record(session, settings)
-                await session.commit()
-            await _bind_web_admin_session(
-                request,
-                user=user,
-                method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
-                used_totp=False,
+        await ensure_env_admin_records(session, settings, user)
+        if not await can_access_web_admin(session, settings, user=user):
+            request.session.clear()
+            return RedirectResponse(
+                "/admin/login?err="
+                + quote_plus(
+                    "Нет доступа к web-admin. Проверьте SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS или роль в «Администраторы»."
+                ),
+                status_code=303,
             )
+        await session.commit()
+        await _bind_web_admin_session(
+            request,
+            user=user,
+            method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
+            used_totp=False,
+        )
     return RedirectResponse(_login_success_destination(request, explicit=success_redirect), status_code=303)
 
 

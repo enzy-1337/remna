@@ -13,6 +13,19 @@ from shared.models.user import User
 ALL_ADMIN_PERMISSIONS = sorted(ADMIN_PERMISSIONS)
 
 
+def is_env_superadmin_telegram(settings: Settings, telegram_id: int) -> bool:
+    sid = settings.effective_superadmin_telegram_id
+    return sid is not None and int(telegram_id) == int(sid)
+
+
+def is_legacy_env_admin_telegram(settings: Settings, telegram_id: int) -> bool:
+    try:
+        tid = int(telegram_id)
+    except (TypeError, ValueError):
+        return False
+    return tid in settings.admin_telegram_ids
+
+
 def _normalize_permissions(raw: list | None) -> set[str]:
     if not raw:
         return set()
@@ -102,10 +115,40 @@ async def is_superadmin_user(session: AsyncSession, settings: Settings, *, user_
     return bool(admin and admin.is_superadmin)
 
 
+async def ensure_env_admin_records(
+    session: AsyncSession, settings: Settings, user: User
+) -> AdminUser | None:
+    """Синхронизирует admin_users с SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS из .env."""
+    try:
+        tid = int(user.telegram_id or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    if tid > 0 and is_env_superadmin_telegram(settings, tid):
+        return await ensure_superadmin_record(session, settings)
+    if tid > 0 and is_legacy_env_admin_telegram(settings, tid):
+        row = await get_admin_user_by_user_id(session, user.id)
+        if row is not None:
+            return row
+        row = AdminUser(
+            user_id=user.id,
+            role_id=None,
+            extra_permissions=list(ALL_ADMIN_PERMISSIONS),
+            is_superadmin=False,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+    return await get_admin_user_by_user_id(session, user.id)
+
+
 async def can_access_web_admin(session: AsyncSession, settings: Settings, *, user: User) -> bool:
-    if settings.effective_superadmin_telegram_id is not None and int(user.telegram_id or 0) == int(
-        settings.effective_superadmin_telegram_id
-    ):
+    try:
+        tid = int(user.telegram_id or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    if tid > 0 and is_env_superadmin_telegram(settings, tid):
+        return True
+    if tid > 0 and is_legacy_env_admin_telegram(settings, tid):
         return True
     admin = await get_admin_user_by_user_id(session, user.id)
     return admin is not None
@@ -132,13 +175,14 @@ async def list_admin_roles(session: AsyncSession) -> list[AdminRole]:
 
 async def sync_session_permissions(request, session: AsyncSession, user: User, settings: Settings) -> None:
     """Записать права в cookie-сессию для middleware и sidebar."""
-    admin = await get_admin_user_by_user_id(session, user.id)
-    if admin is None and settings.effective_superadmin_telegram_id is not None:
-        if int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id):
-            admin = await ensure_superadmin_record(session, settings)
+    admin = await ensure_env_admin_records(session, settings, user)
     is_super = bool(admin and admin.is_superadmin)
-    if not is_super and settings.effective_superadmin_telegram_id is not None:
-        is_super = int(user.telegram_id or 0) == int(settings.effective_superadmin_telegram_id)
+    try:
+        tid = int(user.telegram_id or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    if not is_super and tid > 0:
+        is_super = is_env_superadmin_telegram(settings, tid)
     perms: set[str] = set()
     if admin is not None:
         perms = await effective_permissions(session, admin)

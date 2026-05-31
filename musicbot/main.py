@@ -23,10 +23,13 @@ async def _run() -> None:
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     token = (settings.music_bot_token or "").strip()
-    if not token:
-        raise RuntimeError("MUSIC_BOT_TOKEN is empty")
-    if settings.music_forum_chat_id is None:
-        raise RuntimeError("MUSIC_FORUM_CHAT_ID is empty")
+    if not token or settings.music_forum_chat_id is None:
+        logging.getLogger(__name__).warning(
+            "Music bot disabled: set MUSIC_BOT_TOKEN and MUSIC_FORUM_CHAT_ID in .env"
+        )
+        while True:
+            await asyncio.sleep(3600)
+        return
 
     bot = Bot(
         token=token,

@@ -13,12 +13,14 @@ from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
+from aiogram import Bot
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    User as TgUser,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import Select, select
@@ -57,10 +59,9 @@ async def _generate_unique_referral_code(session: AsyncSession) -> str:
     raise RuntimeError("Не удалось сгенерировать referral_code")
 
 
-async def _get_or_create_user(session: AsyncSession, message: Message) -> User:
-    tg = message.from_user
-    if tg is None:
-        raise RuntimeError("Нет пользователя Telegram")
+async def _get_or_create_user(session: AsyncSession, tg: TgUser) -> User:
+    if tg.is_bot:
+        raise RuntimeError("Нельзя создать пользователя для бота")
     existing = (
         await session.execute(select(User).where(User.telegram_id == tg.id))
     ).scalar_one_or_none()
@@ -84,13 +85,16 @@ async def _get_or_create_user(session: AsyncSession, message: Message) -> User:
 async def _ensure_user_topic(
     *,
     session: AsyncSession,
-    message: Message,
+    bot: Bot,
+    tg: TgUser,
     db_user: User,
     settings: MusicBotSettings,
 ) -> MusicUserTopic:
     forum_chat_id = settings.music_forum_chat_id
     if forum_chat_id is None:
         raise RuntimeError("MUSIC_FORUM_CHAT_ID не задан")
+    if int(tg.id) != int(db_user.telegram_id):
+        raise RuntimeError("telegram_id пользователя не совпадает с записью в БД")
     existing = (
         await session.execute(
             select(MusicUserTopic).where(
@@ -101,11 +105,8 @@ async def _ensure_user_topic(
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-    tg = message.from_user
-    if tg is None:
-        raise RuntimeError("Нет пользователя Telegram")
     title = (f"@{tg.username} | {tg.id}" if tg.username else f"{tg.id}")[:128]
-    topic = await message.bot.create_forum_topic(chat_id=forum_chat_id, name=title)
+    topic = await bot.create_forum_topic(chat_id=forum_chat_id, name=title)
     row = MusicUserTopic(
         telegram_id=tg.id,
         forum_chat_id=forum_chat_id,
@@ -120,15 +121,13 @@ async def _ensure_user_topic(
 async def _recreate_user_topic(
     *,
     session: AsyncSession,
-    message: Message,
+    bot: Bot,
+    tg: TgUser,
     db_user: User,
     existing: MusicUserTopic,
 ) -> MusicUserTopic:
-    tg = message.from_user
-    if tg is None:
-        raise RuntimeError("Нет пользователя Telegram")
     title = (f"@{tg.username} | {tg.id}" if tg.username else f"{tg.id}")[:128]
-    topic = await message.bot.create_forum_topic(chat_id=existing.forum_chat_id, name=title)
+    topic = await bot.create_forum_topic(chat_id=existing.forum_chat_id, name=title)
     existing.topic_id = topic.message_thread_id
     existing.user_id = db_user.id
     await session.flush()
@@ -217,22 +216,20 @@ async def _run_search_and_reply(message: Message, query: str, settings: MusicBot
 
 async def _log_to_topic(
     *,
-    message: Message,
+    bot: Bot,
     topic: MusicUserTopic,
     text: str,
     audio_message: Message | None = None,
-    settings: MusicBotSettings,
 ) -> None:
-    kb = build_bot_cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
     try:
-        await message.bot.send_message(
+        await bot.send_message(
             chat_id=topic.forum_chat_id,
             message_thread_id=topic.topic_id,
             text=text,
             parse_mode="MarkdownV2",
         )
         if audio_message is not None:
-            await message.bot.forward_message(
+            await bot.forward_message(
                 chat_id=topic.forum_chat_id,
                 message_thread_id=topic.topic_id,
                 from_chat_id=audio_message.chat.id,
@@ -251,11 +248,14 @@ async def cmd_start(message: Message, session: AsyncSession) -> None:
     tg = message.from_user
     if tg is None:
         return
-    db_user = await _get_or_create_user(session, message)
+    db_user = await _get_or_create_user(session, tg)
     if db_user.is_blocked:
         await message.answer(plain("Ваш аккаунт заблокирован. Обратитесь в поддержку."))
         return
-    await _ensure_user_topic(session=session, message=message, db_user=db_user, settings=settings)
+    assert message.bot is not None
+    await _ensure_user_topic(
+        session=session, bot=message.bot, tg=tg, db_user=db_user, settings=settings
+    )
     await message.answer(_start_caption())
 
 
@@ -319,17 +319,22 @@ async def cb_pick(
     settings = get_musicbot_settings()
     global_index = page * settings.music_results_per_page + idx
     hit = await get_track_from_session(settings.redis_url, session_id, global_index)
-    if hit is None or cq.message is None or cq.from_user is None:
+    if hit is None or cq.message is None or cq.from_user is None or cq.bot is None:
         await cq.answer("Сессия устарела.", show_alert=True)
+        return
+    if cq.from_user.is_bot:
+        await cq.answer()
         return
     query, track = hit
     await cq.answer("Скачиваю…")
     progress = await cq.message.answer(plain("⏳ Загружаю трек…"))
-    db_user = await _get_or_create_user(session, cq.message)
+    db_user = await _get_or_create_user(session, cq.from_user)
     if db_user.is_blocked:
         await progress.edit_text(plain("Аккаунт заблокирован."))
         return
-    topic = await _ensure_user_topic(session=session, message=cq.message, db_user=db_user, settings=settings)
+    topic = await _ensure_user_topic(
+        session=session, bot=cq.bot, tg=cq.from_user, db_user=db_user, settings=settings
+    )
     kb = build_bot_cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
     title = f"{track.artist} — {track.title}"[:128]
     try:
@@ -353,7 +358,7 @@ async def cb_pick(
             + esc(f"@{cq.from_user.username}" if cq.from_user.username else str(cq.from_user.id)),
             plain("Время: ") + esc(datetime.now().strftime("%d.%m.%Y %H:%M:%S")),
         )
-        await _log_to_topic(message=cq.message, topic=topic, text=meta, audio_message=sent, settings=settings)
+        await _log_to_topic(bot=cq.bot, topic=topic, text=meta, audio_message=sent)
     except Exception as e:
         logger.exception("music download failed")
         await progress.edit_text(join_lines(plain("Не удалось скачать."), esc(str(e)[:200])))
@@ -365,11 +370,14 @@ async def handle_text(message: Message, session: AsyncSession) -> None:
     tg = message.from_user
     if tg is None or tg.is_bot:
         return
-    db_user = await _get_or_create_user(session, message)
+    db_user = await _get_or_create_user(session, tg)
     if db_user.is_blocked:
         await message.answer(plain("Ваш аккаунт заблокирован."))
         return
-    await _ensure_user_topic(session=session, message=message, db_user=db_user, settings=settings)
+    assert message.bot is not None
+    await _ensure_user_topic(
+        session=session, bot=message.bot, tg=tg, db_user=db_user, settings=settings
+    )
     text = (message.text or "").strip()
     url = extract_first_url(text)
     if url:
@@ -402,10 +410,13 @@ async def handle_audio(message: Message, session: AsyncSession) -> None:
     tg = message.from_user
     if tg is None:
         return
-    db_user = await _get_or_create_user(session, message)
+    db_user = await _get_or_create_user(session, tg)
     if db_user.is_blocked:
         return
-    await _ensure_user_topic(session=session, message=message, db_user=db_user, settings=settings)
+    assert message.bot is not None
+    await _ensure_user_topic(
+        session=session, bot=message.bot, tg=tg, db_user=db_user, settings=settings
+    )
     file_id = message.audio.file_id if message.audio else message.voice.file_id
     wait = await message.answer(plain("🎧 Распознаю аудио…"))
     path = await _download_tg_file(message, file_id, ".ogg" if message.voice else ".mp3")
@@ -426,10 +437,13 @@ async def handle_video(message: Message, session: AsyncSession) -> None:
     tg = message.from_user
     if tg is None:
         return
-    db_user = await _get_or_create_user(session, message)
+    db_user = await _get_or_create_user(session, tg)
     if db_user.is_blocked:
         return
-    await _ensure_user_topic(session=session, message=message, db_user=db_user, settings=settings)
+    assert message.bot is not None
+    await _ensure_user_topic(
+        session=session, bot=message.bot, tg=tg, db_user=db_user, settings=settings
+    )
     file_id = message.video.file_id if message.video else message.video_note.file_id
     wait = await message.answer(plain("🎬 Ищу трек в видео…"))
     vpath = await _download_tg_file(message, file_id, ".mp4")
