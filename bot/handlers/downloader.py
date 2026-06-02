@@ -8,7 +8,10 @@ from decimal import Decimal
 import logging
 import secrets
 import string
+import tempfile
+from pathlib import Path
 
+import httpx
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge
@@ -21,6 +24,7 @@ from downloader.config import get_downloader_settings
 from shared.md2 import bold, esc, join_lines, plain
 from shared.models.downloader_user_topic import DownloaderUserTopic
 from shared.models.user import User
+from shared.services.marketplace_scraper import detect_marketplace, scrape_marketplace_reviews
 from shared.services.video_downloader import (
     compress_video_to_limit,
     download_video,
@@ -178,6 +182,91 @@ def _meta_caption(*, platform: str, duration_sec: int, size_bytes: int, tg_id: i
     )
 
 
+async def _handle_marketplace_url(
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    url: str,
+) -> None:
+    """Скачать фото из отзывов маркетплейса и отправить пользователю."""
+    progress = await message.answer("⏳ " + bold("Загружаем фото из отзывов, подождите..."))
+    try:
+        result = await scrape_marketplace_reviews(url)
+    except Exception as exc:
+        logger.exception("Marketplace scrape error: %s", exc)
+        await progress.edit_text(plain("Ошибка при скачивании. Попробуйте позже."))
+        return
+
+    if result.error:
+        await progress.edit_text(plain(result.error))
+        return
+
+    photos = result.photo_urls
+    if not photos:
+        await progress.edit_text(plain("Фото из отзывов не найдены. Возможно, товар не имеет отзывов с фото."))
+        return
+
+    platform_labels = {
+        "wildberries": "Wildberries",
+        "ozon": "Ozon",
+        "yandex_market": "Яндекс.Маркет",
+    }
+    platform_label = platform_labels.get(result.platform, result.platform)
+    await progress.delete()
+
+    # Отправляем фото группами по 10
+    sent_count = 0
+    batch: list = []
+    temp_files: list[Path] = []
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as http:
+        for i, photo_url in enumerate(photos[:_MAX_PHOTOS_SEND]):
+            try:
+                resp = await http.get(photo_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                suffix = ".jpg"
+                ct = resp.headers.get("content-type", "")
+                if "png" in ct:
+                    suffix = ".png"
+                elif "webp" in ct:
+                    suffix = ".webp"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                tmp.write(resp.content)
+                tmp.close()
+                p = Path(tmp.name)
+                temp_files.append(p)
+                batch.append(FSInputFile(p))
+            except Exception:
+                continue
+
+            if len(batch) == 10 or i == len(photos[:_MAX_PHOTOS_SEND]) - 1:
+                if batch:
+                    media_group = [InputMediaPhoto(media=f) for f in batch]
+                    if sent_count == 0:
+                        media_group[0] = InputMediaPhoto(
+                            media=batch[0],
+                            caption=plain(f"📸 Фото из отзывов {platform_label}\nТовар: {result.product_name}\nВсего фото: {len(photos)}"),
+                        )
+                    try:
+                        await message.answer_media_group(media_group)
+                        sent_count += len(batch)
+                    except Exception as exc:
+                        logger.warning("Failed to send marketplace photo group: %s", exc)
+                    batch = []
+
+    for tmp_file in temp_files:
+        try:
+            tmp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if sent_count == 0:
+        await message.answer(plain("Не удалось загрузить изображения. Попробуйте позже."))
+
+
+_MAX_PHOTOS_SEND = 50
+
+
 @router.message(CommandStart())
 async def cmd_start_downloader(
     message: Message,
@@ -215,9 +304,15 @@ async def handle_download_link(
     resolved_url = await resolve_short_url(url)
     if resolved_url != url:
         logger.info("Short URL resolved: %s -> %s", url, resolved_url)
+
+    # Проверяем маркетплейсы до видео-загрузчика
+    if detect_marketplace(resolved_url):
+        await _handle_marketplace_url(message, session, db_user, resolved_url)
+        return
+
     if not is_supported_url(resolved_url):
         await message.answer(
-            plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok и VK Clips.")
+            plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok, VK Clips, Wildberries, Ozon, Яндекс.Маркет.")
         )
         return
 

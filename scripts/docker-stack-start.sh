@@ -21,10 +21,25 @@ COMPOSE=(docker compose)
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
+# Ждём готовности Docker daemon (актуально при @reboot через cron)
+wait_for_docker() {
+  local attempts=0
+  until docker info >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 30 ]; then
+      log "ERROR: Docker daemon не запустился за 60 секунд"
+      exit 1
+    fi
+    log "Ожидание Docker daemon... ($attempts/30)"
+    sleep 2
+  done
+}
+
 docker_down_soft() {
   "${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
 }
 
+wait_for_docker
 docker_down_soft
 log "Starting postgres and redis..."
 "${COMPOSE[@]}" up -d postgres redis

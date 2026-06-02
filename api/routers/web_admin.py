@@ -2055,37 +2055,64 @@ async def _finalize_login_with_2fa(
             request.session.pop("wauth", None)
             return RedirectResponse("/admin/login?totp=1", status_code=303)
         _clear_pending_2fa(request)
-        if user is None:
-            request.session.clear()
-            gh = str(auth.get("login") or auth.get("username") or "").strip()
-            if gh and _admin_allowed_by_gh(gh):
-                msg = "Сначала выполните /start в Telegram-боте и привяжите GitHub в профиле."
-            else:
-                msg = "Профиль пользователя не найден. Выполните /start в боте и войдите снова."
-            return RedirectResponse("/admin/login?err=" + quote_plus(msg), status_code=303)
         settings = get_settings()
         from shared.services.admin_rbac_service import (
             can_access_web_admin,
             ensure_env_admin_records,
         )
-
-        await ensure_env_admin_records(session, settings, user)
-        if not await can_access_web_admin(session, settings, user=user):
-            request.session.clear()
-            return RedirectResponse(
-                "/admin/login?err="
-                + quote_plus(
-                    "Нет доступа к web-admin. Проверьте SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS или роль в «Администраторы»."
-                ),
-                status_code=303,
+        # Если пользователя нет в БД (суперадмин ещё не запускал бота),
+        # для Telegram-суперадмина создаём запись автоматически.
+        # Для GitHub и остальных — показываем подсказку.
+        if user is None:
+            raw_tid = auth.get("telegram_id") or auth.get("id")
+            try:
+                sa_tid = int(raw_tid) if raw_tid is not None else 0
+            except (TypeError, ValueError):
+                sa_tid = 0
+            if sa_tid and settings.effective_superadmin_telegram_id is not None and sa_tid == int(
+                settings.effective_superadmin_telegram_id
+            ):
+                import uuid as _uuid
+                user = User(
+                    telegram_id=sa_tid,
+                    first_name=str(auth.get("label") or ""),
+                    username=str(auth.get("username") or "") or None,
+                    referral_code=_uuid.uuid4().hex[:16],
+                )
+                session.add(user)
+                try:
+                    await session.flush()
+                except Exception:
+                    await session.rollback()
+                    user = (
+                        await session.execute(select(User).where(User.telegram_id == sa_tid).limit(1))
+                    ).scalar_one_or_none()
+            else:
+                request.session.clear()
+                gh = str(auth.get("login") or auth.get("username") or "").strip()
+                if gh and _admin_allowed_by_gh(gh):
+                    msg = "Сначала выполните /start в Telegram-боте и привяжите GitHub в профиле."
+                else:
+                    msg = "Профиль пользователя не найден. Выполните /start в боте и войдите снова."
+                return RedirectResponse("/admin/login?err=" + quote_plus(msg), status_code=303)
+        if user is not None:
+            await ensure_env_admin_records(session, settings, user)
+            if not await can_access_web_admin(session, settings, user=user):
+                request.session.clear()
+                return RedirectResponse(
+                    "/admin/login?err="
+                    + quote_plus(
+                        "Нет доступа к web-admin. Проверьте SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS или роль в «Администраторы»."
+                    ),
+                    status_code=303,
+                )
+            await session.commit()
+            await _bind_web_admin_session(
+                request,
+                user=user,
+                method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
+                used_totp=False,
             )
-        await session.commit()
-        await _bind_web_admin_session(
-            request,
-            user=user,
-            method_kind=str(request.session.get("wauth_login_kind") or auth.get("kind") or "web"),
-            used_totp=False,
-        )
     return RedirectResponse(_login_success_destination(request, explicit=success_redirect), status_code=303)
 
 
@@ -5241,6 +5268,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var t=(m&&m.ticket)||{{}};
         var msgs=(m&&m.messages)||[];
         var last=msgs.length?msgs[msgs.length-1]:null;
+        var r=m&&m.rating;
         return [
           String(t.status||''),
           String(t.last_activity||''),
@@ -5249,7 +5277,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           String(last&&last.created_at||''),
           String(last&&last.text||''),
           String(last&&last.photo_file_id||''),
-          String(last&&last.video_file_id||'')
+          String(last&&last.video_file_id||''),
+          String(r&&r.value!==undefined?r.value:'')
         ].join('|');
       }}
       function loadSoundPref() {{
@@ -5380,6 +5409,34 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         }}
         m.innerHTML=html;
       }}
+      function renderRating() {{
+        var r=model&&model.rating;
+        var existing=document.getElementById('tk-rating-block');
+        if(r&&r.value!==undefined) {{
+          var isPos=r.is_positive;
+          var badge=isPos?'badge-success':'badge-error';
+          var icon=isPos?'fa-thumbs-up':'fa-thumbs-down';
+          var label=isPos?'Положительная':'Отрицательная';
+          var html='<div id="tk-rating-block" class="flex items-center gap-2 px-3 py-2 rounded-xl border '+
+            (isPos?'border-success/30 bg-success/10':'border-error/30 bg-error/10')+'">'
+            +'<i class="fa-solid '+icon+' '+(isPos?'text-success':'text-error')+'"></i>'
+            +'<span class="text-sm font-medium">Оценка поддержки:</span>'
+            +'<span class="badge '+badge+' badge-sm">'+esc(label)+'</span>'
+            +'<span class="text-xs opacity-60">'+esc(r.created_at||'')+'</span>'
+            +'</div>';
+          if(existing) {{ existing.outerHTML=html; }}
+          else {{
+            var chatParent=chat&&chat.parentNode;
+            if(chatParent) {{
+              var ratingEl=document.createElement('div');
+              ratingEl.innerHTML=html;
+              chatParent.insertBefore(ratingEl.firstChild, chat.nextSibling);
+            }}
+          }}
+        }} else if(existing) {{
+          existing.remove();
+        }}
+      }}
       function renderChat(shouldStickBottom) {{
         var msgs=(model&&model.messages)||[];
         if(!msgs.length) {{
@@ -5486,7 +5543,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var sig=modelSig(nextModel);
           if(sig===lastSig) return;
           model=nextModel;
-          renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom);
+          renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom); renderRating();
           if(chat&&!wasNearBottom){{
             var newHeight=chat.scrollHeight;
             chat.scrollTop=Math.max(0, prevTop + (newHeight - prevHeight));

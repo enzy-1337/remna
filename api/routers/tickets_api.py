@@ -364,6 +364,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             last_cancelled_sub_id = int(lc)
     sender_ids = {int(m["sender_id"]) for m in msgs if m.get("sender_id") is not None}
     sender_labels: dict[int, str] = {}
+    rating_row: Any = None
     if sender_ids:
         async with await _session() as session:
             users = (
@@ -374,6 +375,20 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             for u in users:
                 label = (u.first_name or u.username or f"user#{u.id}").strip()
                 sender_labels[int(u.id)] = label
+            rating_row = (
+                await session.execute(
+                    text("SELECT value, created_at FROM ticket_ratings WHERE ticket_id = :tid LIMIT 1"),
+                    {"tid": ticket_id},
+                )
+            ).mappings().first()
+    else:
+        async with await _session() as session:
+            rating_row = (
+                await session.execute(
+                    text("SELECT value, created_at FROM ticket_ratings WHERE ticket_id = :tid LIMIT 1"),
+                    {"tid": ticket_id},
+                )
+            ).mappings().first()
     messages = []
     for m in msgs:
         item = _ticket_message_json(m, has_photo, has_video, has_document)
@@ -386,12 +401,22 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
         else:
             item["sender_label"] = None
         messages.append(item)
+    rating_info: dict[str, Any] | None = None
+    if rating_row is not None:
+        val = rating_row["value"]
+        rating_info = {
+            "value": int(val) if val is not None else None,
+            "is_positive": bool(int(val) > 0) if val is not None else None,
+            "label": "👍 Положительная" if val and int(val) > 0 else "👎 Отрицательная" if val is not None else None,
+            "created_at": _to_iso(rating_row["created_at"]),
+        }
     return {
         "ticket": {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()},
         "messages": messages,
         "user": user_info,
         "user_subscription": user_subscription,
         "last_cancelled_subscription_id": last_cancelled_sub_id,
+        "rating": rating_info,
     }
 
 
@@ -1000,4 +1025,55 @@ async def api_user_profile_with_tickets(request: Request, user_id: int) -> dict:
         },
         "tickets": [{k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(t).items()} for t in tickets],
     }
+
+
+@router.get("/operators/stats")
+async def api_operators_stats(request: Request) -> dict:
+    """Статистика операторов: кол-во тикетов, лайки/дизлайки, рейтинг."""
+    _require_api_login(request)
+    async with await _session() as session:
+        rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT
+                        au.id AS admin_id,
+                        u.id AS user_id,
+                        u.first_name,
+                        u.username,
+                        u.telegram_id,
+                        COUNT(DISTINCT t.id) AS tickets_total,
+                        COUNT(DISTINCT CASE WHEN t.status='closed' THEN t.id END) AS tickets_closed,
+                        COUNT(DISTINCT CASE WHEN tr.value > 0 THEN tr.id END) AS likes,
+                        COUNT(DISTINCT CASE WHEN tr.value <= 0 THEN tr.id END) AS dislikes,
+                        (COUNT(DISTINCT CASE WHEN tr.value > 0 THEN tr.id END) -
+                         COUNT(DISTINCT CASE WHEN tr.value <= 0 THEN tr.id END)) AS rating_score
+                    FROM admin_users au
+                    JOIN users u ON u.id = au.user_id
+                    LEFT JOIN tickets t ON t.operator_id = au.id
+                    LEFT JOIN ticket_ratings tr ON tr.operator_id = au.id
+                    GROUP BY au.id, u.id, u.first_name, u.username, u.telegram_id
+                    ORDER BY rating_score DESC, tickets_total DESC
+                    """
+                )
+            )
+        ).mappings().all()
+    operators = []
+    for r in rows:
+        likes = int(r["likes"] or 0)
+        dislikes = int(r["dislikes"] or 0)
+        score = int(r["rating_score"] or 0)
+        operators.append({
+            "admin_id": r["admin_id"],
+            "user_id": r["user_id"],
+            "name": (r["first_name"] or r["username"] or f"admin#{r['admin_id']}"),
+            "username": r["username"],
+            "telegram_id": r["telegram_id"],
+            "tickets_total": int(r["tickets_total"] or 0),
+            "tickets_closed": int(r["tickets_closed"] or 0),
+            "likes": likes,
+            "dislikes": dislikes,
+            "rating_score": score,
+        })
+    return {"operators": operators}
 
