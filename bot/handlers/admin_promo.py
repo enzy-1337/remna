@@ -343,7 +343,7 @@ async def cb_promos_create_start(
     state: FSMContext,
     is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not (is_bot_admin or _is_admin(cq.from_user.id)):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -373,7 +373,7 @@ async def cb_promos_page(
     db_user: User | None,
     is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not (is_bot_admin or _is_admin(cq.from_user.id)):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -400,7 +400,7 @@ async def cb_promos_cancel(
     db_user: User | None,
     is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not (is_bot_admin or _is_admin(cq.from_user.id)):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -452,10 +452,11 @@ async def msg_promos_create_code(
 async def cb_promos_create_type(
     cq: CallbackQuery,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
     if cq.from_user is None:
         return
-    if not _is_admin(cq.from_user.id):
+    if not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]
@@ -628,8 +629,9 @@ async def cb_promos_create_active(
     state: FSMContext,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or db_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or db_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     data = await state.get_data()
@@ -735,11 +737,12 @@ async def cb_promos_delete_ask(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if cq.from_user is None or db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
-    if not _is_admin(cq.from_user.id):
+    if not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
 
@@ -789,11 +792,12 @@ async def cb_promos_delete_do(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     if cq.from_user is None or db_user is None:
         await cq.answer("Сначала /start", show_alert=True)
         return
-    if not _is_admin(cq.from_user.id):
+    if not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
 
@@ -838,7 +842,7 @@ async def cb_promos_view(
     db_user: User | None,
     is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not (is_bot_admin or _is_admin(cq.from_user.id)):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -860,7 +864,7 @@ async def cb_promos_edit_start(
     db_user: User | None,
     is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not (is_bot_admin or _is_admin(cq.from_user.id)):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -896,8 +900,9 @@ async def cb_promos_edit_field(
     cq: CallbackQuery,
     session: AsyncSession,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     parts = cq.data.split(":")
@@ -993,8 +998,9 @@ async def cb_promos_edit_type(
     cq: CallbackQuery,
     session: AsyncSession,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     promo_type = cq.data.split(":")[-1]

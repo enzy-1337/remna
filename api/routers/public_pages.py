@@ -104,10 +104,10 @@ def _days_left(exp: datetime | None) -> int:
 def _ru_days_phrase(n: int) -> str:
     n = abs(int(n))
     if n % 10 == 1 and n % 100 != 11:
-        return f"{n} дн."
+        return f"{n} день"
     if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
-        return f"{n} дн."
-    return f"{n} дн."
+        return f"{n} дня"
+    return f"{n} дней"
 
 
 def _token_from_subscription_url(url: str | None) -> str | None:
@@ -178,6 +178,7 @@ def _subscription_page(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Flux Network — подписка</title>
   <style>
     :root {{
@@ -391,6 +392,7 @@ def _renew_page(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Flux Network — продление</title>
   <style>
     :root {{
@@ -530,6 +532,7 @@ def _topup_page(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Flux Network — пополнение</title>
   <style>
     :root {{
@@ -634,6 +637,7 @@ def _support_page(token: str) -> HTMLResponse:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Flux Network — поддержка</title>
   <style>
     :root {{

@@ -455,8 +455,9 @@ async def cb_admin_subs(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -476,8 +477,8 @@ async def cb_admin_noop(cq: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "admin:section:users")
-async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -496,8 +497,8 @@ async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None) -> Non
 
 
 @router.callback_query(F.data == "admin:section:profile")
-async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -517,9 +518,10 @@ async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None) -> N
 
 @router.callback_query(F.data == "admin:profile:totp:enable")
 async def cb_admin_profile_totp_enable_start(
-    cq: CallbackQuery, db_user: User | None, state: FSMContext
+    cq: CallbackQuery, db_user: User | None, state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -547,9 +549,10 @@ async def cb_admin_profile_totp_enable_start(
 
 @router.callback_query(F.data == "admin:profile:totp:disable")
 async def cb_admin_profile_totp_disable_start(
-    cq: CallbackQuery, db_user: User | None, state: FSMContext
+    cq: CallbackQuery, db_user: User | None, state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -574,9 +577,10 @@ async def cb_admin_profile_totp_disable_start(
 
 @router.callback_query(F.data == "admin:profile:web_session:disable")
 async def cb_admin_profile_disable_web_session(
-    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -603,9 +607,10 @@ async def cb_admin_profile_disable_web_session(
 
 @router.callback_query(F.data == "admin:profile:sessions")
 async def cb_admin_profile_sessions(
-    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -658,9 +663,10 @@ async def cb_admin_profile_sessions(
 
 @router.callback_query(F.data.startswith("admin:profile:session_revoke:"))
 async def cb_admin_profile_session_revoke(
-    cq: CallbackQuery, session: AsyncSession, db_user: User | None
+    cq: CallbackQuery, session: AsyncSession, db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -682,8 +688,8 @@ async def cb_admin_profile_session_revoke(
 
 
 @router.callback_query(F.data == "admin:section:analytics")
-async def cb_admin_section_analytics(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_section_analytics(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -707,8 +713,9 @@ async def msg_admin_profile_totp_enable_code(
     session: AsyncSession,
     db_user: User | None,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -737,8 +744,9 @@ async def msg_admin_profile_totp_disable_code(
     session: AsyncSession,
     db_user: User | None,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -1160,8 +1168,8 @@ async def _render_user_card(
 
 
 @router.callback_query(F.data == "admin:panel")
-async def cb_admin_panel(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_panel(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1220,8 +1228,8 @@ async def _render_admin_tariffs_shop_screen(cq: CallbackQuery, db_user: User) ->
 
 
 @router.callback_query(F.data == "admin:tariffs_shop")
-async def cb_admin_tariffs_shop(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_tariffs_shop(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1231,8 +1239,8 @@ async def cb_admin_tariffs_shop(cq: CallbackQuery, db_user: User | None) -> None
 
 
 @router.callback_query(F.data == "admin:tariffs_toggle_do")
-async def cb_admin_tariffs_toggle_do(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_tariffs_toggle_do(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1252,8 +1260,9 @@ async def cb_admin_transition_calc(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1309,8 +1318,8 @@ async def cb_admin_transition_calc(
 
 
 @router.callback_query(F.data == "admin:web")
-async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None, is_bot_admin: bool = False) -> None:
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1339,8 +1348,9 @@ async def cb_admin_mass_convert_payg(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1372,8 +1382,9 @@ async def cb_admin_metrics(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1521,8 +1532,9 @@ async def cb_admin_users_page(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1544,8 +1556,9 @@ async def cb_admin_user_card(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     try:
@@ -1561,8 +1574,9 @@ async def cb_admin_delete_user_ask(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1613,8 +1627,9 @@ async def cb_admin_delete_user_confirm(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1648,8 +1663,9 @@ async def cb_admin_block(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     try:
@@ -1673,8 +1689,9 @@ async def cb_admin_unblock(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     try:
@@ -1698,8 +1715,9 @@ async def cb_admin_toggle_billing_mode(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1806,8 +1824,9 @@ async def cb_admin_sub_disable(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     parsed = _parse_user_sub(cq.data)
@@ -1842,8 +1861,9 @@ async def cb_admin_sub_enable(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     parsed = _parse_user_sub(cq.data)
@@ -1896,8 +1916,9 @@ async def cb_admin_add_months_start(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -1936,8 +1957,9 @@ async def cb_admin_add_months_quick(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2000,8 +2022,9 @@ async def msg_admin_add_months(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -2098,8 +2121,9 @@ async def cb_admin_add_days_start(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2143,8 +2167,9 @@ async def cb_admin_add_days_quick(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2183,8 +2208,9 @@ async def msg_admin_add_days(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -2256,8 +2282,9 @@ async def cb_admin_add_balance_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2291,8 +2318,9 @@ async def cb_admin_reset_balance(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2339,8 +2367,9 @@ async def cb_admin_rwcheck_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2368,8 +2397,9 @@ async def cb_admin_manual_link_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2398,8 +2428,9 @@ async def msg_admin_rw_lookup(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -2474,8 +2505,9 @@ async def msg_admin_manual_bind_subscription(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -2583,8 +2615,9 @@ async def msg_admin_add_balance(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -2694,8 +2727,9 @@ async def cb_admin_adjust_slot(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     parts = (cq.data or "").split(":")
@@ -2730,8 +2764,9 @@ async def cb_admin_clear_custom_price(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     try:
@@ -2754,8 +2789,9 @@ async def cb_admin_clear_personal_discount(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     try:
@@ -2778,8 +2814,9 @@ async def cb_admin_custom_price_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2815,8 +2852,9 @@ async def cb_admin_personal_discount_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -2850,8 +2888,9 @@ async def msg_admin_custom_month_price(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     data = await state.get_data()
@@ -2907,8 +2946,9 @@ async def msg_admin_personal_discount(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     data = await state.get_data()
@@ -2966,8 +3006,9 @@ async def cb_admin_find_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -3015,13 +3056,14 @@ async def cb_admin_find_cancel(
     state: FSMContext,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     data = await state.get_data()
     await state.clear()
     if cq.bot and cq.message:
         pm = data.get("find_prompt_mid")
         await _try_delete_message(cq.bot, cq.message.chat.id, int(pm) if pm is not None else None)
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -3036,8 +3078,9 @@ async def msg_admin_find_telegram_id(
     session: AsyncSession,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if db_user is None:
@@ -3235,8 +3278,9 @@ async def cmd_admin(
     message: Message,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         return
     if db_user is None:
         await message.answer(esc("Сначала /start"))
@@ -3264,8 +3308,9 @@ async def cb_admin_reset_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -3308,8 +3353,9 @@ async def cb_admin_reset_proceed(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -3357,9 +3403,10 @@ async def cb_admin_reset_cancel(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     await state.clear()
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Отменено.", show_alert=True)
         return
     await cq.answer("Сброс отменён.")
@@ -3398,8 +3445,9 @@ def _reset_username_ok(expected_cf: str, typed: str) -> bool:
 async def msg_admin_reset_step_first_name(
     message: Message,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     data = await state.get_data()
@@ -3442,8 +3490,9 @@ async def msg_admin_reset_step_first_name(
 async def msg_admin_reset_step_username(
     message: Message,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     data = await state.get_data()
@@ -3475,8 +3524,9 @@ async def msg_admin_reset_step_telegram_id(
     message: Message,
     session: AsyncSession,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     data = await state.get_data()
@@ -3541,8 +3591,9 @@ async def cb_broadcast_start(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if db_user is None:
@@ -3589,9 +3640,10 @@ async def cb_broadcast_cancel(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     await state.clear()
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     await cq.answer("Отменено.")
@@ -3604,8 +3656,9 @@ async def cb_broadcast_cancel(
 async def msg_broadcast_receive_text(
     message: Message,
     state: FSMContext,
+    is_bot_admin: bool = False,
 ) -> None:
-    if message.from_user is None or not _is_admin(message.from_user.id):
+    if message.from_user is None or not is_bot_admin:
         await state.clear()
         return
     if (message.text or "").strip().startswith("/"):
@@ -3668,8 +3721,9 @@ async def cb_broadcast_go(
     cq: CallbackQuery,
     state: FSMContext,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     data = await state.get_data()

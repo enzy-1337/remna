@@ -659,6 +659,12 @@ def _head_common(title: str, *, favicon_url: str | None = None, background_url: 
     return f"""  <meta charset="utf-8" />
   <script>try{{var t=localStorage.getItem('remna-admin-theme');if(t==='light'||t==='night')document.documentElement.setAttribute('data-theme',t);}}catch(e){{}}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="googlebot" content="noindex, nofollow" />
+  <meta name="description" content="Панель управления Remna VPN — администраторский интерфейс." />
+  <meta name="theme-color" content="#0f0c20" />
+  <meta property="og:title" content="{_esc(title)}" />
+  <meta property="og:type" content="website" />
   <title>{_esc(title)}</title>
 {fav}  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1585,7 +1591,7 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',saved:'Изменения сохранены.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -1703,9 +1709,14 @@ async def _notify_admin_login(settings: Settings, *, user: User, method_kind: st
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
         return
     when = datetime.now(UTC).astimezone(_MSK_TZ).strftime("%H:%M МСК %d.%m.%Y")
+    admin_name = html.escape((user.first_name or user.username or f"user#{user.id}").strip())
+    admin_tg = int(user.telegram_id or 0)
+    admin_link = f'<a href="tg://user?id={admin_tg}">{admin_name}</a>' if admin_tg else admin_name
+    profile_link = _admin_profile_link_for_notify(settings, user)
+    profile_suffix = f' | <a href="{html.escape(profile_link)}">профиль</a>' if profile_link else ""
     text = (
         "🔐 <b>Вход в web-admin</b>\n"
-        f'Администратор: <a href="tg://user?id=883400626">Enzy</a>\n'
+        f"Администратор: {admin_link}{profile_suffix}\n"
         f"Способ: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
         f"Время: <b>{html.escape(when)}</b>"
     )
@@ -5176,17 +5187,24 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         return denied
     settings = get_settings()
     admin_opts: list[dict[str, object]] = []
-    tg_admins = [int(x) for x in (settings.admin_telegram_ids or [])]
-    if tg_admins:
-        async with await _session() as session:
-            rows = (
-                await session.execute(select(User).where(User.telegram_id.in_(tg_admins)).order_by(User.id))
-            ).scalars().all()
-        by_tg = {int(u.telegram_id): u for u in rows}
-        for tg_id in tg_admins:
-            u = by_tg.get(tg_id)
-            label = f"#{u.id} {((u.first_name or u.username or '').strip() or f'admin:{tg_id}')}" if u else f"admin:{tg_id}"
-            admin_opts.append({"db_id": int(u.id) if u else None, "tg_id": tg_id, "label": label})
+    # Загружаем операторов из таблицы admin_users (RBAC) — db_id = admin_users.id
+    async with await _session() as session:
+        from shared.models.admin_user import AdminUser
+        au_rows = (
+            await session.execute(
+                select(AdminUser, User)
+                .join(User, User.id == AdminUser.user_id)
+                .order_by(AdminUser.id.asc())
+            )
+        ).all()
+        for au, u in au_rows:
+            name = ((u.first_name or u.username or "").strip() or f"admin#{au.id}")
+            label = f"#{u.id} {name}"
+            admin_opts.append({
+                "db_id": int(au.id),          # admin_users.id — FK в tickets.operator_id
+                "tg_id": int(u.telegram_id),
+                "label": label,
+            })
     admins_json = json.dumps(admin_opts, ensure_ascii=False)
     body = f"""
     <div class="grid gap-4 lg:grid-cols-3 items-start">

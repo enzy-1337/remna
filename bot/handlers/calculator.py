@@ -166,8 +166,9 @@ def _append_no_plans_note(cap: str, plans: list[Plan]) -> str:
 async def cb_calc_menu_admin(
     cq: CallbackQuery,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -195,8 +196,9 @@ async def cb_calc_scenario_admin(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
@@ -274,8 +276,9 @@ async def cb_calc_compare_admin(
     cq: CallbackQuery,
     session: AsyncSession,
     db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
-    if cq.from_user is None or not _is_bot_admin(cq.from_user.id):
+    if cq.from_user is None or not is_bot_admin:
         await cq.answer("Нет доступа.", show_alert=True)
         return
     if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):

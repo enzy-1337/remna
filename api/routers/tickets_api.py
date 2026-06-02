@@ -52,6 +52,48 @@ async def _session() -> AsyncSession:
     return get_session_factory()()
 
 
+async def _resolve_admin_ids(
+    session: AsyncSession,
+    request,
+) -> tuple[int | None, int | None]:
+    """
+    Возвращает (users_id, admin_users_id) для текущего залогиненного администратора.
+    users_id  → используется как sender_id в ticket_messages (FK → users.id)
+    admin_users_id → используется как operator_id в tickets (FK → admin_users.id)
+    """
+    # Берём user_id из сессии (надёжнее чем через telegram_id)
+    session_uid: int | None = None
+    raw_uid = (request.session.get("wauth_user_id") if request and hasattr(request, "session") else None)
+    if raw_uid is not None:
+        try:
+            session_uid = int(raw_uid)
+        except (TypeError, ValueError):
+            session_uid = None
+
+    if session_uid is None:
+        wauth = (request.session.get("wauth") or {}) if request and hasattr(request, "session") else {}
+        admin_tg = int(wauth.get("telegram_id") or wauth.get("id") or 0)
+        if admin_tg:
+            u = (
+                await session.execute(
+                    text("SELECT id FROM users WHERE telegram_id=:tg LIMIT 1"), {"tg": admin_tg}
+                )
+            ).first()
+            session_uid = int(u[0]) if u else None
+
+    if session_uid is None:
+        return None, None
+
+    # Ищем запись в admin_users по user_id
+    au = (
+        await session.execute(
+            text("SELECT id FROM admin_users WHERE user_id=:uid LIMIT 1"), {"uid": session_uid}
+        )
+    ).first()
+    admin_users_id = int(au[0]) if au else None
+    return session_uid, admin_users_id
+
+
 def _invalidate_tickets_list_cache() -> None:
     _TICKETS_LIST_CACHE.clear()
 
@@ -534,16 +576,10 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
         if str(t["status"]) == "closed":
             raise HTTPException(status_code=400, detail="Ticket is closed")
         wauth = request.session.get("wauth") or {}
-        admin_tg = int(wauth.get("telegram_id") or 0)
-        admin_uid = None
-        if admin_tg:
-            u = (
-                await session.execute(
-                    text("SELECT id FROM users WHERE telegram_id=:tg LIMIT 1"),
-                    {"tg": admin_tg},
-                )
-            ).first()
-            admin_uid = int(u[0]) if u else None
+        admin_tg = int(wauth.get("telegram_id") or wauth.get("id") or 0)
+        # sender_uid → users.id (для имени в диалоге)
+        # operator_id → admin_users.id (FK в tickets)
+        sender_uid, operator_id = await _resolve_admin_ids(session, request)
         now = datetime.now(timezone.utc)
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         if has_photo:
@@ -554,7 +590,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                     VALUES (:tid,:sid,'admin',:stg,:txt,:now,false,NULL)
                     """
                 ),
-                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+                {"tid": ticket_id, "sid": sender_uid, "stg": admin_tg or None, "txt": txt, "now": now},
             )
         else:
             await session.execute(
@@ -564,7 +600,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                     VALUES (:tid,:sid,'admin',:stg,:txt,:now,false)
                     """
                 ),
-                {"tid": ticket_id, "sid": admin_uid, "stg": admin_tg or None, "txt": txt, "now": now},
+                {"tid": ticket_id, "sid": sender_uid, "stg": admin_tg or None, "txt": txt, "now": now},
             )
         await session.execute(
             text(
@@ -577,7 +613,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                 WHERE id=:tid
                 """
             ),
-            {"aid": admin_uid, "atg": admin_tg or None, "now": now, "tid": ticket_id},
+            {"aid": operator_id, "atg": admin_tg or None, "now": now, "tid": ticket_id},
         )
         await session.commit()
     _invalidate_tickets_list_cache()
@@ -642,19 +678,11 @@ async def api_ticket_reply_media(
         if str(t["status"]) == "closed":
             raise HTTPException(status_code=400, detail="Ticket is closed")
         wauth = request.session.get("wauth") or {}
-        admin_tg = int(wauth.get("telegram_id") or 0)
-        admin_uid = None
-        if admin_tg:
-            u = (
-                await session.execute(
-                    text("SELECT id FROM users WHERE telegram_id=:tg LIMIT 1"),
-                    {"tg": admin_tg},
-                )
-            ).first()
-            admin_uid = int(u[0]) if u else None
+        admin_tg = int(wauth.get("telegram_id") or wauth.get("id") or 0)
+        sender_uid, operator_id = await _resolve_admin_ids(session, request)
         now = datetime.now(timezone.utc)
         media_text = txt
-        label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
+        label = html.escape(str(wauth.get("label") or "Администратор"))
         photo_fid: str | None = None
         video_fid: str | None = None
         document_fid: str | None = None
@@ -731,7 +759,7 @@ async def api_ticket_reply_media(
                 ),
                 {
                     "tid": ticket_id,
-                    "sid": admin_uid,
+                    "sid": sender_uid,
                     "stg": admin_tg or None,
                     "txt": media_text,
                     "now": now,
@@ -752,7 +780,7 @@ async def api_ticket_reply_media(
                 ),
                 {
                     "tid": ticket_id,
-                    "sid": admin_uid,
+                    "sid": sender_uid,
                     "stg": admin_tg or None,
                     "txt": media_text,
                     "now": now,
@@ -771,7 +799,7 @@ async def api_ticket_reply_media(
                 ),
                 {
                     "tid": ticket_id,
-                    "sid": admin_uid,
+                    "sid": sender_uid,
                     "stg": admin_tg or None,
                     "txt": media_text,
                     "now": now,
@@ -789,7 +817,7 @@ async def api_ticket_reply_media(
                 ),
                 {
                     "tid": ticket_id,
-                    "sid": admin_uid,
+                    "sid": sender_uid,
                     "stg": admin_tg or None,
                     "txt": media_text,
                     "now": now,
@@ -807,7 +835,7 @@ async def api_ticket_reply_media(
                 WHERE id=:tid
                 """
             ),
-            {"aid": admin_uid, "atg": admin_tg or None, "now": now, "tid": ticket_id},
+            {"aid": operator_id, "atg": admin_tg or None, "now": now, "tid": ticket_id},
         )
         await session.commit()
     _invalidate_tickets_list_cache()
@@ -961,6 +989,17 @@ async def api_ticket_assign(request: Request, ticket_id: int, body: TicketAssign
         t = (await session.execute(text("SELECT id FROM tickets WHERE id=:tid"), {"tid": ticket_id})).first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        # body.operator_id приходит с фронтенда как admin_users.id (после фикса страницы тикета)
+        # Дополнительно верифицируем что такая запись существует, иначе обнуляем
+        resolved_operator_id: int | None = None
+        if body.operator_id is not None:
+            exists = (
+                await session.execute(
+                    text("SELECT id FROM admin_users WHERE id=:aid LIMIT 1"),
+                    {"aid": body.operator_id},
+                )
+            ).first()
+            resolved_operator_id = int(exists[0]) if exists else None
         await session.execute(
             text(
                 """
@@ -971,7 +1010,7 @@ async def api_ticket_assign(request: Request, ticket_id: int, body: TicketAssign
                 WHERE id=:tid
                 """
             ),
-            {"aid": body.operator_id, "atg": body.telegram_assigned_admin_id, "now": now, "tid": ticket_id},
+            {"aid": resolved_operator_id, "atg": body.telegram_assigned_admin_id, "now": now, "tid": ticket_id},
         )
         await session.commit()
     _invalidate_tickets_list_cache()
