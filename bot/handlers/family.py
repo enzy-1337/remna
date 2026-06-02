@@ -31,7 +31,7 @@ from bot.messages import (
     TRANSFER_ONLY_OWNER,
 )
 from bot.states.family import FamilyStates, TransferStates
-from bot.utils.screen_photo import answer_callback_with_photo_screen
+from bot.utils.screen_photo import answer_callback_with_photo_screen, delete_message_safe
 from shared.config import Settings, get_settings
 from shared.md2 import join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
@@ -119,6 +119,7 @@ async def cb_family_bind(cq: CallbackQuery, state: FSMContext, db_user: User | N
     await state.set_state(FamilyStates.waiting_bind_target)
     await cq.answer()
     if cq.message:
+        await delete_message_safe(cq.message)
         await cq.message.answer(FAMILY_ASK_TARGET)
 
 
@@ -307,6 +308,7 @@ async def cb_transfer_start(
     await state.set_state(TransferStates.waiting_recipient)
     await cq.answer()
     if cq.message:
+        await delete_message_safe(cq.message)
         await cq.message.answer(TRANSFER_ASK_TARGET)
 
 

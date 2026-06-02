@@ -41,6 +41,9 @@ def profile_main_keyboard(
         InlineKeyboardButton(text="🎁 Промокод", callback_data="menu:promo"),
         InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="menu:info"),
     )
+    b.row(
+        InlineKeyboardButton(text="👨‍👩‍👧 Семейная подписка", callback_data="menu:family"),
+    )
     if is_admin:
         b.row(
             InlineKeyboardButton(

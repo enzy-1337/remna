@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram import F, Router
+from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -166,13 +167,20 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
             except Exception:
                 pass
     await cq.answer("Статус обновлён")
-    if cq.message and cq.message.text:
-        base = cq.message.text.split("\n\nСтатус:")[0]
-        try:
-            badge = "🟢 Открыт" if status == "open" else "🔄 В работе"
-            await cq.message.edit_text(base + f"\n\nСтатус: {badge}", reply_markup=cq.message.reply_markup)
-        except Exception:
-            pass
+    if cq.message:
+        # Используем html_text чтобы сохранить форматирование (ссылки, цитаты, жирный текст)
+        src = cq.message.html_text or cq.message.text or ""
+        if src:
+            base = src.split("\n\nСтатус:")[0]
+            try:
+                badge = "🟢 Открыт" if status == "open" else "🔄 В работе"
+                await cq.message.edit_text(
+                    base + f"\n\nСтатус: {badge}",
+                    reply_markup=cq.message.reply_markup,
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
 
 
 @router.callback_query(F.data.startswith("tickets:status_info:"))
