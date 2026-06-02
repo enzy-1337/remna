@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
 
 import html
 
@@ -23,6 +24,7 @@ from tickets.services import (
 
 router = Router(name="tickets_admin")
 
+
 def _extract_start_payload(message: Message) -> str | None:
     if not message.text:
         return None
@@ -31,9 +33,50 @@ def _extract_start_payload(message: Message) -> str | None:
 
 
 def _is_admin(telegram_id: int | None) -> bool:
+    """Быстрая проверка по ADMIN_IDS из .env."""
     if telegram_id is None:
         return False
     return telegram_id in (config.admin_ids or [])
+
+
+async def _can_manage_tickets(session: AsyncSession, telegram_id: int | None) -> bool:
+    """
+    Может ли пользователь управлять тикетами:
+    1. Есть в ADMIN_IDS (legacy env-список)
+    2. ИЛИ имеет permission manage_tickets / is_superadmin в таблице admin_users
+    """
+    if telegram_id is None:
+        return False
+    if _is_admin(telegram_id):
+        return True
+    try:
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT au.is_superadmin,
+                           au.extra_permissions,
+                           ar.permissions AS role_permissions
+                    FROM users u
+                    JOIN admin_users au ON au.user_id = u.id
+                    LEFT JOIN admin_roles ar ON ar.id = au.role_id
+                    WHERE u.telegram_id = :tg
+                    LIMIT 1
+                    """
+                ),
+                {"tg": int(telegram_id)},
+            )
+        ).mappings().first()
+        if row is None:
+            return False
+        if row["is_superadmin"]:
+            return True
+        extra = row["extra_permissions"] or []
+        role_perms = row["role_permissions"] or []
+        all_perms = set(extra) | set(role_perms)
+        return "manage_tickets" in all_perms
+    except Exception:
+        return False
 
 
 def _within_media_limit(size_bytes: int | None) -> bool:
@@ -53,7 +96,7 @@ async def cmd_start_admin_entry(
     payload = _extract_start_payload(message)
     if not payload or not payload.startswith("reply_"):
         return
-    if not _is_admin(message.from_user.id):
+    if not await _can_manage_tickets(session, message.from_user.id):
         await message.answer("Нет доступа.")
         return
     try:
@@ -78,7 +121,7 @@ async def cmd_start_admin_entry(
 
 @router.callback_query(F.data.startswith("tickets:status:"))
 async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not await _can_manage_tickets(session, cq.from_user.id):
         await cq.answer("Нет доступа.", show_alert=True)
         return
     data = (cq.data or "").split(":")
@@ -134,7 +177,7 @@ async def cb_status_set(cq: CallbackQuery, session: AsyncSession) -> None:
 
 @router.callback_query(F.data.startswith("tickets:status_info:"))
 async def cb_status_info(cq: CallbackQuery, session: AsyncSession) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not await _can_manage_tickets(session, cq.from_user.id):
         await cq.answer("Нет доступа.", show_alert=True)
         return
     data = (cq.data or "").split(":")
@@ -157,7 +200,7 @@ async def cb_status_info(cq: CallbackQuery, session: AsyncSession) -> None:
 
 @router.callback_query(F.data.startswith("tickets:close:"))
 async def cb_close_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
-    if cq.from_user is None or not _is_admin(cq.from_user.id):
+    if cq.from_user is None or not await _can_manage_tickets(session, cq.from_user.id):
         await cq.answer("Нет доступа.", show_alert=True)
         return
     data = (cq.data or "").split(":")
@@ -226,7 +269,7 @@ async def msg_admin_reply(
 ) -> None:
     if message.from_user is None:
         return
-    if not _is_admin(message.from_user.id):
+    if not await _can_manage_tickets(session, message.from_user.id):
         await state.clear()
         await message.answer("Нет доступа.")
         return

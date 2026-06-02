@@ -357,7 +357,13 @@ async def open_ticket_forum_topic(
     topic_id = int(topic.message_thread_id)
     await set_ticket_topic(session, ticket_id=ticket_id, topic_id=topic_id)
     me = await bot.get_me()
-    kb = topic_ticket_keyboard(bot_username=me.username or "", ticket_id=ticket_id)
+    base_url = (s.public_site_url or "").strip().rstrip("/")
+    web_admin_ticket_url = f"{base_url}/admin/tickets/{ticket_id}" if base_url else ""
+    kb = topic_ticket_keyboard(
+        bot_username=me.username or "",
+        ticket_id=ticket_id,
+        web_admin_url=web_admin_ticket_url,
+    )
     cap = await build_ticket_topic_open_html(
         session,
         ticket_id=ticket_id,

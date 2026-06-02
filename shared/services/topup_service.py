@@ -397,7 +397,10 @@ async def apply_topup_from_webhook(
     Возвращает (status, telegram_id, сумма_всего_на_баланс_₽, user_id, промо-бонус_₽, бонус_первого_пополнения_₽).
     status: completed | duplicate | rejected | not_found
     """
-    r = await session.execute(select(Transaction).where(Transaction.id == parsed.internal_transaction_id))
+    # SELECT FOR UPDATE блокирует строку — защита от race condition при дублирующихся вебхуках.
+    r = await session.execute(
+        select(Transaction).where(Transaction.id == parsed.internal_transaction_id).with_for_update()
+    )
     txn = r.scalar_one_or_none()
     if txn is None:
         logger.warning("topup webhook: txn id=%s not found", parsed.internal_transaction_id)

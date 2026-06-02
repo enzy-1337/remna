@@ -29,7 +29,7 @@ from shared.services.smart_cart import set_cart_plan
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.promo_service import get_pending_purchase_discount_percent
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
-from shared.services.referral_service import grant_referrer_percent_of_referred_payment
+
 from shared.services.billing_calculator import transition_credit_for_remaining_legacy_rub
 from shared.services.feature_flags import tariff_purchases_enabled
 
@@ -920,14 +920,6 @@ async def purchase_plan_with_balance(
 
     from shared.services.admin_notify import notify_admin
 
-    await grant_referrer_percent_of_referred_payment(
-        session,
-        referred_user=user,
-        payment_amount_rub=price,
-        settings=settings,
-        idempotency_key=f"referral_pct:subscription:{purchase_txn.id}",
-        reward_source="payment_pct_plan",
-    )
     from shared.services.admin_log_topics import AdminLogTopic
 
     await notify_admin(
@@ -1082,14 +1074,6 @@ async def add_paid_device_slots(
         from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 
         await sync_hybrid_balance_floor_panel_state(session, user, settings)
-    await grant_referrer_percent_of_referred_payment(
-        session,
-        referred_user=user,
-        payment_amount_rub=total_price,
-        settings=settings,
-        idempotency_key=f"referral_pct:device_slot:{slot_txn.id}",
-        reward_source="payment_pct_device",
-    )
     msg = join_lines(
         plain("Добавлено слотов: ")
         + bold(str(qty))
