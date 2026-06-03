@@ -160,11 +160,12 @@ def _start_caption() -> str:
     return join_lines(
         "👋 " + bold("Привет!"),
         "",
-        plain("Пришли ссылку — скачаю и отправлю видео:"),
+        plain("Пришли ссылку — скачаю видео, фото или GIF:"),
         "",
-        plain("• Instagram Reels"),
+        plain("• Instagram Reels, посты, истории"),
+        plain("• TikTok (видео и фотопосты)"),
+        plain("• Pinterest (видео, GIF, фото)"),
         plain("• YouTube Shorts"),
-        plain("• TikTok"),
         plain("• VK Clips"),
     )
 
@@ -375,10 +376,16 @@ async def handle_download_link(
                     delivered_size = send_size
                     await progress_msg.delete()
                     try:
-                        sent_user_video = await message.answer_video(
-                            FSInputFile(send_path),
-                            reply_markup=kb,
-                        )
+                        if video.is_gif:
+                            sent_user_video = await message.answer_animation(
+                                FSInputFile(send_path),
+                                reply_markup=kb,
+                            )
+                        else:
+                            sent_user_video = await message.answer_video(
+                                FSInputFile(send_path),
+                                reply_markup=kb,
+                            )
                     except TelegramBadRequest as e:
                         msg = str(e).lower()
                         if "file is too big" in msg or "request entity too large" in msg:
@@ -457,14 +464,21 @@ async def handle_download_link(
                             message_id=sent_user_video.message_id,
                         )
                     except TelegramBadRequest:
-                        if sent_user_video.video is None:
+                        if sent_user_video.animation is not None:
+                            await message.bot.send_animation(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                animation=sent_user_video.animation.file_id,
+                            )
+                        elif sent_user_video.video is not None:
+                            await message.bot.send_video(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                video=sent_user_video.video.file_id,
+                                reply_markup=kb,
+                            )
+                        else:
                             raise
-                        await message.bot.send_video(
-                            chat_id=topic.forum_chat_id,
-                            message_thread_id=topic.topic_id,
-                            video=sent_user_video.video.file_id,
-                            reply_markup=kb,
-                        )
             except Exception as topic_exc:
                 err = str(topic_exc).lower()
                 if "message thread not found" not in err and "topic" not in err:
@@ -497,14 +511,23 @@ async def handle_download_link(
                             message_id=sent_user_video.message_id,
                         )
                     except TelegramBadRequest:
-                        if sent_user_video is None or sent_user_video.video is None:
+                        if sent_user_video is None:
                             raise
-                        await message.bot.send_video(
-                            chat_id=topic.forum_chat_id,
-                            message_thread_id=topic.topic_id,
-                            video=sent_user_video.video.file_id,
-                            reply_markup=kb,
-                        )
+                        if sent_user_video.animation is not None:
+                            await message.bot.send_animation(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                animation=sent_user_video.animation.file_id,
+                            )
+                        elif sent_user_video.video is not None:
+                            await message.bot.send_video(
+                                chat_id=topic.forum_chat_id,
+                                message_thread_id=topic.topic_id,
+                                video=sent_user_video.video.file_id,
+                                reply_markup=kb,
+                            )
+                        else:
+                            raise
             finally:
                 temp_dir.cleanup()
         except Exception as e:

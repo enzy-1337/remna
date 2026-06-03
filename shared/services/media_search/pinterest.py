@@ -44,6 +44,7 @@ class PinterestDownload:
     duration_sec: int
     size_bytes: int
     photo_paths: list[Path] | None = None
+    is_gif: bool = False
 
 
 class PinterestEmbedPin(Exception):
@@ -256,6 +257,20 @@ def _collect_image_urls(pin: dict[str, Any]) -> list[str]:
     return _dedupe_urls(urls)
 
 
+def _mp4_has_no_audio(path: Path) -> bool:
+    """Return True if the mp4 has no audio stream (typical for GIF-converted-to-mp4)."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+             "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True,
+            timeout=10,
+        )
+        return proc.stdout.strip() == b""
+    except Exception:
+        return False
+
+
 def _download_file(url: str, dest: Path) -> None:
     req = urllib.request.Request(
         url,
@@ -342,6 +357,9 @@ def download_pinterest_sync(url: str, temp_dir: str) -> PinterestDownload:
     if domain.lower() != "uploaded by user" and embed_src:
         raise PinterestEmbedPin(str(embed_src))
 
+    pin_type = str(pin.get("type") or "").lower()
+    is_gif = pin_type == "gif" or bool(pin.get("is_gif"))
+
     video_url, duration_sec = _pick_video(_video_lists_from_pin(pin))
     if video_url:
         dest = Path(temp_dir) / f"pinterest_{pin_id}.mp4"
@@ -351,10 +369,14 @@ def download_pinterest_sync(url: str, temp_dir: str) -> PinterestDownload:
             _download_file(video_url, dest)
         if not dest.exists() or dest.stat().st_size <= 0:
             raise RuntimeError("Файл видео Pinterest не найден после скачивания.")
+        # Treat silent short clips as GIF (Pinterest stores GIFs as mp4)
+        if not is_gif and duration_sec > 0 and duration_sec <= 15:
+            is_gif = _mp4_has_no_audio(dest)
         return PinterestDownload(
             path=dest,
             duration_sec=duration_sec,
             size_bytes=int(dest.stat().st_size),
+            is_gif=is_gif,
         )
 
     image_urls = _collect_image_urls(pin)

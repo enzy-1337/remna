@@ -30,6 +30,7 @@ class DownloadedVideo:
     size_bytes: int
     original_url: str
     photo_paths: list[Path] | None = None
+    is_gif: bool = False
 
 
 def _pick_best_image_url(url_list: list[str]) -> str:
@@ -255,8 +256,12 @@ def detect_platform(url: str) -> str:
     u = (url or "").lower()
     if "pinterest." in u or "pin.it/" in u:
         return "Pinterest"
-    if "instagram.com" in u:
+    if "instagram.com/stories/" in u or "instagram.com/s/" in u:
+        return "Instagram Stories"
+    if "instagram.com/reel" in u:
         return "Instagram Reels"
+    if "instagram.com" in u:
+        return "Instagram"
     if "tiktok.com" in u:
         return "TikTok"
     if "vk.com/clip" in u or "clips.vk.com" in u or "vk.ru/clip" in u:
@@ -331,6 +336,7 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
                 size_bytes=pin_media.size_bytes,
                 original_url=url,
                 photo_paths=pin_media.photo_paths,
+                is_gif=pin_media.is_gif,
             )
         except PinterestEmbedPin:
             logger.info("Pinterest embed pin, fallback to yt-dlp url=%s", url)
