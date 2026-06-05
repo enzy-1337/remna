@@ -384,6 +384,11 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
                 if fallback is not None:
                     logger.info("TikTok photo fallback used for url=%s (source=%s)", url, fallback_url)
                     return fallback
+            if "Unsupported URL" in msg and _TG_STORY_RE.search(url or ""):
+                raise RuntimeError(
+                    "Истории Telegram можно скачать только из публичных каналов. "
+                    "Убедитесь, что канал открытый и ссылка в формате t.me/канал/s/номер."
+                )
             if "Unsupported URL" in msg or "No video formats found" in msg:
                 raise RuntimeError("Площадка не отдала видео по этой ссылке (возможно приватный ролик или ограничения доступа).")
             if "This video is private" in msg or "Login required" in msg:
