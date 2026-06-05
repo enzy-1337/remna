@@ -138,7 +138,7 @@ async def msg_family_bind_target(
         return
     ok, err = await family_bind_allowed(session, owner=db_user, member=target)
     if not ok:
-        await message.answer(err)
+        await message.answer(plain(err))
         await state.clear()
         return
     await state.update_data(family_target_id=target.id)
@@ -248,7 +248,7 @@ async def msg_family_unbind_target(
     )
     await state.clear()
     if not ok:
-        await message.answer(err or "Не удалось отвязать.")
+        await message.answer(plain(err or "Не удалось отвязать."))
         return
     try:
         await message.bot.send_message(int(target.telegram_id), FAMILY_UNBIND_OK_MEMBER)
