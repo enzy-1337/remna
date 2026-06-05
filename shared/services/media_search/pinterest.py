@@ -271,12 +271,17 @@ def _mp4_has_no_audio(path: Path) -> bool:
         return False
 
 
-def _download_file(url: str, dest: Path) -> None:
+def _download_file(url: str, dest: Path, referer: str = "https://www.pinterest.com/") -> None:
     req = urllib.request.Request(
         url,
         headers={
             "User-Agent": _USER_AGENT,
-            "Referer": "https://www.pinterest.com/",
+            "Referer": referer,
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "sec-fetch-dest": "image",
+            "sec-fetch-mode": "no-cors",
+            "sec-fetch-site": "cross-site",
         },
     )
     with urllib.request.urlopen(req, timeout=90) as resp:
@@ -323,7 +328,8 @@ def _download_hls_to_mp4(m3u8_url: str, dest: Path) -> None:
         raise RuntimeError(f"Не удалось скачать видео Pinterest (HLS): {stderr or err2}")
 
 
-def _download_images(urls: list[str], temp_dir: str, pin_id: str) -> list[Path]:
+def _download_images(urls: list[str], temp_dir: str, pin_id: str, pin_url: str = "") -> list[Path]:
+    referer = pin_url or "https://www.pinterest.com/"
     photo_paths: list[Path] = []
     for idx, image_url in enumerate(urls[:10], start=1):
         ext = ".jpg"
@@ -334,7 +340,7 @@ def _download_images(urls: list[str], temp_dir: str, pin_id: str) -> list[Path]:
             ext = ".webp"
         photo_path = Path(temp_dir) / f"pinterest_{pin_id}_{idx:02d}{ext}"
         try:
-            _download_file(image_url, photo_path)
+            _download_file(image_url, photo_path, referer=referer)
         except Exception:
             logger.exception("Pinterest image download failed url=%s", image_url)
             continue
@@ -378,7 +384,7 @@ def download_pinterest_sync(url: str, temp_dir: str) -> PinterestDownload:
     # Пробуем изображения — даже для embed-пинов они могут быть в API
     image_urls = _collect_image_urls(pin)
     if image_urls:
-        photo_paths = _download_images(image_urls, temp_dir, pin_id)
+        photo_paths = _download_images(image_urls, temp_dir, pin_id, pin_url=url)
         first = photo_paths[0]
         return PinterestDownload(
             path=first,

@@ -109,6 +109,83 @@ def _extract_tiktok_photo_urls_from_html(html_text: str) -> list[str]:
     return uniq
 
 
+def _download_tiktok_photo_via_api(url: str, temp_dir: str) -> DownloadedVideo | None:
+    """Скачать фотопост TikTok через мобильный API (aweme/v1/feed)."""
+    m = re.search(r"/(?:photo|video)/(\d+)", url or "")
+    if not m:
+        return None
+    item_id = m.group(1)
+    api_url = (
+        f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/"
+        f"?aweme_id={item_id}&aid=1128&version_name=26.1.3&device_type=iPhone14"
+    )
+    try:
+        req = urllib.request.Request(
+            api_url,
+            headers={
+                "User-Agent": "TikTok 26.1.3 rv:261303 (iPhone; iOS 14.4.2; en_US) Cronet",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+    except Exception as exc:
+        logger.debug("TikTok API request failed item_id=%s: %s", item_id, exc)
+        return None
+
+    aweme_list = data.get("aweme_list") or []
+    if not aweme_list:
+        return None
+    aweme = aweme_list[0]
+
+    # Фотопост — ищем image_post
+    image_post = aweme.get("image_post_info") or aweme.get("imagePost") or {}
+    images = image_post.get("images") or []
+    if not images:
+        return None
+
+    photo_paths: list[Path] = []
+    for idx, image in enumerate(images, start=1):
+        if not isinstance(image, dict):
+            continue
+        display_image = image.get("display_image") or image.get("imageURL") or {}
+        url_list = display_image.get("url_list") or []
+        image_url = ""
+        for candidate in url_list:
+            c = str(candidate or "").strip()
+            if c and "watermark" not in c.lower():
+                image_url = c
+                break
+        if not image_url and url_list:
+            image_url = str(url_list[0])
+        if not image_url:
+            continue
+        photo_path = Path(temp_dir) / f"tiktok_api_{item_id}_{idx:02d}.jpg"
+        try:
+            req_img = urllib.request.Request(
+                image_url,
+                headers={"User-Agent": "TikTok 26.1.3 rv:261303 (iPhone; iOS 14.4.2; en_US) Cronet"},
+            )
+            with urllib.request.urlopen(req_img, timeout=20) as img_resp:
+                photo_path.write_bytes(img_resp.read())
+        except Exception:
+            continue
+        if photo_path.exists() and photo_path.stat().st_size > 0:
+            photo_paths.append(photo_path)
+
+    if not photo_paths:
+        return None
+
+    return DownloadedVideo(
+        path=photo_paths[0],
+        platform="TikTok",
+        duration_sec=0,
+        size_bytes=sum(int(p.stat().st_size) for p in photo_paths),
+        original_url=url,
+        photo_paths=photo_paths,
+    )
+
+
 def _download_tiktok_photo_post_sync(url: str, temp_dir: str) -> DownloadedVideo | None:
     req = urllib.request.Request(
         url,
@@ -317,11 +394,27 @@ def is_short_url(url: str) -> bool:
     )
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+}
+
+
 async def resolve_short_url(url: str) -> str:
     if not is_short_url(url):
         return url
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=15.0,
+            headers=_BROWSER_HEADERS,
+        ) as client:
             r = await client.get(url)
             final = str(r.url)
             return final or url
@@ -370,20 +463,33 @@ def _download_sync(url: str, temp_dir: str) -> DownloadedVideo:
             "Referer": "https://vk.com/",
         },
     }
+    # Для TikTok убираем трекинг-параметры (?_r=1&_t=...) — они мешают yt-dlp
+    ydl_url = url
+    if "tiktok.com" in (url or "").lower():
+        from urllib.parse import urlparse, urlunparse
+        _p = urlparse(url)
+        ydl_url = urlunparse((_p.scheme, _p.netloc, _p.path, "", "", ""))
+        if ydl_url != url:
+            logger.info("TikTok URL stripped of query params: %s -> %s", url, ydl_url)
+
     with YoutubeDL(ydl_opts) as ydl:
         try:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(ydl_url, download=False)
         except DownloadError as e:
             msg = str(e)
-            logger.warning("yt-dlp download failed for url=%s: %s", url, msg)
+            logger.warning("yt-dlp download failed for url=%s: %s", ydl_url, msg)
             if "Unsupported URL" in msg and "tiktok.com" in (url or "").lower():
-                fallback_url = _extract_unsupported_url_from_msg(msg) or url
-                fallback = _download_tiktok_photo_post_sync(fallback_url, temp_dir)
-                if fallback is None and fallback_url != url:
-                    fallback = _download_tiktok_photo_post_sync(url, temp_dir)
-                if fallback is not None:
-                    logger.info("TikTok photo fallback used for url=%s (source=%s)", url, fallback_url)
-                    return fallback
+                # Пробуем наш кастомный photo-downloader
+                for try_url in dict.fromkeys([ydl_url, url]):  # без дублей, оригинал последним
+                    fallback = _download_tiktok_photo_post_sync(try_url, temp_dir)
+                    if fallback is not None:
+                        logger.info("TikTok photo fallback used url=%s", try_url)
+                        return fallback
+                # Пробуем через TikTok API
+                api_fallback = _download_tiktok_photo_via_api(ydl_url, temp_dir)
+                if api_fallback is not None:
+                    logger.info("TikTok API fallback used url=%s", ydl_url)
+                    return api_fallback
             if "Unsupported URL" in msg and _TG_STORY_RE.search(url or ""):
                 raise RuntimeError(
                     "Истории Telegram можно скачать только из публичных каналов. "
