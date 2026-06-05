@@ -163,10 +163,12 @@ def _start_caption() -> str:
         plain("Пришли ссылку — скачаю видео, фото или GIF:"),
         "",
         plain("• Instagram Reels, посты, истории"),
-        plain("• TikTok (видео и фотопосты)"),
+        plain("• TikTok (видео, фотопосты, истории)"),
         plain("• Pinterest (видео, GIF, фото)"),
+        plain("• Telegram истории (t.me/канал/s/ID)"),
         plain("• YouTube Shorts"),
         plain("• VK Clips"),
+        plain("• Wildberries, Ozon, Яндекс.Маркет (фото из отзывов)"),
     )
 
 
@@ -313,7 +315,7 @@ async def handle_download_link(
 
     if not is_supported_url(resolved_url):
         await message.answer(
-            plain("Поддерживаются ссылки: Instagram Reels, YouTube Shorts, TikTok, VK Clips, Wildberries, Ozon, Яндекс.Маркет.")
+            plain("Поддерживаются: Instagram, TikTok, Pinterest, Telegram истории (t.me/канал/s/ID), YouTube Shorts, VK Clips, Wildberries, Ozon, Яндекс.Маркет.")
         )
         return
 

@@ -252,6 +252,9 @@ def extract_first_url(text: str) -> str | None:
     return m.group(0) if m else None
 
 
+_TG_STORY_RE = re.compile(r"t\.me/[^/]+/s/\d+", re.IGNORECASE)
+
+
 def detect_platform(url: str) -> str:
     u = (url or "").lower()
     if "pinterest." in u or "pin.it/" in u:
@@ -268,11 +271,15 @@ def detect_platform(url: str) -> str:
         return "VK Clips"
     if "youtube.com/shorts/" in u:
         return "YouTube Shorts"
+    if _TG_STORY_RE.search(u):
+        return "Telegram Stories"
     return "Unknown"
 
 
 def is_supported_url(url: str) -> bool:
     u = (url or "").lower()
+    if _TG_STORY_RE.search(u):
+        return True
     return any(
         x in u
         for x in (
@@ -303,6 +310,9 @@ def is_short_url(url: str) -> bool:
             "is.gd/",
             "tiny.one/",
             "pin.it/",
+            "vt.tiktok.com/",
+            "vm.tiktok.com/",
+            "ozon.ru/t/",
         )
     )
 

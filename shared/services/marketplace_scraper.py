@@ -154,6 +154,64 @@ def _ozon_extract_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _ozon_parse_photos_from_widgets(widgets: dict) -> list[str]:
+    """Извлечь URL фото из widgetStates Ozon."""
+    import json as _json
+    photo_urls: list[str] = []
+    for _key, val in widgets.items():
+        if isinstance(val, str):
+            try:
+                val = _json.loads(val)
+            except Exception:
+                continue
+        if not isinstance(val, dict):
+            continue
+        # Перебираем все возможные форматы структуры отзывов
+        reviews = (
+            val.get("reviews")
+            or val.get("items")
+            or val.get("feedbacks")
+            or []
+        )
+        for rv in reviews:
+            if not isinstance(rv, dict):
+                continue
+            # Формат 1: media как список словарей
+            for media in rv.get("media") or []:
+                if not isinstance(media, dict):
+                    if isinstance(media, str) and media.startswith("http"):
+                        photo_urls.append(media)
+                    continue
+                img = (
+                    media.get("url")
+                    or media.get("src")
+                    or media.get("originalUrl")
+                    or ""
+                )
+                if img:
+                    photo_urls.append(img)
+            # Формат 2: photos как список
+            for ph in rv.get("photos") or []:
+                if isinstance(ph, dict):
+                    img = ph.get("url") or ph.get("src") or ""
+                elif isinstance(ph, str):
+                    img = ph
+                else:
+                    img = ""
+                if img:
+                    photo_urls.append(img)
+            # Формат 3: content.media
+            content = rv.get("content") or {}
+            if isinstance(content, dict):
+                for media in content.get("media") or []:
+                    if not isinstance(media, dict):
+                        continue
+                    img = media.get("url") or media.get("src") or ""
+                    if img:
+                        photo_urls.append(img)
+    return photo_urls
+
+
 async def _ozon_fetch_review_photos(item_id: int) -> tuple[str, list[str]]:
     """Забрать фото из отзывов Ozon через внутренний API."""
     photo_urls: list[str] = []
@@ -161,51 +219,41 @@ async def _ozon_fetch_review_photos(item_id: int) -> tuple[str, list[str]]:
     page = 1
     async with httpx.AsyncClient(headers=_HEADERS, timeout=_TIMEOUT, follow_redirects=True) as client:
         while len(photo_urls) < _MAX_PHOTOS:
+            data = None
+            # Попытка 1: POST composer API (основной)
             try:
                 resp = await client.post(
-                    "https://api.ozon.ru/composer-api.bx/page/json/v2?url=/api/entrypoint-api.bx/page/json/v2",
-                    json={
-                        "url": f"/product/{item_id}/reviews/?page={page}",
-                        "layout_container": "pdpPage",
-                        "layout_page_index": 2,
-                    },
+                    "https://www.ozon.ru/api/composer-api.bx/page/json/v2",
+                    json={"url": f"/product/{item_id}/reviews/?page={page}"},
                     headers={**_HEADERS, "Content-Type": "application/json"},
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                if resp.status_code < 400:
+                    data = resp.json()
             except Exception as exc:
-                logger.warning("Ozon reviews API error: %s", exc)
+                logger.debug("Ozon composer POST failed: %s", exc)
+
+            # Попытка 2: GET entrypoint API
+            if data is None:
+                try:
+                    resp = await client.get(
+                        "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2",
+                        params={"url": f"/product/{item_id}/reviews/?page={page}"},
+                        headers=_HEADERS,
+                    )
+                    if resp.status_code < 400:
+                        data = resp.json()
+                except Exception as exc:
+                    logger.warning("Ozon entrypoint GET failed: %s", exc)
+                    break
+
+            if data is None:
                 break
 
-            # Пробуем достать фото из виджетов страницы
             widgets = _deep_get(data, "widgetStates") or {}
-            found_any = False
-            for _key, val in widgets.items():
-                import json as _json
-                if isinstance(val, str):
-                    try:
-                        val = _json.loads(val)
-                    except Exception:
-                        continue
-                if not isinstance(val, dict):
-                    continue
-                reviews = val.get("reviews") or val.get("items") or []
-                for rv in reviews:
-                    if not isinstance(rv, dict):
-                        continue
-                    for media in rv.get("media") or []:
-                        if not isinstance(media, dict):
-                            continue
-                        img = media.get("url") or media.get("src") or ""
-                        if img and "ozon" in img:
-                            photo_urls.append(img)
-                            found_any = True
-                    if len(photo_urls) >= _MAX_PHOTOS:
-                        break
-                if len(photo_urls) >= _MAX_PHOTOS:
-                    break
-            if not found_any:
+            new_photos = _ozon_parse_photos_from_widgets(widgets)
+            if not new_photos:
                 break
+            photo_urls.extend(new_photos)
             page += 1
     return product_name, photo_urls
 
@@ -222,6 +270,16 @@ def _deep_get(d: Any, key: str) -> Any:
 
 
 async def scrape_ozon(url: str) -> MarketplaceResult:
+    # Резолвим короткие ссылки типа ozon.ru/t/XXXXX
+    if _OZON_SHORT_RE.search(url):
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+                r = await client.get(url, headers=_HEADERS)
+                url = str(r.url)
+                logger.info("Ozon short URL resolved to: %s", url)
+        except Exception as exc:
+            logger.warning("Failed to resolve Ozon short URL: %s", exc)
+
     item_str = _ozon_extract_id(url)
     if not item_str:
         return MarketplaceResult(platform="ozon", product_id="", error="Не удалось извлечь ID товара из ссылки Ozon")

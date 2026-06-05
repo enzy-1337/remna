@@ -309,7 +309,23 @@ async def cb_transfer_start(
     await cq.answer()
     if cq.message:
         await delete_message_safe(cq.message)
-        await cq.message.answer(TRANSFER_ASK_TARGET)
+        _back_kb = InlineKeyboardBuilder()
+        _back_kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="sub:transfer:cancel"))
+        await cq.message.answer(TRANSFER_ASK_TARGET, reply_markup=_back_kb.as_markup())
+
+
+@router.callback_query(F.data == "sub:transfer:cancel")
+async def cb_transfer_cancel(
+    cq: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await cq.answer()
+    if cq.message:
+        await delete_message_safe(cq.message)
+        _b = InlineKeyboardBuilder()
+        _b.row(InlineKeyboardButton(text="📋 К подписке", callback_data="menu:sub_main"))
+        await cq.message.answer("Передача отменена.", reply_markup=_b.as_markup())
 
 
 @router.message(TransferStates.waiting_recipient, F.text)

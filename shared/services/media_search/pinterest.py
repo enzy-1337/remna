@@ -351,15 +351,11 @@ def download_pinterest_sync(url: str, temp_dir: str) -> PinterestDownload:
         raise RuntimeError("Не удалось определить ID Pinterest-пина.")
 
     pin = _call_pin_api(pin_id)
-    domain = str(pin.get("domain") or "")
-    embed = pin.get("embed")
-    embed_src = embed.get("src") if isinstance(embed, dict) else None
-    if domain.lower() != "uploaded by user" and embed_src:
-        raise PinterestEmbedPin(str(embed_src))
 
     pin_type = str(pin.get("type") or "").lower()
     is_gif = pin_type == "gif" or bool(pin.get("is_gif"))
 
+    # Сначала пробуем видео — оно важнее embed-статуса
     video_url, duration_sec = _pick_video(_video_lists_from_pin(pin))
     if video_url:
         dest = Path(temp_dir) / f"pinterest_{pin_id}.mp4"
@@ -379,15 +375,23 @@ def download_pinterest_sync(url: str, temp_dir: str) -> PinterestDownload:
             is_gif=is_gif,
         )
 
+    # Пробуем изображения — даже для embed-пинов они могут быть в API
     image_urls = _collect_image_urls(pin)
-    if not image_urls:
-        raise RuntimeError("На этом пине нет доступного видео или изображений.")
+    if image_urls:
+        photo_paths = _download_images(image_urls, temp_dir, pin_id)
+        first = photo_paths[0]
+        return PinterestDownload(
+            path=first,
+            duration_sec=0,
+            size_bytes=sum(int(p.stat().st_size) for p in photo_paths),
+            photo_paths=photo_paths,
+        )
 
-    photo_paths = _download_images(image_urls, temp_dir, pin_id)
-    first = photo_paths[0]
-    return PinterestDownload(
-        path=first,
-        duration_sec=0,
-        size_bytes=sum(int(p.stat().st_size) for p in photo_paths),
-        photo_paths=photo_paths,
-    )
+    # Если изображений нет — проверяем embed (для yt-dlp fallback)
+    domain = str(pin.get("domain") or "")
+    embed = pin.get("embed")
+    embed_src = embed.get("src") if isinstance(embed, dict) else None
+    if domain.lower() != "uploaded by user" and embed_src:
+        raise PinterestEmbedPin(str(embed_src))
+
+    raise RuntimeError("На этом пине нет доступного видео или изображений.")
