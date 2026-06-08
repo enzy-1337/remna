@@ -40,7 +40,8 @@ from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.device_history import DeviceHistory
-from shared.services.connection_notify_service import _first_connected_at, _user_has_ever_connected
+from shared.integrations.remnawave import RemnaWaveClient as _RWClient
+from shared.integrations.rw_user_meta import rw_user_first_connected_at as _rw_first_conn_at
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
@@ -956,14 +957,19 @@ async def _build_user_card(
     )
     sep = plain("────────────────────────")
 
-    # Статус подключения
-    has_connected = await _user_has_ever_connected(session, u.id)
-    first_conn_at = await _first_connected_at(session, u.id) if has_connected else None
-    if has_connected and first_conn_at:
-        msk = first_conn_at.astimezone(ZoneInfo("Europe/Moscow"))
+    # Статус подключения через Remnawave API
+    _first_conn_at: datetime | None = None
+    settings_for_conn = get_settings()
+    if u.remnawave_uuid is not None and not settings_for_conn.remnawave_stub:
+        try:
+            _rw = _RWClient(settings_for_conn)
+            _rw_info = await _rw.get_user(str(u.remnawave_uuid))
+            _first_conn_at = _rw_first_conn_at(_rw_info)
+        except Exception:
+            pass
+    if _first_conn_at is not None:
+        msk = _first_conn_at.astimezone(ZoneInfo("Europe/Moscow"))
         conn_status = bold("подключался ✅") + plain(f" ({msk.strftime('%d.%m.%Y %H:%M')} МСК)")
-    elif has_connected:
-        conn_status = bold("подключался ✅")
     else:
         conn_status = bold("никогда ❌")
 
@@ -1126,6 +1132,12 @@ async def _build_user_card(
     if clr_row:
         b.row(*clr_row)
 
+    b.row(
+        InlineKeyboardButton(
+            text="🎁 Выдать подписку",
+            callback_data=f"admin:grant:{u.id}",
+        )
+    )
     b.row(
         InlineKeyboardButton(
             text="💳 Добавить баланс",
@@ -2291,6 +2303,149 @@ async def msg_admin_add_days(
         chat_id=message.chat.id,
         caption=join_lines(
             plain(f"✅ Срок подписки изменён на {_admin_days_delta_label(days)} дн."),
+            "",
+            cap,
+        ),
+        reply_markup=kb,
+        settings=settings,
+        delete_message=None,
+        photo_key="admin:users:card",
+    )
+
+
+@router.callback_query(F.data.startswith("admin:grant:"))
+async def cb_admin_grant_start(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if cq.from_user is None or not is_bot_admin:
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    if db_user is None:
+        await cq.answer("Сначала /start", show_alert=True)
+        return
+    try:
+        user_id = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
+    await state.set_state(AdminSubscriptionStates.waiting_grant_days)
+    await state.update_data(admin_grant_user_id=user_id)
+    await cq.answer()
+    if cq.message and cq.bot:
+        prompt = await cq.bot.send_message(
+            chat_id=cq.message.chat.id,
+            text=(
+                "🎁 Выдача подписки\n\n"
+                "Введите количество дней (1–3650).\n"
+                "Если у пользователя нет подписки — будет создана новая.\n"
+                "Если есть — будет продлена на указанный срок.\n\n"
+                "❌ /cancel — отмена"
+            ),
+        )
+        await state.update_data(admin_grant_prompt_mid=prompt.message_id)
+
+
+@router.message(StateFilter(AdminSubscriptionStates.waiting_grant_days), F.text)
+async def msg_admin_grant_days(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    if message.from_user is None or not is_bot_admin:
+        await state.clear()
+        return
+    if db_user is None:
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    user_id = data.get("admin_grant_user_id")
+    prompt_mid = data.get("admin_grant_prompt_mid")
+
+    async def _del_input() -> None:
+        if message.bot:
+            await _try_delete_message(message.bot, message.chat.id, message.message_id)
+
+    if not isinstance(user_id, int):
+        await _del_input()
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    if raw.startswith("/cancel"):
+        await _del_input()
+        if message.bot and prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+        await state.clear()
+        return
+
+    try:
+        days = int(raw)
+    except ValueError:
+        await _del_input()
+        await message.answer("Нужно целое число от 1 до 3650.")
+        return
+    if days < 1 or days > 3650:
+        await _del_input()
+        await message.answer("Допустимо от 1 до 3650 дней.")
+        return
+
+    target_user = await session.get(User, user_id)
+    if target_user is None:
+        await _del_input()
+        if message.bot and prompt_mid is not None:
+            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+        await state.clear()
+        await message.answer("Пользователь не найден.")
+        return
+
+    await _del_input()
+    if message.bot and prompt_mid is not None:
+        await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
+    await state.clear()
+
+    settings = get_settings()
+    try:
+        from shared.services.subscription_service import grant_subscription_extra_days
+        had_active, new_expires = await grant_subscription_extra_days(
+            session,
+            user=target_user,
+            days=days,
+            settings=settings,
+            promo_code=f"admin_grant_{message.from_user.id}",
+        )
+    except Exception as exc:
+        logger.warning("admin grant subscription failed user_id=%s: %s", user_id, exc)
+        await message.answer(f"Ошибка: {exc}")
+        return
+
+    await session.commit()
+
+    msk_exp = new_expires.astimezone(_MSK_TZ)
+    action_label = "продлена" if had_active else "выдана"
+
+    viewer = message.from_user.id if message.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
+    if built is None or message.bot is None:
+        await message.answer(
+            f"✅ Подписка {action_label} на {days} дн. "
+            f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"
+        )
+        return
+    cap, kb = built
+    await send_profile_screen(
+        message.bot,
+        chat_id=message.chat.id,
+        caption=join_lines(
+            plain(
+                f"✅ Подписка {action_label} на {days} дн. "
+                f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"
+            ),
             "",
             cap,
         ),

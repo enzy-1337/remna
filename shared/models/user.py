@@ -49,6 +49,9 @@ class User(Base):
     connection_notify_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    connection_notify_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, default=None
+    )
 
     referred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

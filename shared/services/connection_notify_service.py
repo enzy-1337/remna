@@ -4,9 +4,13 @@
 Логика:
   - Ищем пользователей с активной подпиской, у которых:
       * subscription.started_at < now - 24h  (прошло больше суток)
-      * нет ни одной записи в device_history (тип attached)
+      * в Remnawave firstConnectedAt = null  (ни разу не подключались)
       * connection_notify_sent_at IS NULL  (уведомление ещё не отправлялось)
-  - Отправляем сообщение в личку и ставим connection_notify_sent_at = now
+  - Отправляем сообщение в личку, сохраняем message_id и ставим connection_notify_sent_at = now
+
+Очистка (cleanup):
+  - Находим пользователей, которым отправили уведомление (connection_notify_message_id NOT NULL),
+    но в Remnawave у них firstConnectedAt уже есть → удаляем сообщение, сбрасываем поля.
 """
 
 from __future__ import annotations
@@ -15,15 +19,17 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.integrations.remnawave import RemnaWaveClient
+from shared.integrations.rw_user_meta import rw_user_first_connected_at
 from shared.md2 import bold, join_lines, link, plain
-from shared.models.device_history import DeviceHistory
 from shared.models.subscription import Subscription
 from shared.models.user import User
 
@@ -34,7 +40,7 @@ _BATCH_SIZE = 50
 
 
 def _build_message(support_username: str | None) -> tuple[str, object]:
-    """Возвращает (текст, клавиатура)."""
+    """Возвращает (текст MarkdownV2, клавиатура)."""
     if support_username:
         sup_link = link("поддержку", f"https://t.me/{support_username.lstrip('@')}")
     else:
@@ -45,6 +51,7 @@ def _build_message(support_username: str | None) -> tuple[str, object]:
         "",
         plain("Вы приобрели подписку, но ни одно устройство пока не подключено к VPN."),
         "",
+        plain("Попробуйте подключиться к серверам — это займёт всего пару минут."),
         plain("Если возникли вопросы или нужна помощь с настройкой — напишите в ") + sup_link + plain("."),
     )
 
@@ -60,44 +67,86 @@ def _build_message(support_username: str | None) -> tuple[str, object]:
     return text, kb.as_markup() if support_username else None
 
 
-async def _user_has_ever_connected(session: AsyncSession, user_id: int) -> bool:
-    """True если есть хотя бы одно событие привязки устройства."""
-    count = (
-        await session.execute(
-            select(func.count())
-            .select_from(DeviceHistory)
-            .where(
-                DeviceHistory.user_id == user_id,
-                DeviceHistory.event_type.in_(
-                    ("device.attached", "user_hwid_devices.added")
-                ),
-            )
+async def _rw_first_connected_at(
+    rw: RemnaWaveClient, user: User
+) -> datetime | None:
+    """Запрашивает firstConnectedAt из Remnawave. None если uuid нет или ошибка."""
+    if not user.remnawave_uuid:
+        return None
+    try:
+        info = await rw.get_user(str(user.remnawave_uuid))
+        return rw_user_first_connected_at(info)
+    except Exception as exc:
+        logger.warning(
+            "connection_notify: не удалось получить данные из Remnawave user_id=%s: %s",
+            user.id, exc,
         )
-    ).scalar_one()
-    return int(count or 0) > 0
+        return None
 
 
-async def _first_connected_at(session: AsyncSession, user_id: int) -> datetime | None:
-    """Дата первого подключения (первая запись device.attached)."""
-    ts = (
-        await session.execute(
-            select(func.min(DeviceHistory.event_ts))
-            .where(
-                DeviceHistory.user_id == user_id,
-                DeviceHistory.event_type.in_(
-                    ("device.attached", "user_hwid_devices.added")
-                ),
-            )
+async def run_connection_notify_cleanup(
+    bot: Bot, settings: Settings, session: AsyncSession
+) -> None:
+    """
+    Удаляет ошибочно отправленные уведомления:
+    пользователи, которым уже отправили сообщение (message_id сохранён),
+    но в Remnawave они оказались подключёнными — удаляем сообщение и сбрасываем поля.
+    """
+    if settings.remnawave_stub:
+        return
+
+    # Пользователи с сохранённым message_id уведомления
+    q = (
+        select(User)
+        .where(
+            User.connection_notify_message_id.is_not(None),
         )
-    ).scalar_one_or_none()
-    return ts
+        .limit(100)
+    )
+    users = (await session.execute(q)).scalars().all()
+    if not users:
+        return
+
+    rw = RemnaWaveClient(settings)
+    cleaned = 0
+    for user in users:
+        first_connected = await _rw_first_connected_at(rw, user)
+        if first_connected is None:
+            # Ещё не подключались — уведомление правильное, оставляем
+            continue
+        # Уже подключены — удаляем сообщение
+        msg_id = user.connection_notify_message_id
+        if msg_id:
+            try:
+                await bot.delete_message(chat_id=user.telegram_id, message_id=msg_id)
+            except Exception as exc:
+                logger.debug(
+                    "connection_notify cleanup: не удалось удалить msg user_id=%s msg_id=%s: %s",
+                    user.id, msg_id, exc,
+                )
+        # Сбрасываем — чтобы уведомление не отправлялось повторно (при следующей подписке)
+        user.connection_notify_message_id = None
+        # connection_notify_sent_at оставляем — уже отправляли, повтор не нужен
+        cleaned += 1
+
+    if cleaned:
+        await session.flush()
+        logger.info("connection_notify cleanup: удалено %d ошибочных уведомлений", cleaned)
 
 
-async def run_connection_notify_loop(bot: Bot, settings: Settings, session: AsyncSession) -> None:
+async def run_connection_notify_loop(
+    bot: Bot, settings: Settings, session: AsyncSession
+) -> None:
     """
     Один прогон: находит до BATCH_SIZE пользователей и отправляет уведомления.
     Вызывается из фонового loop каждые N минут.
     """
+    # Сначала чистим ошибочно отправленные сообщения
+    await run_connection_notify_cleanup(bot, settings, session)
+
+    if settings.remnawave_stub:
+        return
+
     cutoff = datetime.now(UTC) - timedelta(hours=_NOTIFY_DELAY_HOURS)
 
     # Пользователи с активной подпиской, стартовавшей > 24ч назад, без уведомления
@@ -109,6 +158,7 @@ async def run_connection_notify_loop(bot: Bot, settings: Settings, session: Asyn
             Subscription.started_at < cutoff,
             User.connection_notify_sent_at.is_(None),
             User.is_blocked.is_(False),
+            User.remnawave_uuid.is_not(None),
         )
         .distinct()
         .limit(_BATCH_SIZE)
@@ -119,25 +169,29 @@ async def run_connection_notify_loop(bot: Bot, settings: Settings, session: Asyn
         return
 
     logger.info("connection_notify: нашли %d кандидатов", len(users))
+    rw = RemnaWaveClient(settings)
     sent = 0
     skipped = 0
 
     for user in users:
-        # Проверяем — вдруг устройство уже привязано
-        if await _user_has_ever_connected(session, user.id):
-            # Помечаем чтобы больше не проверять этого пользователя
+        # Проверяем через Remnawave API — подключался ли пользователь
+        first_connected = await _rw_first_connected_at(rw, user)
+        if first_connected is not None:
+            # Уже подключался — помечаем чтобы больше не проверять
             user.connection_notify_sent_at = datetime.now(UTC)
             skipped += 1
             continue
 
         text, markup = _build_message(settings.support_username)
         try:
-            await bot.send_message(
+            sent_msg = await bot.send_message(
                 chat_id=user.telegram_id,
                 text=text,
                 reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN_V2,
             )
             user.connection_notify_sent_at = datetime.now(UTC)
+            user.connection_notify_message_id = sent_msg.message_id
             sent += 1
         except (TelegramForbiddenError, TelegramBadRequest) as exc:
             # Бот заблокирован у пользователя или чат не найден — всё равно помечаем

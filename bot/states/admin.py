@@ -15,6 +15,7 @@ class AdminSubscriptionStates(StatesGroup):
     waiting_personal_discount = State()
     waiting_rw_lookup_query = State()
     waiting_manual_bind_subscription_id = State()
+    waiting_grant_days = State()
 
 
 class AdminSecurityStates(StatesGroup):
