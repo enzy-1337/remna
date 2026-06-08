@@ -8249,7 +8249,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
     tab_buttons: list[str] = []
     tab_panels: list[str] = []
     for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
-        active = "btn-primary" if idx == 0 else "btn-ghost"
+        active = "btn-outline btn-primary" if idx == 0 else "btn-ghost border border-primary/40 hover:border-primary/70"
         tab_buttons.append(
             f"<button type=\"button\" data-env-tab=\"{_esc(sec_id)}\" class=\"btn btn-sm h-9 min-h-9 shrink-0 gap-1.5 {active}\">"
             f"{_esc(sec_title)}</button>"
@@ -8339,8 +8339,12 @@ async def admin_settings(request: Request) -> HTMLResponse:
         }
         document.querySelectorAll('[data-env-tab]').forEach(function(b){
           var on=b.getAttribute('data-env-tab')===id;
+          b.classList.toggle('btn-outline',on);
           b.classList.toggle('btn-primary',on);
           b.classList.toggle('btn-ghost',!on);
+          b.classList.toggle('border',!on);
+          b.classList.toggle('border-primary/40',!on);
+          b.classList.toggle('hover:border-primary/70',!on);
         });
       }
       document.querySelectorAll('[data-env-tab]').forEach(function(b){
