@@ -1656,7 +1656,10 @@ def _layout(
 {theme_script if show_nav and request is not None else ""}
 </body>
 </html>"""
-    return HTMLResponse(page, headers={"Cache-Control": "private, no-store"})
+    _resp = HTMLResponse(page, headers={"Cache-Control": "private, no-store"})
+    _resp.charset = "utf-8"
+    _resp.headers["content-type"] = "text/html; charset=utf-8"
+    return _resp
 
 
 def _is_logged(request: Request) -> bool:
