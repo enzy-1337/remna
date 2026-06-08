@@ -1,4 +1,4 @@
-﻿"""Web-admin: Р°РЅР°Р»РёС‚РёРєР°, РїРѕР»СЊР·РѕРІР°С‚РµР»Рё Рё СѓРїСЂР°РІР»РµРЅРёРµ РїСЂРѕРјРѕРєРѕРґР°РјРё."""
+"""Web-admin: аналитика, пользователи и управление промокодами."""
 
 from __future__ import annotations
 
@@ -143,38 +143,38 @@ from shared.services.subscription_service import (
 from shared.subscription_qr import subscription_url_qr_png
 from tickets.config import config as tickets_config
 
-_RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "РўСЂРёР°Р»"})
+_RESERVED_PLAN_NAMES = frozenset({BASE_SUBSCRIPTION_PLAN_NAME, "Триал"})
 
 _TRANSACTION_TYPE_HINTS_RU: dict[str, str] = {
-    "topup": "РџРѕРїРѕР»РЅРµРЅРёРµ Р±Р°Р»Р°РЅСЃР° С‡РµСЂРµР· РїР»Р°С‚С‘Р¶РЅСѓСЋ СЃРёСЃС‚РµРјСѓ (Platega, CryptoBot Рё С‚.Рґ.)",
-    "subscription": "РџРѕРєСѓРїРєР° С‚Р°СЂРёС„Р° РёР»Рё РїСЂРѕРґР»РµРЅРёРµ СЃ Р±Р°Р»Р°РЅСЃР°",
-    "subscription_autorenew": "РђРІС‚РѕРїСЂРѕРґР»РµРЅРёРµ PAYG-РїРѕРґРїРёСЃРєРё (СЃРїРёСЃР°РЅРёРµ 0 в‚Ѕ РІ РјРµС‚Р°РґР°РЅРЅС‹С… РїСЂРѕРґР»РµРЅРёСЏ)",
-    "manual_add": "РџРѕРєСѓРїРєР° РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅРѕРіРѕ СЃР»РѕС‚Р° СѓСЃС‚СЂРѕР№СЃС‚РІР° СЃ Р±Р°Р»Р°РЅСЃР°",
-    "admin_balance_add": "Р СѓС‡РЅРѕРµ РЅР°С‡РёСЃР»РµРЅРёРµ СЃСѓРјРјС‹ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј РёР· web-admin РёР»Рё Р±РѕС‚Р°",
-    "admin_balance_reset": "РћР±РЅСѓР»РµРЅРёРµ Р±Р°Р»Р°РЅСЃР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј РІ web-admin",
-    "billing_transition": "РўРµС…РЅРёС‡РµСЃРєР°СЏ Р·Р°РїРёСЃСЊ РїРµСЂРµС…РѕРґР° РЅР° РіРёР±СЂРёРґРЅС‹Р№ Р±РёР»Р»РёРЅРі (legacy в†’ hybrid)",
-    "usage_charge": "РЎРїРёСЃР°РЅРёРµ PAYG: С‚СЂР°С„РёРє РїРѕ Р“Р‘ РёР»Рё СЃСѓС‚РѕС‡РЅР°СЏ РїР»Р°С‚Р° Р·Р° СѓСЃС‚СЂРѕР№СЃС‚РІРѕ (РјРµС‚Р°РґР°РЅРЅС‹Рµ СѓС‚РѕС‡РЅСЏСЋС‚ РёСЃС‚РѕС‡РЅРёРє)",
-    "promo_topup_bonus": "Р‘РѕРЅСѓСЃРЅС‹Рµ СЂСѓР±Р»Рё РїРѕ РїСЂРѕРјРѕРєРѕРґСѓ РїСЂРё РїРѕРїРѕР»РЅРµРЅРёРё",
-    "first_topup_balance_bonus": "Р‘РѕРЅСѓСЃ РїСЂРё РїРµСЂРІРѕРј РїРѕРїРѕР»РЅРµРЅРёРё (% РѕС‚ СЃСѓРјРјС‹ РёР»Рё Р°РєС†РёСЏ)",
-    "referral_signup": "РџСЂРёРІРµС‚СЃС‚РІРµРЅРЅРѕРµ РЅР°С‡РёСЃР»РµРЅРёРµ РїРѕ СЂРµС„РµСЂР°Р»СЊРЅРѕР№ СЃСЃС‹Р»РєРµ РїСЂРё СЂРµРіРёСЃС‚СЂР°С†РёРё",
-    "referral_signup_invited": "РџСЂРёРІРµС‚СЃС‚РІРµРЅРЅРѕРµ РЅР°С‡РёСЃР»РµРЅРёРµ РїСЂРёРіР»Р°С€С‘РЅРЅРѕРјСѓ РїРѕ СЂРµС„РµСЂР°Р»СЊРЅРѕР№ СЃСЃС‹Р»РєРµ",
-    "referral_payment_percent": "РџСЂРѕС†РµРЅС‚ РЅР° Р±Р°Р»Р°РЅСЃ РїСЂРёРіР»Р°СЃРёРІС€РµРјСѓ РѕС‚ РїР»Р°С‚РµР¶Р° РїСЂРёРіР»Р°С€С‘РЅРЅРѕРіРѕ",
-    "purchase_refund": "Р’РѕР·РІСЂР°С‚ РЅР° Р±Р°Р»Р°РЅСЃ РїСЂРё РѕС‚РјРµРЅРµ РїРѕРєСѓРїРєРё С‚Р°СЂРёС„Р° РёР»Рё СЃР»РѕС‚Р° СѓСЃС‚СЂРѕР№СЃС‚РІР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј",
-    "subscription_repeat_bonus": "Р‘РѕРЅСѓСЃ РЅР° Р±Р°Р»Р°РЅСЃ РїСЂРё РїРѕРІС‚РѕСЂРЅРѕР№ РїРѕРєСѓРїРєРµ С‚Р°СЂРёС„Р° СЃ Р±Р°Р»Р°РЅСЃР° (2-СЏ Рё РґР°Р»РµРµ)",
+    "topup": "Пополнение баланса через платёжную систему (Platega, CryptoBot и т.д.)",
+    "subscription": "Покупка тарифа или продление с баланса",
+    "subscription_autorenew": "Автопродление PAYG-подписки (списание 0 ₽ в метаданных продления)",
+    "manual_add": "Покупка дополнительного слота устройства с баланса",
+    "admin_balance_add": "Ручное начисление суммы администратором из web-admin или бота",
+    "admin_balance_reset": "Обнуление баланса администратором в web-admin",
+    "billing_transition": "Техническая запись перехода на гибридный биллинг (legacy → hybrid)",
+    "usage_charge": "Списание PAYG: трафик по ГБ или суточная плата за устройство (метаданные уточняют источник)",
+    "promo_topup_bonus": "Бонусные рубли по промокоду при пополнении",
+    "first_topup_balance_bonus": "Бонус при первом пополнении (% от суммы или акция)",
+    "referral_signup": "Приветственное начисление по реферальной ссылке при регистрации",
+    "referral_signup_invited": "Приветственное начисление приглашённому по реферальной ссылке",
+    "referral_payment_percent": "Процент на баланс пригласившему от платежа приглашённого",
+    "purchase_refund": "Возврат на баланс при отмене покупки тарифа или слота устройства администратором",
+    "subscription_repeat_bonus": "Бонус на баланс при повторной покупке тарифа с баланса (2-я и далее)",
 }
 
 
 def _txn_history_action_cell(user_id: int, t: Transaction) -> str:
     if t.status == "refunded":
-        return '<span class="text-xs opacity-60">РѕС‚РјРµРЅРµРЅРѕ</span>'
+        return '<span class="text-xs opacity-60">отменено</span>'
     if txn_row_refund_eligible(t):
-        msg = _esc_attr("Р’РµСЂРЅСѓС‚СЊ СЃСѓРјРјСѓ РЅР° Р±Р°Р»Р°РЅСЃ Рё РѕС‚РјРµРЅРёС‚СЊ СЌС„С„РµРєС‚ РїРѕРєСѓРїРєРё (С‚Р°СЂРёС„ РёР»Рё СЃР»РѕС‚)?")
+        msg = _esc_attr("Вернуть сумму на баланс и отменить эффект покупки (тариф или слот)?")
         return (
             f'<form method="post" action="/admin/users/{user_id}/transactions/{int(t.id)}/refund" class="inline" '
             f'data-remna-confirm-msg="{msg}">'
-            '<button type="submit" class="btn btn-ghost btn-xs text-warning">Р’РѕР·РІСЂР°С‚</button></form>'
+            '<button type="submit" class="btn btn-ghost btn-xs text-warning">Возврат</button></form>'
         )
-    return '<span class="text-xs opacity-40">вЂ”</span>'
+    return '<span class="text-xs opacity-40">—</span>'
 
 
 def _txn_type_hint_html(txn_type: str) -> str:
@@ -208,16 +208,16 @@ def _add_calendar_months(dt: datetime, months: int) -> datetime:
 
 def _fmt_dt_msk(dt: datetime | None) -> str:
     if dt is None:
-        return "вЂ”"
+        return "—"
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " РњРЎРљ"
+    return dt.astimezone(_MSK_TZ).strftime("%d.%m.%Y %H:%M") + " МСК"
 
 
 def _fmt_relative_ru(dt: datetime | None, *, now: datetime | None = None) -> str:
-    """Р§РµР»РѕРІРµРєРѕС‡РёС‚Р°РµРјРѕРµ В«N С‡Р°СЃРѕРІ РЅР°Р·Р°РґВ» РґР»СЏ Р»РµРЅС‚С‹ РїРѕРїРѕР»РЅРµРЅРёР№ (UTC)."""
+    """Человекочитаемое «N часов назад» для ленты пополнений (UTC)."""
     if dt is None:
-        return "вЂ”"
+        return "—"
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     if now is None:
@@ -229,16 +229,16 @@ def _fmt_relative_ru(dt: datetime | None, *, now: datetime | None = None) -> str
     if sec < 0:
         return _fmt_dt_msk(dt)
     if sec < 60:
-        return "С‚РѕР»СЊРєРѕ С‡С‚Рѕ"
+        return "только что"
     if sec < 3600:
         m = sec // 60
-        return f"{m} РјРёРЅ РЅР°Р·Р°Рґ"
+        return f"{m} мин назад"
     if sec < 86400:
         h = sec // 3600
-        return f"{h} С‡ РЅР°Р·Р°Рґ"
+        return f"{h} ч назад"
     if sec < 86400 * 14:
         d = sec // 86400
-        return f"{d} РґРЅ РЅР°Р·Р°Рґ"
+        return f"{d} дн назад"
     return _fmt_dt_msk(dt)
 
 
@@ -268,7 +268,7 @@ def _avatar_fetch_lock(user_id: int) -> asyncio.Lock:
 
 
 async def _load_telegram_profile_photo(user: User) -> tuple[bytes, str] | None:
-    """Р¤РѕС‚Рѕ РїСЂРѕС„РёР»СЏ Telegram РїРѕ user_id С‡РµСЂРµР· Bot API (Р±РµР· РѕС‚РґР°С‡Рё С‚РѕРєРµРЅР° РІ Р±СЂР°СѓР·РµСЂ)."""
+    """Фото профиля Telegram по user_id через Bot API (без отдачи токена в браузер)."""
     token = (get_settings().bot_token or "").strip()
     if not token:
         return None
@@ -313,7 +313,7 @@ async def _load_telegram_profile_photo(user: User) -> tuple[bytes, str] | None:
 
 
 async def _fetch_telegram_public_userpic(username: str) -> tuple[bytes, str] | None:
-    """РџСѓР±Р»РёС‡РЅР°СЏ РєР°СЂС‚РёРЅРєР° t.me/i/userpic (РїРѕ @username), РµСЃР»Рё РЅРµ 1Г—1-РїСѓСЃС‚С‹С€РєР°."""
+    """Публичная картинка t.me/i/userpic (по @username), если не 1×1-пустышка."""
     un = (username or "").strip().lstrip("@")
     if not un or not re.match(r"^[A-Za-z0-9_]{3,64}$", un):
         return None
@@ -348,22 +348,22 @@ def _humanize_left_ru(exp: datetime, now: datetime) -> str:
         now = now.replace(tzinfo=timezone.utc)
     left = exp - now
     if left.total_seconds() <= 0:
-        return "РёСЃС‚РµРєР»Р°"
+        return "истекла"
     d = left.days
     h = left.seconds // 3600
     if d >= 1:
         n = abs(int(d))
         if n % 10 == 1 and n % 100 != 11:
-            return f"{n} РґРµРЅСЊ"
+            return f"{n} день"
         if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
-            return f"{n} РґРЅСЏ"
-        return f"{n} РґРЅРµР№"
+            return f"{n} дня"
+        return f"{n} дней"
     if h >= 1:
-        return f"{h} С‡."
+        return f"{h} ч."
     m = left.seconds // 60
     if m >= 1:
-        return f"{m} РјРёРЅ."
-    return "РјРµРЅСЊС€Рµ РјРёРЅСѓС‚С‹"
+        return f"{m} мин."
+    return "меньше минуты"
 
 
 def _esc(v: object) -> str:
@@ -436,7 +436,7 @@ def _pagination_bar(
     query_extra: dict[str, str],
     htmx_target: str | None = None,
 ) -> str:
-    """Р¦РµРЅС‚СЂ: В«1 | вЂ№ | С‚РµРєСѓС‰Р°СЏ | вЂє | NВ»."""
+    """Центр: «1 | ‹ | текущая | › | N»."""
 
     def _url(p: int) -> str:
         seg = [f"page={p}"]
@@ -462,17 +462,17 @@ def _pagination_bar(
         return f"<a class='{tw}' href='{_esc(href)}'{hx}>{_esc(label)}</a>"
 
     if total_pages <= 1:
-        return "<div class='flex justify-center py-3'><span class='text-sm opacity-60'>РЎС‚СЂР°РЅРёС†Р° 1 РёР· 1</span></div>"
+        return "<div class='flex justify-center py-3'><span class='text-sm opacity-60'>Страница 1 из 1</span></div>"
     prev_p = max(1, page - 1)
     next_p = min(total_pages, page + 1)
     return f"""
     <div class="flex flex-col items-center gap-2 py-4">
-      <span class="text-sm opacity-60">РЎС‚СЂР°РЅРёС†Р° {_esc(page)} РёР· {_esc(total_pages)}</span>
+      <span class="text-sm opacity-60">Страница {_esc(page)} из {_esc(total_pages)}</span>
       <div class="flex flex-wrap justify-center items-center gap-1">
         {_btn(_url(1), "1", disabled=page == 1)}
-        {_btn(_url(prev_p), "вЂ№", disabled=page == 1)}
+        {_btn(_url(prev_p), "‹", disabled=page == 1)}
         <span class="btn btn-primary btn-sm h-9 min-h-9 min-w-[2.5rem] pointer-events-none">{_esc(page)}</span>
-        {_btn(_url(next_p), "вЂє", disabled=page == total_pages)}
+        {_btn(_url(next_p), "›", disabled=page == total_pages)}
         {_btn(_url(total_pages), str(total_pages), disabled=page == total_pages)}
       </div>
     </div>
@@ -555,11 +555,11 @@ _ENV_CHOICE_OPTIONS: dict[str, list[tuple[str, str]]] = {
 
 _ENV_MULTI_CHOICE_OPTIONS: dict[str, list[tuple[str, str]]] = {
     "PLATEGA_PAYMENT_METHODS": [
-        ("2", "РЎР‘Рџ QR"),
-        ("10", "РљР°СЂС‚С‹ RUB"),
-        ("11", "Р­РєРІР°Р№СЂРёРЅРі"),
+        ("2", "СБП QR"),
+        ("10", "Карты RUB"),
+        ("11", "Эквайринг"),
         ("12", "International"),
-        ("13", "РљСЂРёРїС‚Р°"),
+        ("13", "Крипта"),
     ],
 }
 
@@ -661,7 +661,7 @@ def _head_common(title: str, *, favicon_url: str | None = None, background_url: 
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="googlebot" content="noindex, nofollow" />
-  <meta name="description" content="РџР°РЅРµР»СЊ СѓРїСЂР°РІР»РµРЅРёСЏ Remna VPN вЂ” Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСЃРєРёР№ РёРЅС‚РµСЂС„РµР№СЃ." />
+  <meta name="description" content="Панель управления Remna VPN — администраторский интерфейс." />
   <meta name="theme-color" content="#0f0c20" />
   <meta property="og:title" content="{_esc(title)}" />
   <meta property="og:type" content="website" />
@@ -846,7 +846,7 @@ def _head_common(title: str, *, favicon_url: str | None = None, background_url: 
       animation: remna-spin .8s linear infinite;
     }}
     @keyframes remna-hourglass-rotate {{
-      /* РџРѕР»-РѕР±РѕСЂРѕС‚Р°: РїР»Р°РІРЅС‹Р№ СЃС‚Р°СЂС‚, СѓСЃРєРѕСЂРµРЅРёРµ, Р·Р°РјРµРґР»РµРЅРёРµ */
+      /* Пол-оборота: плавный старт, ускорение, замедление */
       0%   {{ transform: rotate(0deg); animation-timing-function: cubic-bezier(.40, 0, .95, .32); }}
       18%  {{ transform: rotate(16deg); }}
       50%  {{ transform: rotate(180deg); animation-timing-function: cubic-bezier(.08, .64, .26, 1); }}
@@ -1028,7 +1028,7 @@ def _sidebar_footer_profile(href: str, label: str, avatar_markup: str, cur: str)
       </a>
       <a href="{href}" class="nav-label pointer-events-none absolute left-1/2 top-1/2 min-w-0 max-w-0 -translate-x-1/2 -translate-y-1/2 truncate text-sm font-semibold text-base-content no-underline opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[11rem] group-hover/sidebar:opacity-100 hover:text-primary" title="{_esc(label)}">{_esc(label)}</a>
       <form method="post" action="/admin/logout" class="nav-label pointer-events-none ml-auto flex max-w-0 shrink-0 overflow-hidden opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-none group-hover/sidebar:opacity-100">
-        <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Р’С‹Р№С‚Рё" aria-label="Р’С‹Р№С‚Рё">
+        <button type="submit" class="btn btn-ghost btn-square btn-sm h-9 w-9 min-h-9 min-w-9 p-0 text-error hover:bg-error/10" title="Выйти" aria-label="Выйти">
           <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
         </button>
       </form>
@@ -1117,27 +1117,27 @@ def _layout(
       </div>
     </aside>"""
         mobile_brand_bar = f"""
-    <header class="fixed left-0 right-0 top-0 z-40 flex h-12 items-center justify-center gap-2 border-b border-base-content/10 bg-base-300/95 px-12 backdrop-blur-md md:hidden" role="banner" aria-label="Р‘СЂРµРЅРґ РїР°РЅРµР»Рё">
+    <header class="fixed left-0 right-0 top-0 z-40 flex h-12 items-center justify-center gap-2 border-b border-base-content/10 bg-base-300/95 px-12 backdrop-blur-md md:hidden" role="banner" aria-label="Бренд панели">
       <span class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/20 text-primary">
         {_brand_logo_mark(settings, compact=True)}
       </span>
       <span class="max-w-[min(14rem,calc(100vw-8.5rem))] truncate text-sm font-bold tracking-tight text-base-content">{_esc(brand_title)}</span>
     </header>"""
         mobile_drawer = f"""
-    <button type="button" id="remna-mnav-open" class="btn btn-primary btn-circle fixed bottom-5 left-3 z-50 h-12 w-12 min-h-12 min-w-12 border-0 shadow-xl md:hidden" aria-expanded="false" aria-controls="remna-mnav-drawer" aria-label="РћС‚РєСЂС‹С‚СЊ РјРµРЅСЋ">
+    <button type="button" id="remna-mnav-open" class="btn btn-primary btn-circle fixed bottom-5 left-3 z-50 h-12 w-12 min-h-12 min-w-12 border-0 shadow-xl md:hidden" aria-expanded="false" aria-controls="remna-mnav-drawer" aria-label="Открыть меню">
       <i class="fa-solid fa-bars text-lg" aria-hidden="true"></i>
     </button>
     <div id="remna-mnav-drawer" class="fixed inset-0 z-[75] hidden md:hidden" aria-hidden="true">
       <div class="absolute inset-0 bg-base-content/45 backdrop-blur-sm" data-remna-mnav-close></div>
-      <aside class="absolute left-0 top-0 flex h-full w-[min(20rem,90vw)] flex-col gap-1 overflow-y-auto border-r border-base-content/10 bg-base-300 py-14 pl-2 pr-2 shadow-2xl" aria-label="РњРµРЅСЋ Р°РґРјРёРЅРєРё">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-3 z-10" data-remna-mnav-close aria-label="Р—Р°РєСЂС‹С‚СЊ"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      <aside class="absolute left-0 top-0 flex h-full w-[min(20rem,90vw)] flex-col gap-1 overflow-y-auto border-r border-base-content/10 bg-base-300 py-14 pl-2 pr-2 shadow-2xl" aria-label="Меню админки">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-3 z-10" data-remna-mnav-close aria-label="Закрыть"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
         {nav_mobile}
-        {_mob_drawer_link("/admin/profile", "fa-solid fa-user", "РњРѕР№ РїСЂРѕС„РёР»СЊ", cur)}
-        <form method="post" action="/admin/logout" class="mt-2 border-t border-base-content/10 pt-2"><button type="submit" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case text-error"><i class="fa-solid fa-right-from-bracket w-5 shrink-0 text-center text-base" aria-hidden="true"></i><span>Р’С‹Р№С‚Рё</span></button></form>
+        {_mob_drawer_link("/admin/profile", "fa-solid fa-user", "Мой профиль", cur)}
+        <form method="post" action="/admin/logout" class="mt-2 border-t border-base-content/10 pt-2"><button type="submit" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case text-error"><i class="fa-solid fa-right-from-bracket w-5 shrink-0 text-center text-base" aria-hidden="true"></i><span>Выйти</span></button></form>
       </aside>
     </div>"""
         theme_toggle = """
-    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2 top-2 z-[52] h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="РўРµРјР°"></button>"""
+    <button type="button" id="remna-theme-toggle" onclick="remnaToggleTheme()" class="btn btn-square fixed right-2 top-2 z-[52] h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:right-7 md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" aria-label="Тема"></button>"""
         nav_blocks = desktop_sidebar + mobile_brand_bar + mobile_drawer + theme_toggle
         remna_chrome = """
     <div id="remna-toast-host" aria-live="polite"></div>
@@ -1145,68 +1145,68 @@ def _layout(
       <div class="remna-loading-box">
         <span class="remna-loading-main">
           <span class="remna-loading-side" aria-hidden="true"><i class="fa-solid fa-hourglass-half remna-hourglass-icon"></i></span>
-          <span id="remna-loading-text" class="text-sm font-medium">Р—Р°РіСЂСѓР·РєР°</span>
+          <span id="remna-loading-text" class="text-sm font-medium">Загрузка</span>
         </span>
         <span class="remna-spinner" aria-hidden="true"></span>
       </div>
     </div>
     <div id="remna-hwid-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative overflow-hidden">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="hwid" aria-label="Р—Р°РєСЂС‹С‚СЊ">вњ•</button>
-        <h3 id="remna-hwid-title" class="font-bold text-lg mb-2 pr-10">РћС‚РІСЏР·Р°С‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ</h3>
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="hwid" aria-label="Закрыть">✕</button>
+        <h3 id="remna-hwid-title" class="font-bold text-lg mb-2 pr-10">Отвязать устройство</h3>
         <p id="remna-hwid-desc" class="text-sm opacity-80 mb-4"></p>
         <form id="remna-hwid-form" method="post" class="flex flex-col gap-3">
           <input type="hidden" name="hwid" id="remna-hwid-field" value="" />
           <input type="hidden" name="mode" id="remna-hwid-mode" value="keep_slots" />
           <div>
-            <button type="submit" class="btn btn-outline btn-primary w-full" data-remna-hwid-mode="keep_slots">РћС‚РІСЏР·Р°С‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ</button>
-            <p class="text-xs opacity-60 mt-1">РЎРЅРёРјРµС‚ HWID СЃ Remnawave; РѕРїР»Р°С‡РµРЅРЅС‹Рµ СЃР»РѕС‚С‹ РІ РїРѕРґРїРёСЃРєРµ РЅРµ РјРµРЅСЏСЋС‚СЃСЏ.</p>
+            <button type="submit" class="btn btn-outline btn-primary w-full" data-remna-hwid-mode="keep_slots">Отвязать устройство</button>
+            <p class="text-xs opacity-60 mt-1">Снимет HWID с Remnawave; оплаченные слоты в подписке не меняются.</p>
           </div>
           <div id="remna-hwid-decrease-wrap" class="hidden">
-            <button type="submit" class="btn btn-error w-full" data-remna-hwid-mode="decrease_slot">РЈРґР°Р»РёС‚СЊ СЃР»РѕС‚</button>
-            <p class="text-xs opacity-60 mt-1">РЎР»РѕС‚ РїРѕР»РЅРѕСЃС‚СЊСЋ СЃРЅРёРјР°РµС‚СЃСЏ СЃ РїРѕРґРїРёСЃРєРё; РґРµРЅСЊРіРё РЅРµ РІРѕР·РІСЂР°С‰Р°СЋС‚СЃСЏ. РќРµРґРѕСЃС‚СѓРїРЅРѕ, РµСЃР»Рё РІ РїРѕРґРїРёСЃРєРµ СѓР¶Рµ РјРёРЅРёРјСѓРј РґРІР° СЃР»РѕС‚Р°.</p>
+            <button type="submit" class="btn btn-error w-full" data-remna-hwid-mode="decrease_slot">Удалить слот</button>
+            <p class="text-xs opacity-60 mt-1">Слот полностью снимается с подписки; деньги не возвращаются. Недоступно, если в подписке уже минимум два слота.</p>
           </div>
         </form>
       </div>
     </div>
     <div id="remna-slot-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-slot-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="slot" aria-label="Р—Р°РєСЂС‹С‚СЊ">вњ•</button>
-        <h3 id="remna-slot-title" class="font-bold text-lg mb-2 pr-10">РЎРЅСЏС‚СЊ СЃР»РѕС‚</h3>
-        <p class="text-sm opacity-80 mb-4">РЈРґР°Р»РёС‚СЊ Р·Р°РїРёСЃСЊ СѓСЃС‚СЂРѕР№СЃС‚РІР° РІ Р‘Р”, СѓРјРµРЅСЊС€РёС‚СЊ РѕРїР»Р°С‡РµРЅРЅС‹Рµ СЃР»РѕС‚С‹ Рё Р»РёРјРёС‚ HWID РІ РїР°РЅРµР»Рё (РµСЃР»Рё РїСЂРёРјРµРЅРёРјРѕ).</p>
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="slot" aria-label="Закрыть">✕</button>
+        <h3 id="remna-slot-title" class="font-bold text-lg mb-2 pr-10">Снять слот</h3>
+        <p class="text-sm opacity-80 mb-4">Удалить запись устройства в БД, уменьшить оплаченные слоты и лимит HWID в панели (если применимо).</p>
         <form id="remna-slot-form" method="post" class="flex flex-wrap gap-2 justify-end">
           <input type="hidden" name="device_id" id="remna-slot-device" value="" />
-          <button type="button" class="btn btn-ghost" data-remna-close="slot">РћС‚РјРµРЅР°</button>
-          <button type="submit" class="btn btn-warning">РЎРЅСЏС‚СЊ СЃР»РѕС‚</button>
+          <button type="button" class="btn btn-ghost" data-remna-close="slot">Отмена</button>
+          <button type="submit" class="btn btn-warning">Снять слот</button>
         </form>
       </div>
     </div>
     <div id="remna-subdis-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-subdis-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="subdis" aria-label="Р—Р°РєСЂС‹С‚СЊ">вњ•</button>
-        <h3 id="remna-subdis-title" class="font-bold text-lg mb-2 pr-10">РћС‚РєР»СЋС‡РёС‚СЊ РїРѕРґРїРёСЃРєСѓ?</h3>
-        <p class="text-sm opacity-80 mb-4">РљР°Рє РІ Р±РѕС‚Рµ: Р·Р°РїРёСЃСЊ РїРѕРґРїРёСЃРєРё СЃС‚Р°РЅРµС‚ <code class="text-xs bg-base-300 px-1 rounded">cancelled</code>, СѓС‡С‘С‚РЅР°СЏ Р·Р°РїРёСЃСЊ РІ РїР°РЅРµР»Рё Remnawave вЂ” <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code>.</p>
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" data-remna-close="subdis" aria-label="Закрыть">✕</button>
+        <h3 id="remna-subdis-title" class="font-bold text-lg mb-2 pr-10">Отключить подписку?</h3>
+        <p class="text-sm opacity-80 mb-4">Как в боте: запись подписки станет <code class="text-xs bg-base-300 px-1 rounded">cancelled</code>, учётная запись в панели Remnawave — <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code>.</p>
         <form id="remna-subdis-form" method="post" class="flex flex-wrap gap-2 justify-end">
           <input type="hidden" name="subscription_id" id="remna-subdis-sid" value="" />
-          <button type="button" class="btn btn-ghost" data-remna-close="subdis">РћС‚РјРµРЅР°</button>
-          <button type="submit" class="btn btn-error">РћС‚РєР»СЋС‡РёС‚СЊ</button>
+          <button type="button" class="btn btn-ghost" data-remna-close="subdis">Отмена</button>
+          <button type="submit" class="btn btn-error">Отключить</button>
         </form>
       </div>
     </div>
     <div id="remna-hwid-json-overlay" class="fixed inset-0 z-[150] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-hwid-json-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col p-6 relative">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10" data-remna-close="hwidjson" aria-label="Р—Р°РєСЂС‹С‚СЊ">вњ•</button>
-        <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">РљР°СЂС‚РѕС‡РєР° СѓСЃС‚СЂРѕР№СЃС‚РІР°</h3>
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10" data-remna-close="hwidjson" aria-label="Закрыть">✕</button>
+        <h3 id="remna-hwid-json-title" class="font-bold text-lg mb-3 pr-10">Карточка устройства</h3>
         <div id="remna-hwid-json-card" class="flex-1 overflow-auto rounded-lg border border-base-content/10 bg-base-200 p-4"></div>
       </div>
     </div>
     <div id="remna-confirm-overlay" class="fixed inset-0 z-[160] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="remna-confirm-title">
       <div class="bg-base-100 border border-base-content/15 rounded-2xl shadow-2xl max-w-md w-full p-6 relative">
-        <h3 id="remna-confirm-title" class="font-bold text-lg mb-2">РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ</h3>
+        <h3 id="remna-confirm-title" class="font-bold text-lg mb-2">Подтверждение</h3>
         <p id="remna-confirm-msg" class="text-sm opacity-85 mb-6 whitespace-pre-wrap"></p>
         <div class="flex justify-end gap-2">
-          <button type="button" class="btn btn-ghost" id="remna-confirm-cancel">РћС‚РјРµРЅР°</button>
-          <button type="button" class="btn btn-primary" id="remna-confirm-ok">Р”Р°</button>
+          <button type="button" class="btn btn-ghost" id="remna-confirm-cancel">Отмена</button>
+          <button type="button" class="btn btn-primary" id="remna-confirm-ok">Да</button>
         </div>
       </div>
     </div>"""
@@ -1216,7 +1216,7 @@ def _layout(
     back_fixed = ""
     if back_href and show_nav and request is not None:
         back_fixed = f"""
-    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(0.75rem+4.25rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="РќР°Р·Р°Рґ" aria-label="РќР°Р·Р°Рґ"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
+    <a href="{_esc(back_href)}" class="btn btn-square btn-ghost fixed left-2 top-2 z-40 h-8 w-8 min-h-8 min-w-8 shrink-0 border border-base-content/15 bg-base-300/90 p-0 shadow-md backdrop-blur-md md:left-[calc(0.75rem+4.25rem+0.75rem)] md:top-6 md:h-10 md:w-10 md:min-h-10 md:min-w-10 md:shadow-lg" title="Назад" aria-label="Назад"><i class="fa-solid fa-arrow-left text-sm md:text-base" aria-hidden="true"></i></a>"""
     inner = body
 
     theme_script = """
@@ -1228,7 +1228,7 @@ def _layout(
       if(!b)return;
       var night=root.getAttribute('data-theme')==='night';
       b.innerHTML=night?'<i class="fa-solid fa-sun text-sm md:text-base" aria-hidden="true"></i>':'<i class="fa-solid fa-moon text-sm md:text-base" aria-hidden="true"></i>';
-      b.setAttribute('aria-label',night?'РЎРІРµС‚Р»Р°СЏ С‚РµРјР°':'РўС‘РјРЅР°СЏ С‚РµРјР°');
+      b.setAttribute('aria-label',night?'Светлая тема':'Тёмная тема');
     }
     window.remnaToggleTheme=function(){
       var next=root.getAttribute('data-theme')==='night'?'light':'night';
@@ -1244,7 +1244,7 @@ def _layout(
     function remnaLoadSetText(){
       if(!remnaLoadText)return;
       var dots='.'.repeat(remnaLoadTick%4);
-      remnaLoadText.textContent='Р—Р°РіСЂСѓР·РєР°'+dots;
+      remnaLoadText.textContent='Загрузка'+dots;
       remnaLoadTick++;
     }
     window.remnaShowLoading=function(){
@@ -1288,7 +1288,7 @@ def _layout(
               setTimeout(function(){
                 if(document.hidden)return;
                 window.remnaHideLoading&&window.remnaHideLoading();
-                window.remnaToast&&window.remnaToast('error','РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїСЂРёР»РѕР¶РµРЅРёРµ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РµС‰Рµ СЂР°Р·.');
+                window.remnaToast&&window.remnaToast('error','Не удалось открыть приложение. Попробуйте еще раз.');
               },5000);
             }
         }
@@ -1357,7 +1357,7 @@ def _layout(
         .replace(/'/g,'&#39;');
     }
     function remnaFmtIso(iso){
-      if(!iso)return 'вЂ”';
+      if(!iso)return '—';
       try{
         var dt=new Date(String(iso));
         if(isNaN(dt.getTime()))return remnaEsc(iso);
@@ -1375,22 +1375,22 @@ def _layout(
       try{ d=JSON.parse(txt||'{}'); }catch(_e){ d=null; }
       if(!d||typeof d!=='object'){
         return ''
-          + '<div class="alert alert-warning mb-3"><span>РќРµ СѓРґР°Р»РѕСЃСЊ СЂР°Р·РѕР±СЂР°С‚СЊ РґР°РЅРЅС‹Рµ СѓСЃС‚СЂРѕР№СЃС‚РІР°</span></div>'
+          + '<div class="alert alert-warning mb-3"><span>Не удалось разобрать данные устройства</span></div>'
           + '<pre class="rounded-lg border border-base-content/10 bg-base-300 p-3 text-[11px] leading-relaxed whitespace-pre-wrap font-mono">'
           + remnaEsc(txt||'')
           + '</pre>';
       }
-      var title=(d.deviceModel||d.platform||'РЈСЃС‚СЂРѕР№СЃС‚РІРѕ');
-      var subtitle=((d.platform||'вЂ”') + ' В· РІРµСЂСЃРёСЏ РћРЎ: ' + (d.osVersion||'вЂ”'));
+      var title=(d.deviceModel||d.platform||'Устройство');
+      var subtitle=((d.platform||'—') + ' · версия ОС: ' + (d.osVersion||'—'));
       var rows=[
-        ['HWID', d.hwid || 'вЂ”'],
-        ['UUID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ', d.userUuid || 'вЂ”'],
-        ['РџР»Р°С‚С„РѕСЂРјР°', d.platform || 'вЂ”'],
-        ['Р’РµСЂСЃРёСЏ РћРЎ', d.osVersion || 'вЂ”'],
-        ['РњРѕРґРµР»СЊ', d.deviceModel || 'вЂ”'],
-        ['User-Agent', d.userAgent || 'вЂ”'],
-        ['РЎРѕР·РґР°РЅРѕ', remnaFmtIso(d.createdAt)],
-        ['РћР±РЅРѕРІР»РµРЅРѕ', remnaFmtIso(d.updatedAt)]
+        ['HWID', d.hwid || '—'],
+        ['UUID пользователя', d.userUuid || '—'],
+        ['Платформа', d.platform || '—'],
+        ['Версия ОС', d.osVersion || '—'],
+        ['Модель', d.deviceModel || '—'],
+        ['User-Agent', d.userAgent || '—'],
+        ['Создано', remnaFmtIso(d.createdAt)],
+        ['Обновлено', remnaFmtIso(d.updatedAt)]
       ];
       var grid=rows.map(function(it){
         return ''
@@ -1403,7 +1403,7 @@ def _layout(
         + '<div class="flex items-start justify-between gap-3 mb-4">'
         + '<div><div class="text-lg font-semibold">'+remnaEsc(title)+'</div>'
         + '<div class="text-sm opacity-70">'+remnaEsc(subtitle)+'</div></div>'
-        + '<span class="badge badge-outline badge-sm">'+remnaEsc(d.platform||'вЂ”')+'</span>'
+        + '<span class="badge badge-outline badge-sm">'+remnaEsc(d.platform||'—')+'</span>'
         + '</div>'
         + '<div class="grid gap-3 sm:grid-cols-2">'+grid+'</div>';
     }
@@ -1436,7 +1436,7 @@ def _layout(
       var msgEl=document.getElementById('remna-confirm-msg');
       var titleEl=document.getElementById('remna-confirm-title');
       if(msgEl)msgEl.textContent=msg;
-      if(titleEl)titleEl.textContent='РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ';
+      if(titleEl)titleEl.textContent='Подтверждение';
       var ov=document.getElementById('remna-confirm-overlay');
       if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
     },true);
@@ -1463,7 +1463,7 @@ def _layout(
         var msgEl=document.getElementById('remna-confirm-msg');
         var titleEl=document.getElementById('remna-confirm-title');
         if(msgEl)msgEl.textContent=message||'';
-        if(titleEl)titleEl.textContent=title||'РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ';
+        if(titleEl)titleEl.textContent=title||'Подтверждение';
         var ov=document.getElementById('remna-confirm-overlay');
         if(ov){ov.classList.remove('hidden');ov.classList.add('flex');}
       });
@@ -1540,7 +1540,7 @@ def _layout(
             for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
             txt=new TextDecoder('utf-8').decode(bytes);
           }
-        }catch(x){txt='(РѕС€РёР±РєР° РґРµРєРѕРґРёСЂРѕРІР°РЅРёСЏ)';}
+        }catch(x){txt='(ошибка декодирования)';}
         var pre=document.getElementById('remna-hwid-json-card');
         if(pre)pre.innerHTML=remnaDeviceCardFromJson(txt);
         var ovj=document.getElementById('remna-hwid-json-overlay');
@@ -1591,10 +1591,10 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'РЈСЃС‚СЂРѕР№СЃС‚РІРѕ РѕС‚РІСЏР·Р°РЅРѕ РѕС‚ РїР°РЅРµР»Рё. РћРїР»Р°С‡РµРЅРЅС‹Рµ СЃР»РѕС‚С‹ РЅРµ РјРµРЅСЏР»РёСЃСЊ.',hwid_slot:'РЈСЃС‚СЂРѕР№СЃС‚РІРѕ РѕС‚РІСЏР·Р°РЅРѕ, СЃР»РѕС‚ РїРѕРґРїРёСЃРєРё СѓРјРµРЅСЊС€РµРЅ.',db_slot:'РЎР»РѕС‚ СЃРЅСЏС‚: Р·Р°РїРёСЃСЊ РІ Р‘Р” СѓРґР°Р»РµРЅР°, Р»РёРјРёС‚ РІ РїР°РЅРµР»Рё РѕР±РЅРѕРІР»С‘РЅ.',sub_off:'РџРѕРґРїРёСЃРєР° РѕС‚РєР»СЋС‡РµРЅР° (Р‘Р” Рё РїР°РЅРµР»СЊ).',sub_on:'РџРѕРґРїРёСЃРєР° СЃРЅРѕРІР° РІРєР»СЋС‡РµРЅР°.',ar_on:'РђРІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ РІРєР»СЋС‡РµРЅРѕ.',ar_off:'РђРІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ РІС‹РєР»СЋС‡РµРЅРѕ.',months_ok:'РЎСЂРѕРє РїРѕРґРїРёСЃРєРё РїСЂРѕРґР»С‘РЅ.',days_ok:'РЎСЂРѕРє РїРѕРґРїРёСЃРєРё РёР·РјРµРЅС‘РЅ.',device_slots_ok:'Р›РёРјРёС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ (СЃР»РѕС‚С‹) РѕР±РЅРѕРІР»С‘РЅ.',personal_price_ok:'РџРµСЂСЃРѕРЅР°Р»СЊРЅР°СЏ С†РµРЅР° в‚Ѕ/РјРµСЃ СЃРѕС…СЂР°РЅРµРЅР°.',personal_discount_ok:'РџРµСЂСЃРѕРЅР°Р»СЊРЅР°СЏ СЃРєРёРґРєР° СЃРѕС…СЂР°РЅРµРЅР°.',bal_ok:'Р‘Р°Р»Р°РЅСЃ РїРѕРїРѕР»РЅРµРЅ.',bal_reset:'Р‘Р°Р»Р°РЅСЃ РѕР±РЅСѓР»С‘РЅ.',billing_mode_toggled:'Р РµР¶РёРј Р±РёР»Р»РёРЅРіР° РїРµСЂРµРєР»СЋС‡С‘РЅ.',user_del:'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ СѓРґР°Р»С‘РЅ РёР· Р‘Р” Рё РёР· РїР°РЅРµР»Рё Remnawave (РµСЃР»Рё Р±С‹Р» UUID).',risk_reset:'РћС‚РјРµС‚РєРё СѓРІРµРґРѕРјР»РµРЅРёР№ Рѕ СЂРёСЃРєРµ РјРёРЅСѓСЃР° СЃР±СЂРѕС€РµРЅС‹.',purchase_refund_ok:'Р’РѕР·РІСЂР°С‚ РїРѕ С‚СЂР°РЅР·Р°РєС†РёРё РІС‹РїРѕР»РЅРµРЅ.',tariffs_shop:'Р РµР¶РёРј РїСЂРѕРґР°Р¶Рё С‚Р°СЂРёС„РѕРІ РІ Р±РѕС‚Рµ РѕР±РЅРѕРІР»С‘РЅ.',manual_bind_ok:'РџРѕРґРїРёСЃРєР° РІСЂСѓС‡РЅСѓСЋ РїСЂРёРІСЏР·Р°РЅР° Рє РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ.',rw_check_ok:'РџСЂРѕС„РёР»СЊ РЅР°Р№РґРµРЅ РІ РїР°РЅРµР»Рё Рё РїСЂРёРІСЏР·Р°РЅ Рє РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ.',saved:'РР·РјРµРЅРµРЅРёСЏ СЃРѕС…СЂР°РЅРµРЅС‹.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',saved:'Изменения сохранены.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
-          window.remnaToast('success','РљРѕРЅРІРµСЂС‚Р°С†РёСЏ Р·Р°РІРµСЂС€РµРЅР°: РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ '+(c||'0')+', РїР°РЅРµР»СЊ '+(rw||'0')+', РЅР°С‡РёСЃР»РµРЅРѕ '+(amt||'0')+' в‚Ѕ.');
+          window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
         }
         if(err)window.remnaToast('error',err);
         if(n||err||c||rw||amt){
@@ -1711,17 +1711,17 @@ async def _notify_admin_login(settings: Settings, *, user: User, method_kind: st
     chat_id = settings.admin_log_chat_id
     if chat_id is None or (isinstance(chat_id, str) and not chat_id.strip()):
         return
-    when = datetime.now(UTC).astimezone(_MSK_TZ).strftime("%H:%M РњРЎРљ %d.%m.%Y")
+    when = datetime.now(UTC).astimezone(_MSK_TZ).strftime("%H:%M МСК %d.%m.%Y")
     admin_name = html.escape((user.first_name or user.username or f"user#{user.id}").strip())
     admin_tg = int(user.telegram_id or 0)
     admin_link = f'<a href="tg://user?id={admin_tg}">{admin_name}</a>' if admin_tg else admin_name
     profile_link = _admin_profile_link_for_notify(settings, user)
-    profile_suffix = f' | <a href="{html.escape(profile_link)}">РїСЂРѕС„РёР»СЊ</a>' if profile_link else ""
+    profile_suffix = f' | <a href="{html.escape(profile_link)}">профиль</a>' if profile_link else ""
     text = (
-        "рџ”ђ <b>Р’С…РѕРґ РІ web-admin</b>\n"
-        f"РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ: {admin_link}{profile_suffix}\n"
-        f"РЎРїРѕСЃРѕР±: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
-        f"Р’СЂРµРјСЏ: <b>{html.escape(when)}</b>"
+        "🔐 <b>Вход в web-admin</b>\n"
+        f"Администратор: {admin_link}{profile_suffix}\n"
+        f"Способ: <b>{html.escape(_login_method_label(method_kind, used_totp=used_totp))}</b>\n"
+        f"Время: <b>{html.escape(when)}</b>"
     )
     await send_telegram_message(
         chat_id,
@@ -1810,7 +1810,7 @@ async def _restore_browser_session_row(request: Request, row: WebAdminBrowserSes
 
 
 async def _maybe_restore_browser_session(request: Request) -> RedirectResponse | None:
-    """РџСЂРѕРґР»РµРЅРёРµ/РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ 24-С‡Р°СЃРѕРІРѕР№ СЃРµСЃСЃРёРё СЌС‚РѕРіРѕ Р±СЂР°СѓР·РµСЂР° Р±РµР· РїРѕРІС‚РѕСЂРЅРѕРіРѕ OAuth."""
+    """Продление/восстановление 24-часовой сессии этого браузера без повторного OAuth."""
     token = str(request.session.get("wauth_session_token") or "").strip()
     if not token:
         return None
@@ -1823,7 +1823,7 @@ async def _maybe_restore_browser_session(request: Request) -> RedirectResponse |
 
 
 async def _resume_login_from_hint(request: Request, hint: dict) -> RedirectResponse:
-    """Р’С…РѕРґ РїРѕ РєР°СЂС‚РѕС‡РєРµ В«РїРѕСЃР»РµРґРЅРёР№ Р°РєРєР°СѓРЅС‚В»: Р¶РёРІР°СЏ Р±СЂР°СѓР·РµСЂРЅР°СЏ СЃРµСЃСЃРёСЏ РёР»Рё OAuth С‚РѕРіРѕ Р¶Рµ СЃРїРѕСЃРѕР±Р°."""
+    """Вход по карточке «последний аккаунт»: живая браузерная сессия или OAuth того же способа."""
     try:
         user_id = int(hint.get("user_id"))
     except (TypeError, ValueError):
@@ -1859,8 +1859,8 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
         return """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Р‘СЂР°СѓР·РµСЂРЅС‹Рµ СЃРµСЃСЃРёРё (24 С‡ + РёСЃС‚РѕСЂРёСЏ 3 РґРЅСЏ)</h3>
-        <p class="text-sm opacity-80">РќРµС‚ Р·Р°РїРёСЃРµР№. РђРєС‚РёРІРЅР°СЏ СЃРµСЃСЃРёСЏ Р¶РёРІРµС‚ 24 С‡Р°СЃР°, Р° РЅРµР°РєС‚РёРІРЅС‹Рµ/РѕС‚РѕР·РІР°РЅРЅС‹Рµ СѓСЃС‚СЂРѕР№СЃС‚РІР° С…СЂР°РЅСЏС‚СЃСЏ РІ РёСЃС‚РѕСЂРёРё РґРѕ 3 РґРЅРµР№.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч + история 3 дня)</h3>
+        <p class="text-sm opacity-80">Нет записей. Активная сессия живет 24 часа, а неактивные/отозванные устройства хранятся в истории до 3 дней.</p>
       </div>
     </div>"""
     items = []
@@ -1870,32 +1870,32 @@ async def _profile_browser_sessions_html(request: Request, user_id: int) -> str:
             exp = exp.replace(tzinfo=UTC)
         active = row.revoked_at is None and exp > now
         is_current = active and row.session_token == current_tok
-        status = "С‚РµРєСѓС‰Р°СЏ" if is_current else ("Р°РєС‚РёРІРЅР°" if active else ("РѕС‚РѕР·РІР°РЅР°" if row.revoked_at else "РёСЃС‚РµРєР»Р°"))
+        status = "текущая" if is_current else ("активна" if active else ("отозвана" if row.revoked_at else "истекла"))
         ua = _esc((row.user_agent or "")[:72])
-        ip = _esc(row.ip_address or "вЂ”")
+        ip = _esc(row.ip_address or "—")
         btn = ""
         if active and not is_current:
             btn = (
                 f'<form method="post" action="/admin/profile/sessions/{int(row.id)}/revoke" class="inline">'
-                f'<button type="submit" class="btn btn-ghost btn-xs text-error">РћС‚РѕР·РІР°С‚СЊ</button></form>'
+                f'<button type="submit" class="btn btn-ghost btn-xs text-error">Отозвать</button></form>'
             )
         elif active and is_current:
-            btn = '<span class="text-xs opacity-60">СЌС‚Рѕ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ</span>'
+            btn = '<span class="text-xs opacity-60">это устройство</span>'
         items.append(
             f"<li class='py-2 border-b border-base-content/10 text-sm'>"
-            f"<b>{_esc(status)}</b> В· {_esc(row.login_kind)} В· {ip}<br/>"
+            f"<b>{_esc(status)}</b> · {_esc(row.login_kind)} · {ip}<br/>"
             f"<span class='opacity-70'>{ua}</span><br/>"
-            f"<span class='opacity-60'>РґРѕ {_esc(_fmt_dt_msk(exp))}</span> {btn}"
+            f"<span class='opacity-60'>до {_esc(_fmt_dt_msk(exp))}</span> {btn}"
             f"</li>"
         )
     return f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Р‘СЂР°СѓР·РµСЂРЅС‹Рµ СЃРµСЃСЃРёРё (24 С‡ + РёСЃС‚РѕСЂРёСЏ 3 РґРЅСЏ)</h3>
-        <p class="text-sm opacity-80">РћС‚Р·С‹РІ СЃРµСЃСЃРёРё РѕС‚РєР»СЋС‡Р°РµС‚ РІС…РѕРґ Р±РµР· РїРѕРІС‚РѕСЂРЅРѕРіРѕ Telegram/GitHub Рё РєРѕРґР° 2FA. РСЃС‚РѕСЂРёСЏ РЅРµР°РєС‚РёРІРЅС‹С… СЃРµСЃСЃРёР№ С…СЂР°РЅРёС‚СЃСЏ 3 РґРЅСЏ.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-desktop text-primary mr-2" aria-hidden="true"></i>Браузерные сессии (24 ч + история 3 дня)</h3>
+        <p class="text-sm opacity-80">Отзыв сессии отключает вход без повторного Telegram/GitHub и кода 2FA. История неактивных сессий хранится 3 дня.</p>
         <ul class="list-none p-0 m-0">{''.join(items)}</ul>
-        <form method="post" action="/admin/profile/sessions/revoke-all" data-remna-confirm-msg="РћС‚РѕР·РІР°С‚СЊ РІСЃРµ СЃРµСЃСЃРёРё РєСЂРѕРјРµ С‚РµРєСѓС‰РµР№?">
-          <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9">РћС‚РѕР·РІР°С‚СЊ РІСЃРµ РґСЂСѓРіРёРµ</button>
+        <form method="post" action="/admin/profile/sessions/revoke-all" data-remna-confirm-msg="Отозвать все сессии кроме текущей?">
+          <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9">Отозвать все другие</button>
         </form>
       </div>
     </div>"""
@@ -1912,11 +1912,11 @@ def _web_admin_role_title(
     except (TypeError, ValueError):
         tid = None
     if tid is not None and tid in settings.admin_telegram_ids:
-        return "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ"
+        return "Администратор"
     gh = (github_login or "").strip()
     if gh and _admin_allowed_by_gh(gh):
-        return "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ"
-    return "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ"
+        return "Администратор"
+    return "Администратор"
 
 
 def _login_last_account_html(hint: dict | object | None, *, role_title: str = "") -> str:
@@ -1925,7 +1925,7 @@ def _login_last_account_html(hint: dict | object | None, *, role_title: str = ""
     label = _esc(str(hint.get("label") or ""))
     kind = str(hint.get("login_kind") or "telegram")
     avatar = str(hint.get("avatar_url") or "").strip()
-    role = _esc((role_title or "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ").strip() or "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ")
+    role = _esc((role_title or "Администратор").strip() or "Администратор")
     icon = (
         '<i class="fa-brands fa-telegram text-2xl text-[#229ED9]" aria-hidden="true"></i>'
         if kind == "telegram"
@@ -1953,7 +1953,7 @@ def _login_last_account_html(hint: dict | object | None, *, role_title: str = ""
 
 
 async def _linked_bot_user_for_admin(request: Request) -> User | None:
-    """РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РѕС‚Р° РїРѕ Telegram ID РёР· СЃРµСЃСЃРёРё web-admin (РїСЂРёРѕСЂРёС‚РµС‚ Telegram)."""
+    """Пользователь бота по Telegram ID из сессии web-admin (приоритет Telegram)."""
     if not _is_logged(request):
         return None
     auth = _auth_data(request)
@@ -2074,9 +2074,9 @@ async def _finalize_login_with_2fa(
             can_access_web_admin,
             ensure_env_admin_records,
         )
-        # Р•СЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµС‚ РІ Р‘Р” (СЃСѓРїРµСЂР°РґРјРёРЅ РµС‰С‘ РЅРµ Р·Р°РїСѓСЃРєР°Р» Р±РѕС‚Р°),
-        # РґР»СЏ Telegram-СЃСѓРїРµСЂР°РґРјРёРЅР° СЃРѕР·РґР°С‘Рј Р·Р°РїРёСЃСЊ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.
-        # Р”Р»СЏ GitHub Рё РѕСЃС‚Р°Р»СЊРЅС‹С… вЂ” РїРѕРєР°Р·С‹РІР°РµРј РїРѕРґСЃРєР°Р·РєСѓ.
+        # Если пользователя нет в БД (суперадмин ещё не запускал бота),
+        # для Telegram-суперадмина создаём запись автоматически.
+        # Для GitHub и остальных — показываем подсказку.
         if user is None:
             raw_tid = auth.get("telegram_id") or auth.get("id")
             try:
@@ -2105,9 +2105,9 @@ async def _finalize_login_with_2fa(
                 request.session.clear()
                 gh = str(auth.get("login") or auth.get("username") or "").strip()
                 if gh and _admin_allowed_by_gh(gh):
-                    msg = "РЎРЅР°С‡Р°Р»Р° РІС‹РїРѕР»РЅРёС‚Рµ /start РІ Telegram-Р±РѕС‚Рµ Рё РїСЂРёРІСЏР¶РёС‚Рµ GitHub РІ РїСЂРѕС„РёР»Рµ."
+                    msg = "Сначала выполните /start в Telegram-боте и привяжите GitHub в профиле."
                 else:
-                    msg = "РџСЂРѕС„РёР»СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ РЅР°Р№РґРµРЅ. Р’С‹РїРѕР»РЅРёС‚Рµ /start РІ Р±РѕС‚Рµ Рё РІРѕР№РґРёС‚Рµ СЃРЅРѕРІР°."
+                    msg = "Профиль пользователя не найден. Выполните /start в боте и войдите снова."
                 return RedirectResponse("/admin/login?err=" + quote_plus(msg), status_code=303)
         if user is not None:
             await ensure_env_admin_records(session, settings, user)
@@ -2116,7 +2116,7 @@ async def _finalize_login_with_2fa(
                 return RedirectResponse(
                     "/admin/login?err="
                     + quote_plus(
-                        "РќРµС‚ РґРѕСЃС‚СѓРїР° Рє web-admin. РџСЂРѕРІРµСЂСЊС‚Рµ SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS РёР»Рё СЂРѕР»СЊ РІ В«РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂС‹В»."
+                        "Нет доступа к web-admin. Проверьте SUPERADMIN_TELEGRAM_ID / ADMIN_TELEGRAM_IDS или роль в «Администраторы»."
                     ),
                     status_code=303,
                 )
@@ -2133,28 +2133,28 @@ async def _finalize_login_with_2fa(
 def _promo_reward_caption(promo: PromoCode) -> str:
     v = promo.value
     if promo.type in ("balance_rub", "bonus_rub"):
-        return f"+{v} в‚Ѕ"
+        return f"+{v} ₽"
     if promo.type == "discount_percent":
-        return f"-{v}% РЅР° РїРѕРєСѓРїРєСѓ"
+        return f"-{v}% на покупку"
     if promo.type == "extra_gb":
-        return f"+{v} Р“Р‘"
+        return f"+{v} ГБ"
     if promo.type == "extra_devices":
-        return f"+{v} СѓСЃС‚СЂРѕР№СЃС‚РІ"
+        return f"+{v} устройств"
     if promo.type == "topup_bonus_percent":
         return f"+{v}%"
     if promo.type == "extra_days":
-        return f"+{int(v)} РґРЅ."
+        return f"+{int(v)} дн."
     return f"+{v}"
 
 
 _PROMO_TYPE_RU: dict[str, str] = {
-    "discount_percent": "РЎРєРёРґРєР° РЅР° С‚Р°СЂРёС„ (%)",
-    "balance_rub": "Р”РµРЅСЊРіРё РЅР° Р±Р°Р»Р°РЅСЃ (в‚Ѕ)",
-    "bonus_rub": "Р‘РѕРЅСѓСЃ РЅР° Р±Р°Р»Р°РЅСЃ (в‚Ѕ, СѓСЃС‚Р°СЂ.)",
-    "topup_bonus_percent": "% Рє РїРµСЂРІРѕРјСѓ РїРѕРїРѕР»РЅРµРЅРёСЋ",
-    "extra_gb": "Р“РёРіР°Р±Р°Р№С‚С‹ (СѓСЃС‚Р°СЂ.)",
-    "extra_devices": "РЈСЃС‚СЂРѕР№СЃС‚РІР° (СѓСЃС‚Р°СЂ.)",
-    "extra_days": "Р”РЅРё РїРѕРґРїРёСЃРєРё",
+    "discount_percent": "Скидка на тариф (%)",
+    "balance_rub": "Деньги на баланс (₽)",
+    "bonus_rub": "Бонус на баланс (₽, устар.)",
+    "topup_bonus_percent": "% к первому пополнению",
+    "extra_gb": "Гигабайты (устар.)",
+    "extra_devices": "Устройства (устар.)",
+    "extra_days": "Дни подписки",
 }
 
 _PROMO_TYPES_SELECTABLE = frozenset(
@@ -2163,7 +2163,7 @@ _PROMO_TYPES_SELECTABLE = frozenset(
 
 
 def _promo_type_ru(t: str) -> str:
-    """Р§РµР»РѕРІРµРєРѕ-С‡РёС‚Р°РµРјРѕРµ РЅР°Р·РІР°РЅРёРµ С‚РёРїР° РїСЂРѕРјРѕРєРѕРґР° РґР»СЏ web-admin."""
+    """Человеко-читаемое название типа промокода для web-admin."""
     return _PROMO_TYPE_RU.get((t or "").strip(), t or "")
 
 
@@ -2174,23 +2174,23 @@ def _parse_promo_eligibility_form(
     req_active = (require_no_active_subscription or "").strip() == "1"
     raw = (require_no_paid_subscription_months or "").strip()
     months: int | None = None
-    if raw and raw not in ("-", "вЂ”"):
+    if raw and raw not in ("-", "—"):
         if not raw.isdigit():
-            raise ValueError("В«РњРµСЃСЏС†РµРІ Р±РµР· РїРѕРєСѓРїРєРё РїРѕРґРїРёСЃРєРёВ» вЂ” С†РµР»РѕРµ С‡РёСЃР»Рѕ РёР»Рё РїСѓСЃС‚Рѕ")
+            raise ValueError("«Месяцев без покупки подписки» — целое число или пусто")
         months = int(raw)
         if months < 1:
-            raise ValueError("В«РњРµСЃСЏС†РµРІ Р±РµР· РїРѕРєСѓРїРєРёВ» вЂ” РјРёРЅРёРјСѓРј 1 РёР»Рё РѕСЃС‚Р°РІСЊС‚Рµ РїСѓСЃС‚Рѕ")
+            raise ValueError("«Месяцев без покупки» — минимум 1 или оставьте пусто")
     return req_active, months
 
 
 def _promo_eligibility_summary(promo: PromoCode) -> str:
     parts: list[str] = []
     if bool(getattr(promo, "require_no_active_subscription", False)):
-        parts.append("Р±РµР· Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё")
+        parts.append("без активной подписки")
     m = getattr(promo, "require_no_paid_subscription_months", None)
     if m is not None and int(m) > 0:
-        parts.append(f"РЅРµ РїРѕРєСѓРїР°Р»Рё РїРѕРґРїРёСЃРєСѓ {int(m)} РјРµСЃ.")
-    return ", ".join(parts) if parts else "Р±РµР· РґРѕРї. СѓСЃР»РѕРІРёР№"
+        parts.append(f"не покупали подписку {int(m)} мес.")
+    return ", ".join(parts) if parts else "без доп. условий"
 
 
 def _web_admin_actor_label(request: Request) -> str:
@@ -2229,7 +2229,7 @@ def _status_service_card(
     latency: str | None = None,
 ) -> str:
     badge = "badge-success" if ok else "badge-error"
-    st = "РћРЅР»Р°Р№РЅ" if ok else "РћС€РёР±РєР°"
+    st = "Онлайн" if ok else "Ошибка"
     lat = f"<p class='text-xs opacity-60 mt-1'>{_esc(latency)}</p>" if latency else ""
     return f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25">
@@ -2258,7 +2258,7 @@ async def _telegram_bot_getme_status(
     try:
         r = await client.get(f"https://api.telegram.org/bot{tok}/getMe")
         ms = round((time.perf_counter() - t0) * 1000, 1)
-        latency = f"Р—Р°РґРµСЂР¶РєР°: {ms} РјСЃ"
+        latency = f"Задержка: {ms} мс"
         if r.status_code == 200:
             try:
                 j = r.json()
@@ -2293,7 +2293,7 @@ def _read_machine_metrics() -> dict[str, object]:
     ram_part = (
         f"RAM: {used_mb} / {total_mb} MiB"
         if total_mb
-        else "RAM: РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
+        else "RAM: недоступно"
     )
     ram_pct = round((used_mb / total_mb) * 100, 1) if total_mb > 0 else 0.0
 
@@ -2303,10 +2303,10 @@ def _read_machine_metrics() -> dict[str, object]:
     try:
         l1, l5, l15 = os.getloadavg()
         load1 = float(l1)
-        load_text = f" В· load: {l1:.2f} / {l5:.2f} / {l15:.2f}"
+        load_text = f" · load: {l1:.2f} / {l5:.2f} / {l15:.2f}"
     except Exception:
         load_text = ""
-    cpu_part = f"CPU: Р»РѕРіРёС‡РµСЃРєРёС… СЏРґРµСЂ {cpu_count}" if cpu_count else "CPU: РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
+    cpu_part = f"CPU: логических ядер {cpu_count}" if cpu_count else "CPU: недоступно"
     cpu_load_pct = round(min(max((load1 / cpu_count) * 100, 0.0), 100.0), 1) if cpu_count > 0 else 0.0
     return {
         "ok": True,
@@ -2318,19 +2318,19 @@ def _read_machine_metrics() -> dict[str, object]:
 
 
 async def _detect_server_ips(request: Request) -> dict[str, object]:
-    local_ip = "вЂ”"
+    local_ip = "—"
     try:
         local_ip = socket.gethostbyname(socket.gethostname())
     except Exception:
         pass
 
-    direct_ip = "РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
+    direct_ip = "недоступно"
     direct_err: str | None = None
     try:
         async with httpx.AsyncClient(timeout=4.0, trust_env=False) as c:
             r = await c.get("https://api.ipify.org")
             if r.status_code == 200:
-                direct_ip = (r.text or "").strip() or "РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
+                direct_ip = (r.text or "").strip() or "недоступно"
             else:
                 direct_err = f"HTTP {r.status_code}"
     except Exception as e:
@@ -2342,37 +2342,37 @@ async def _detect_server_ips(request: Request) -> dict[str, object]:
         or os.getenv("ALL_PROXY")
         or os.getenv("all_proxy")
     )
-    proxy_ip = "РїСЂРѕРєСЃРё РЅРµ Р·Р°РґР°РЅ"
+    proxy_ip = "прокси не задан"
     if has_proxy:
         try:
             async with httpx.AsyncClient(timeout=6.0, trust_env=True) as c:
                 r = await c.get("https://api.ipify.org")
                 if r.status_code == 200:
-                    proxy_ip = (r.text or "").strip() or "РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
+                    proxy_ip = (r.text or "").strip() or "недоступно"
                 else:
-                    proxy_ip = f"РѕС€РёР±РєР° HTTP {r.status_code}"
+                    proxy_ip = f"ошибка HTTP {r.status_code}"
         except Exception as e:
-            proxy_ip = f"РѕС€РёР±РєР°: {str(e)[:120]}"
+            proxy_ip = f"ошибка: {str(e)[:120]}"
 
     hdr_forwarded = (request.headers.get("x-forwarded-for") or "").strip()
     hdr_real = (request.headers.get("x-real-ip") or "").strip()
     client_host = request.client.host if request.client else ""
     via_proxy_hint = ""
     if hdr_forwarded or hdr_real:
-        via_proxy_hint = f" В· ingress: {hdr_real or hdr_forwarded.split(',')[0].strip()}"
+        via_proxy_hint = f" · ingress: {hdr_real or hdr_forwarded.split(',')[0].strip()}"
     elif client_host:
-        via_proxy_hint = f" В· ingress: {client_host}"
+        via_proxy_hint = f" · ingress: {client_host}"
 
-    detail = f"Direct: {direct_ip} В· Proxy: {proxy_ip} В· Local: {local_ip}{via_proxy_hint}"
-    ok = direct_ip != "РЅРµРґРѕСЃС‚СѓРїРЅРѕ"
-    lat = f"РћС€РёР±РєР° direct: {direct_err}" if direct_err else None
+    detail = f"Direct: {direct_ip} · Proxy: {proxy_ip} · Local: {local_ip}{via_proxy_hint}"
+    ok = direct_ip != "недоступно"
+    lat = f"Ошибка direct: {direct_err}" if direct_err else None
     return {
         "ok": ok,
         "detail": detail,
         "latency": lat,
-        "direct_ok": direct_ip != "РЅРµРґРѕСЃС‚СѓРїРЅРѕ",
+        "direct_ok": direct_ip != "недоступно",
         "proxy_set": has_proxy,
-        "proxy_ok": has_proxy and proxy_ip not in ("РЅРµРґРѕСЃС‚СѓРїРЅРѕ", "РїСЂРѕРєСЃРё РЅРµ Р·Р°РґР°РЅ") and not proxy_ip.startswith("РѕС€РёР±РєР°"),
+        "proxy_ok": has_proxy and proxy_ip not in ("недоступно", "прокси не задан") and not proxy_ip.startswith("ошибка"),
     }
 
 
@@ -2386,17 +2386,17 @@ def _parse_date_any(raw: str) -> datetime | None:
             return dt.replace(tzinfo=UTC)
         except ValueError:
             pass
-    raise ValueError("РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚ РґР°С‚С‹")
+    raise ValueError("Неверный формат даты")
 
 
 def _fmt_expires(expires_at: datetime | None) -> str:
     if expires_at is None:
-        return "в€ћ"
+        return "∞"
     return expires_at.strftime("%d.%m.%Y")
 
 
 def _promo_expires_date_input_value(expires_at: datetime | None) -> str:
-    """Р—РЅР°С‡РµРЅРёРµ РґР»СЏ <input type=\"date\"> (YYYY-MM-DD, UTC-РєР°Р»РµРЅРґР°СЂРЅС‹Р№ РґРµРЅСЊ)."""
+    """Значение для <input type=\"date\"> (YYYY-MM-DD, UTC-календарный день)."""
     if expires_at is None:
         return ""
     exp = expires_at
@@ -2406,7 +2406,7 @@ def _promo_expires_date_input_value(expires_at: datetime | None) -> str:
 
 
 def _promo_expires_from_form(expires_unlimited: str, expires_at_date: str) -> datetime | None:
-    """РЎСЂРѕРє РїСЂРѕРјРѕРєРѕРґР°: С‡РµРєР±РѕРєСЃ В«Р±РµР· СЃСЂРѕРєР°В» РёР»Рё РґР°С‚Р° РёР· РєР°Р»РµРЅРґР°СЂСЏ; РїСѓСЃС‚Р°СЏ РґР°С‚Р° Р±РµР· С‡РµРєР±РѕРєСЃР° = Р±РµР· СЃСЂРѕРєР°."""
+    """Срок промокода: чекбокс «без срока» или дата из календаря; пустая дата без чекбокса = без срока."""
     ul = (expires_unlimited or "").strip().lower()
     if ul in ("1", "on", "true", "yes"):
         return None
@@ -2427,7 +2427,7 @@ def _admin_allowed_by_gh(login: str) -> bool:
 
 
 def _user_avatar_photo_src(user: User) -> str:
-    """РџСЂРѕРєСЃРё Р°РІР°С‚Р°СЂР° РёР· Telegram Bot API; РїСЂРё РѕС€РёР±РєРµ Р·Р°РіСЂСѓР·РєРё <img> РїРѕРєР°Р·С‹РІР°РµС‚ РёРЅРёС†РёР°Р»С‹."""
+    """Прокси аватара из Telegram Bot API; при ошибке загрузки <img> показывает инициалы."""
     return f"/admin/users/{user.id}/telegram-photo"
 
 
@@ -2444,24 +2444,24 @@ def _user_initial_badge(user: User) -> tuple[str, str]:
 
 
 def _subscription_list_badge(now: datetime, subs: list[Subscription]) -> tuple[str, str]:
-    """РџРѕРґРїРёСЃСЊ Рё РєР»Р°СЃСЃ daisyUI badge РґР»СЏ РєРѕР»РѕРЅРєРё В«РџРѕРґРїРёСЃРєР°В» РІ СЃРїРёСЃРєРµ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№."""
+    """Подпись и класс daisyUI badge для колонки «Подписка» в списке пользователей."""
     if not subs:
-        return "РќРµС‚ РїРѕРґРїРёСЃРєРё", "badge-ghost"
+        return "Нет подписки", "badge-ghost"
     for s in subs:
         if s.status in ("active", "trial") and s.expires_at > now:
             if s.status == "trial":
-                return "РўСЂРёР°Р»", "badge-info"
-            return "РђРєС‚РёРІРЅР°", "badge-success"
+                return "Триал", "badge-info"
+            return "Активна", "badge-success"
     latest = max(subs, key=lambda x: x.expires_at)
     if latest.expires_at <= now or (latest.status or "").lower() == "expired":
-        return "РСЃС‚РµРєР»Р°", "badge-error"
+        return "Истекла", "badge-error"
     if (latest.status or "").lower() == "cancelled":
-        return "РћС‚РјРµРЅРµРЅР°", "badge-warning"
-    return "РќРµР°РєС‚РёРІРЅР°", "badge-ghost"
+        return "Отменена", "badge-warning"
+    return "Неактивна", "badge-ghost"
 
 
 def _active_subscription_devices_slots(now: datetime, subs: list[Subscription]) -> int | None:
-    """Р§РёСЃР»Рѕ СЃР»РѕС‚РѕРІ СѓСЃС‚СЂРѕР№СЃС‚РІ (devices_count) Сѓ РЅРµРёСЃС‚С‘РєС€РµР№ active/trial РїРѕРґРїРёСЃРєРё вЂ” РєР°Рє Р»РѕРіРёРєР° Р±РµР№РґР¶Р° РІ СЃРїРёСЃРєРµ."""
+    """Число слотов устройств (devices_count) у неистёкшей active/trial подписки — как логика бейджа в списке."""
     if not subs:
         return None
     for s in subs:
@@ -2493,7 +2493,7 @@ def _copy_line(*, label: str, value: str, mono: bool = True) -> str:
         f"<span class='inline-flex max-w-full items-center gap-1 rounded-lg bg-base-300 px-2 py-1 {mcls}'>"
         f"<span class='break-all'>{_esc(value)}</span>"
         f"<button type='button' class='btn btn-ghost btn-xs h-7 min-h-7 w-7 min-w-7 shrink-0 p-0' data-copy=\"{dc}\" "
-        f"title='РљРѕРїРёСЂРѕРІР°С‚СЊ' aria-label='РљРѕРїРёСЂРѕРІР°С‚СЊ'><i class='fa-regular fa-copy text-xs'></i></button></span></div>"
+        f"title='Копировать' aria-label='Копировать'><i class='fa-regular fa-copy text-xs'></i></button></span></div>"
     )
 
 
@@ -2504,17 +2504,17 @@ def _telegram_profile_actions(user: User) -> str:
         href = "https://t.me/" + url_quote(un, safe="")
         parts.append(
             f'<a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case" href="{_esc(href)}" target="_blank" rel="noopener noreferrer">'
-            '<i class="fa-brands fa-telegram" aria-hidden="true"></i> РџСЂРѕС„РёР»СЊ t.me</a>'
+            '<i class="fa-brands fa-telegram" aria-hidden="true"></i> Профиль t.me</a>'
         )
     parts.append(
         f'<a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case" href="tg://user?id={int(user.telegram_id)}">'
-        '<i class="fa-brands fa-telegram" aria-hidden="true"></i> РћС‚РєСЂС‹С‚СЊ РІ РїСЂРёР»РѕР¶РµРЅРёРё</a>'
+        '<i class="fa-brands fa-telegram" aria-hidden="true"></i> Открыть в приложении</a>'
     )
     return f"<div class=\"flex flex-wrap gap-2\">{''.join(parts)}</div>"
 
 
 def _as_rw_user_profile(raw: object) -> dict | None:
-    """GET users/{{uuid}} РІ СЂР°Р·РЅС‹С… РІРµСЂСЃРёСЏС… РїР°РЅРµР»Рё РјРѕР¶РµС‚ РІРµСЂРЅСѓС‚СЊ РЅРµ РѕР±СЉРµРєС‚ вЂ” РёРЅР°С‡Рµ .get() РґР°С‘С‚ 500."""
+    """GET users/{{uuid}} в разных версиях панели может вернуть не объект — иначе .get() даёт 500."""
     return raw if isinstance(raw, dict) else None
 
 
@@ -2527,7 +2527,7 @@ def _hwid_device_json_block(d: dict) -> str:
     return (
         "<button type=\"button\" class=\"btn btn-ghost btn-xs h-8 min-h-8 px-2 font-normal\" "
         "data-remna-open-hwid-json data-no-row-nav "
-        f"data-json-b64=\"{_esc_attr(b64)}\">РџРѕРґСЂРѕР±РЅРµРµ</button>"
+        f"data-json-b64=\"{_esc_attr(b64)}\">Подробнее</button>"
     )
 
 
@@ -2621,7 +2621,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     if err == "telegram_login_config":
         login_notice = (
             "<div class='alert alert-warning text-sm'>"
-            "<span>Р”Р»СЏ Telegram OAuth Р·Р°РґР°Р№С‚Рµ PUBLIC_SITE_URL, WEB_ADMIN_TELEGRAM_CLIENT_ID, WEB_ADMIN_TELEGRAM_CLIENT_SECRET Рё WEB_ADMIN_TELEGRAM_REDIRECT_URI.</span>"
+            "<span>Для Telegram OAuth задайте PUBLIC_SITE_URL, WEB_ADMIN_TELEGRAM_CLIENT_ID, WEB_ADMIN_TELEGRAM_CLIENT_SECRET и WEB_ADMIN_TELEGRAM_REDIRECT_URI.</span>"
             "</div>"
         )
     github_href = "/admin/login/github/start"
@@ -2723,10 +2723,10 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
       <div class="card-body items-center gap-6 text-center">
         <h2 class="card-title justify-center text-2xl font-bold">
           <i class="fa-solid fa-right-to-bracket text-primary" aria-hidden="true"></i>
-          <span>{'РџСЂРёРІСЏР·РєР° Р°РєРєР°СѓРЅС‚Р°' if link_mode else 'Р’С…РѕРґ'}</span>
+          <span>{'Привязка аккаунта' if link_mode else 'Вход'}</span>
         </h2>
         <div class="flex w-full flex-col items-center gap-4">
-          {"<p class='text-sm opacity-70'>РЎРІСЏР¶РёС‚Рµ GitHub Рё Telegram РґР»СЏ РµРґРёРЅРѕРіРѕ Р°РґРјРёРЅ-РїСЂРѕС„РёР»СЏ. РџСЂРёРѕСЂРёС‚РµС‚ Сѓ Telegram ID.</p>" if link_mode else ""}
+          {"<p class='text-sm opacity-70'>Свяжите GitHub и Telegram для единого админ-профиля. Приоритет у Telegram ID.</p>" if link_mode else ""}
           {login_notice}
           {_login_last_account_html(login_hint, role_title=login_hint_role) if not link_mode else ""}
           <div class="flex flex-wrap justify-center">{telegram_block}</div>
@@ -2742,10 +2742,10 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
         <div class="card-body items-center gap-4 text-center">
           <h2 id="remna-login-2fa-title" class="card-title justify-center text-2xl font-bold">
             <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
-            <span>РџРѕРґС‚РІРµСЂРґРёС‚Рµ РІС…РѕРґ</span>
+            <span>Подтвердите вход</span>
           </h2>
-          <p class="text-sm opacity-70">Р’РІРµРґРёС‚Рµ 6-Р·РЅР°С‡РЅС‹Р№ РєРѕРґ РёР· Google Authenticator.</p>
-          {"<div class='alert alert-error'><span>РќРµРІРµСЂРЅС‹Р№ РєРѕРґ. РџРѕРїСЂРѕР±СѓР№С‚Рµ СЃРЅРѕРІР°.</span></div>" if totp_err else ""}
+          <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
+          {"<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>" if totp_err else ""}
           <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
             <input
               type="text"
@@ -2759,7 +2759,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
               placeholder="123456"
             />
             <button type="submit" class="btn btn-primary gap-2">
-              <i class="fa-solid fa-check" aria-hidden="true"></i>РџРѕРґС‚РІРµСЂРґРёС‚СЊ
+              <i class="fa-solid fa-check" aria-hidden="true"></i>Подтвердить
             </button>
           </form>
         </div>
@@ -2827,7 +2827,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     }})();
     </script>
     """
-    return _layout("Р’С…РѕРґ", body, request=request, show_nav=False)
+    return _layout("Вход", body, request=request, show_nav=False)
 
 
 @router.get("/login/background")
@@ -2995,7 +2995,7 @@ async def admin_login_telegram_widget(
         request.session.pop("tg_oauth_state", None)
         if not tid:
             return RedirectResponse("/admin/login", status_code=303)
-        # РџСЂРѕРІРµСЂСЏРµРј: env-Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ РР›Р Р·Р°РїРёСЃСЊ РІ admin_users (Р‘Р”-РґРѕР±Р°РІР»РµРЅРЅС‹Р№)
+        # Проверяем: env-администратор ИЛИ запись в admin_users (DB-добавленный)
         if not _admin_allowed_by_tg(tid):
             from shared.models.user import User as _User
             from shared.services.admin_rbac_service import get_admin_user_by_user_id as _get_au
@@ -3094,7 +3094,7 @@ async def admin_login_telegram_widget(
                     if conflict is not None:
                         return RedirectResponse(
                             "/admin/profile?err="
-                            + quote_plus("Р­С‚РѕС‚ GitHub СѓР¶Рµ РїСЂРёРІСЏР·Р°РЅ Рє РґСЂСѓРіРѕРјСѓ Telegram-РїСЂРѕС„РёР»СЋ."),
+                            + quote_plus("Этот GitHub уже привязан к другому Telegram-профилю."),
                             status_code=303,
                         )
                     tg_user.github_id = gh_id
@@ -3105,7 +3105,7 @@ async def admin_login_telegram_widget(
                 else:
                     return RedirectResponse(
                         "/admin/profile?err="
-                        + quote_plus("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РѕС‚Р° РЅРµ РЅР°Р№РґРµРЅ. РЎРЅР°С‡Р°Р»Р° РІС‹РїРѕР»РЅРёС‚Рµ /start РІ Telegram-Р±РѕС‚Рµ."),
+                        + quote_plus("Пользователь бота не найден. Сначала выполните /start в Telegram-боте."),
                         status_code=303,
                     )
         _set_wauth_telegram(
@@ -3213,7 +3213,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
             if not tg_id or str(current.get("kind") or "") != "telegram":
                 return RedirectResponse(
                     "/admin/profile?err="
-                    + quote_plus("Р”Р»СЏ РїСЂРёРІСЏР·РєРё GitHub СЃРЅР°С‡Р°Р»Р° РІРѕР№РґРёС‚Рµ С‡РµСЂРµР· Telegram."),
+                    + quote_plus("Для привязки GitHub сначала войдите через Telegram."),
                     status_code=303,
                 )
             tg_user = (
@@ -3222,7 +3222,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
             if tg_user is None:
                 return RedirectResponse(
                     "/admin/profile?err="
-                    + quote_plus("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РѕС‚Р° РЅРµ РЅР°Р№РґРµРЅ. РЎРЅР°С‡Р°Р»Р° РІС‹РїРѕР»РЅРёС‚Рµ /start РІ Telegram-Р±РѕС‚Рµ."),
+                    + quote_plus("Пользователь бота не найден. Сначала выполните /start в Telegram-боте."),
                     status_code=303,
                 )
             conflict = (
@@ -3235,7 +3235,7 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
             if conflict is not None:
                 return RedirectResponse(
                     "/admin/profile?err="
-                    + quote_plus("Р­С‚РѕС‚ GitHub СѓР¶Рµ РїСЂРёРІСЏР·Р°РЅ Рє РґСЂСѓРіРѕРјСѓ Telegram-РїСЂРѕС„РёР»СЋ."),
+                    + quote_plus("Этот GitHub уже привязан к другому Telegram-профилю."),
                     status_code=303,
                 )
             tg_user.github_id = gh_id
@@ -3340,12 +3340,12 @@ async def _admin_broadcast_job(
     settings = get_settings()
     tok = (settings.bot_token or "").strip()
     if not tok:
-        log.error("С„РѕРЅРѕРІР°СЏ СЂР°СЃСЃС‹Р»РєР°: BOT_TOKEN РїСѓСЃС‚ вЂ” РїСЂРѕРїСѓСЃРє")
+        log.error("фоновая рассылка: BOT_TOKEN пуст — пропуск")
         return
     draft = (text or "").strip()
     try:
         log.info(
-            "С„РѕРЅРѕРІР°СЏ СЂР°СЃСЃС‹Р»РєР° РёР· web-admin: РґР»РёРЅР° С‚РµРєСЃС‚Р°=%s СЃРёРјРІ., users=%s channel=%s",
+            "фоновая рассылка из web-admin: длина текста=%s симв., users=%s channel=%s",
             len(draft),
             send_users,
             send_channel,
@@ -3372,13 +3372,13 @@ async def _admin_broadcast_job(
                 source="channel",
             )
         log.info(
-            "С„РѕРЅРѕРІР°СЏ СЂР°СЃСЃС‹Р»РєР° Р·Р°РІРµСЂС€РµРЅР°: users ok=%s fail=%s channel_ok=%s",
+            "фоновая рассылка завершена: users ok=%s fail=%s channel_ok=%s",
             ok,
             failed,
             ch_ok,
         )
     except Exception:
-        log.exception("С„РѕРЅРѕРІР°СЏ СЂР°СЃСЃС‹Р»РєР°: РЅРµРѕР±СЂР°Р±РѕС‚Р°РЅРЅР°СЏ РѕС€РёР±РєР°")
+        log.exception("фоновая рассылка: необработанная ошибка")
 
 
 def _broadcast_tpl_meta_b64(*, tpl_id: int, title: str, body: str) -> str:
@@ -3425,31 +3425,31 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     bc_settings = get_settings()
     bc_ch_id = getattr(bc_settings, "broadcast_main_channel_id", None)
     bc_ch_hint = (
-        f"<p class='text-xs opacity-60'>РљР°РЅР°Р» РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ: <code class='bg-base-300 px-1 rounded'>{bc_ch_id}</code> "
-        "(РїРµСЂРµРјРµРЅРЅР°СЏ <code class='bg-base-300 px-1 rounded'>BROADCAST_MAIN_CHANNEL_ID</code>).</p>"
+        f"<p class='text-xs opacity-60'>Канал по умолчанию: <code class='bg-base-300 px-1 rounded'>{bc_ch_id}</code> "
+        "(переменная <code class='bg-base-300 px-1 rounded'>BROADCAST_MAIN_CHANNEL_ID</code>).</p>"
         if bc_ch_id
-        else "<p class='text-xs text-warning'>РљР°РЅР°Р» РЅРµ Р·Р°РґР°РЅ РІ РєРѕРЅС„РёРіРµ вЂ” РѕС‚РјРµС‚РєР° В«Р’ РєР°РЅР°Р»В» РЅРµ СЃСЂР°Р±РѕС‚Р°РµС‚, РїРѕРєР° РЅРµ Р·Р°РґР°РЅ BROADCAST_MAIN_CHANNEL_ID.</p>"
+        else "<p class='text-xs text-warning'>Канал не задан в конфиге — отметка «В канал» не сработает, пока не задан BROADCAST_MAIN_CHANNEL_ID.</p>"
     )
     sp = request.query_params
     alert = ""
     if sp.get("started") == "1":
         alert = (
-            "<div class='alert alert-success mb-4'><span>Р Р°СЃСЃС‹Р»РєР° РїРѕСЃС‚Р°РІР»РµРЅР° РІ РѕС‡РµСЂРµРґСЊ РЅР° С„РѕРЅРѕРІСѓСЋ РѕС‚РїСЂР°РІРєСѓ. "
-            "Р РµР·СѓР»СЊС‚Р°С‚ СЃРјРѕС‚СЂРёС‚Рµ РІ Р»РѕРіР°С… API.</span></div>"
+            "<div class='alert alert-success mb-4'><span>Рассылка поставлена в очередь на фоновую отправку. "
+            "Результат смотрите в логах API.</span></div>"
         )
     err = (sp.get("err") or "").strip()
     if err == "empty":
-        alert = "<div class='alert alert-warning mb-4'><span>Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ СЃРѕРѕР±С‰РµРЅРёСЏ.</span></div>"
+        alert = "<div class='alert alert-warning mb-4'><span>Введите текст сообщения.</span></div>"
     elif err == "no_bot_token":
-        alert = "<div class='alert alert-error mb-4'><span>BOT_TOKEN РЅРµ Р·Р°РґР°РЅ вЂ” СЂР°СЃСЃС‹Р»РєР° РЅРµРІРѕР·РјРѕР¶РЅР°.</span></div>"
+        alert = "<div class='alert alert-error mb-4'><span>BOT_TOKEN не задан — рассылка невозможна.</span></div>"
     elif err == "test_no_tg":
-        alert = "<div class='alert alert-warning mb-4'><span>РќРµС‚ Telegram ID РІ СЃРµСЃСЃРёРё: РІРѕР№РґРёС‚Рµ С‡РµСЂРµР· Telegram РёР»Рё РїСЂРѕРІСЊС‚Рµ РїСЂРѕС„РёР»СЊ.</span></div>"
+        alert = "<div class='alert alert-warning mb-4'><span>Нет Telegram ID в сессии: войдите через Telegram или провьте профиль.</span></div>"
     elif err == "schedule_bad_time":
-        alert = "<div class='alert alert-error mb-4'><span>РќРµРІРµСЂРЅР°СЏ РґР°С‚Р° РёР»Рё РІСЂРµРјСЏ РѕС‚Р»РѕР¶РµРЅРЅРѕР№ РѕС‚РїСЂР°РІРєРё.</span></div>"
+        alert = "<div class='alert alert-error mb-4'><span>Неверная дата или время отложенной отправки.</span></div>"
     elif err == "no_targets":
-        alert = "<div class='alert alert-warning mb-4'><span>Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРЅСѓ С†РµР»СЊ: РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РёР· Р‘Р” РёР»Рё РєР°РЅР°Р».</span></div>"
+        alert = "<div class='alert alert-warning mb-4'><span>Выберите хотя бы одну цель: пользователям из БД или канал.</span></div>"
     elif err == "no_channel":
-        alert = "<div class='alert alert-error mb-4'><span>Р’ РЅР°СЃС‚СЂРѕР№РєР°С… РЅРµ Р·Р°РґР°РЅ ID РєР°РЅР°Р»Р° РґР»СЏ СЂР°СЃСЃС‹Р»РєРё (BROADCAST_MAIN_CHANNEL_ID).</span></div>"
+        alert = "<div class='alert alert-error mb-4'><span>В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).</span></div>"
     elif err == "template_bad":
         alert = ""
     elif err == "test_fail":
@@ -3488,10 +3488,10 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         </div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_html}</div>
         <div class="flex flex-wrap gap-1 pt-1">
-          <button type="button" class="btn btn-primary btn-xs bc-tpl-use" data-b64tpl="{_esc(meta_b64)}">Р’ РїРѕР»Рµ РІРІРѕРґР°</button>
-          <button type="button" class="btn btn-ghost btn-xs bc-tpl-edit" data-b64tpl="{_esc(meta_b64)}">РџСЂР°РІРєР°</button>
-          <form method="post" action="/admin/broadcast/template/{int(t.id)}/delete" class="inline" data-remna-confirm-msg="РЈРґР°Р»РёС‚СЊ С€Р°Р±Р»РѕРЅ?">
-            <button type="submit" class="btn btn-ghost btn-xs text-error">РЈРґР°Р»РёС‚СЊ</button>
+          <button type="button" class="btn btn-primary btn-xs bc-tpl-use" data-b64tpl="{_esc(meta_b64)}">В поле ввода</button>
+          <button type="button" class="btn btn-ghost btn-xs bc-tpl-edit" data-b64tpl="{_esc(meta_b64)}">Правка</button>
+          <form method="post" action="/admin/broadcast/template/{int(t.id)}/delete" class="inline" data-remna-confirm-msg="Удалить шаблон?">
+            <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
           </form>
         </div>
       </div>"""
@@ -3503,15 +3503,15 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
                 when = when.replace(tzinfo=timezone.utc)
             when_s = _fmt_dt_msk(when)
         else:
-            when_s = "вЂ”"
+            when_s = "—"
         smeta = _sched_meta_b64(j)
         prev_p = broadcast_html_preview_fragment(j.body_text or "")
         parts_tgt: list[str] = []
         if getattr(j, "send_to_users", True):
-            parts_tgt.append("Р‘Р”")
+            parts_tgt.append("БД")
         if getattr(j, "send_to_channel", False):
-            parts_tgt.append("РєР°РЅР°Р»")
-        tgt_s = " + ".join(parts_tgt) if parts_tgt else "вЂ”"
+            parts_tgt.append("канал")
+        tgt_s = " + ".join(parts_tgt) if parts_tgt else "—"
         pending_cards.append(
             f"""
       <div class="card bg-base-200/80 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
@@ -3519,13 +3519,13 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           <span class="text-xs opacity-80">{_esc(when_s)}</span>
           <span class="text-[10px] opacity-50">#{int(j.id)}</span>
         </div>
-        <div class="text-[10px] opacity-70">РљСѓРґР°: {_esc(tgt_s)}</div>
+        <div class="text-[10px] opacity-70">Куда: {_esc(tgt_s)}</div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_p}</div>
         <div class="flex flex-wrap gap-1 pt-1">
-          <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">Р’ РїРѕР»Рµ РІРІРѕРґР°</button>
-          <button type="button" class="btn btn-ghost btn-xs bc-pend-edit" data-b64sched="{_esc(smeta)}">РџСЂР°РІРєР°</button>
-          <form method="post" action="/admin/broadcast/schedule/{int(j.id)}/delete" class="inline" data-remna-confirm-msg="РЈРґР°Р»РёС‚СЊ РёР· РѕС‡РµСЂРµРґРё?">
-            <button type="submit" class="btn btn-ghost btn-xs text-error">РЈРґР°Р»РёС‚СЊ</button>
+          <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">В поле ввода</button>
+          <button type="button" class="btn btn-ghost btn-xs bc-pend-edit" data-b64sched="{_esc(smeta)}">Правка</button>
+          <form method="post" action="/admin/broadcast/schedule/{int(j.id)}/delete" class="inline" data-remna-confirm-msg="Удалить из очереди?">
+            <button type="submit" class="btn btn-ghost btn-xs text-error">Удалить</button>
           </form>
         </div>
       </div>"""
@@ -3539,26 +3539,26 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             f"""
       <div class="card bg-base-200/60 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
         <div class="flex items-start justify-between gap-2 text-xs opacity-80">
-          <span>{_esc(when_h)} В· {src_l}</span>
-          <span class="opacity-70">вњ“{int(h.recipients_ok)} / вњ—{int(h.recipients_failed)}</span>
+          <span>{_esc(when_h)} · {src_l}</span>
+          <span class="opacity-70">✓{int(h.recipients_ok)} / ✗{int(h.recipients_failed)}</span>
         </div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_h}</div>
         <div class="flex flex-wrap gap-1 pt-1">
-          <button type="button" class="btn btn-primary btn-xs bc-hist-use" data-b64hist="{_esc(hm)}">Р’ РїРѕР»Рµ РІРІРѕРґР°</button>
+          <button type="button" class="btn btn-primary btn-xs bc-hist-use" data-b64hist="{_esc(hm)}">В поле ввода</button>
         </div>
       </div>"""
         )
 
-    tpl_block = "".join(tpl_cards) or "<p class='text-sm opacity-50'>РЁР°Р±Р»РѕРЅРѕРІ РїРѕРєР° РЅРµС‚ вЂ” СЃРѕР·РґР°Р№С‚Рµ РїРµСЂРІС‹Р№ РЅРёР¶Рµ.</p>"
+    tpl_block = "".join(tpl_cards) or "<p class='text-sm opacity-50'>Шаблонов пока нет — создайте первый ниже.</p>"
     pend_block = (
         "".join(pending_cards)
         if pending_cards
-        else "<p class='text-sm opacity-50'>РќРµС‚ Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅРЅС‹С… РѕС‚РїСЂР°РІРѕРє.</p>"
+        else "<p class='text-sm opacity-50'>Нет запланированных отправок.</p>"
     )
     hist_block = (
         "".join(hist_cards)
         if hist_cards
-        else "<p class='text-sm opacity-50'>РСЃС‚РѕСЂРёСЏ РїРѕСЏРІРёС‚СЃСЏ РїРѕСЃР»Рµ РїРµСЂРІРѕР№ РѕС‚РїСЂР°РІРєРё РІСЃРµРј РёР»Рё РїРѕ СЂР°СЃРїРёСЃР°РЅРёСЋ.</p>"
+        else "<p class='text-sm opacity-50'>История появится после первой отправки всем или по расписанию.</p>"
     )
 
     body = f"""
@@ -3566,87 +3566,87 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       <div class="grid gap-6 lg:grid-cols-2 items-start">
         <div class="card bg-base-100 border border-base-content/10 shadow-lg">
           <div class="card-body gap-4">
-            <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Р Р°СЃСЃС‹Р»РєР° РІ Telegram</h2>
-            <p class="text-sm opacity-80 leading-relaxed">РћС‚РїСЂР°РІРєР° РІСЃРµРј РёР· Р‘Р”. Р¤РѕСЂРјР°С‚: <strong>MarkdownV2</strong> (РєР°Рє РІ Telegram Bot API): Р¶РёСЂРЅС‹Р№ <code class="bg-base-300 px-1 rounded text-xs">**</code> РёР»Рё <code class="bg-base-300 px-1 rounded text-xs">*С‚РµРєСЃС‚*</code>, РєСѓСЂСЃРёРІ <code class="bg-base-300 px-1 rounded text-xs">_РєСѓСЂСЃРёРІ_</code>, РїРѕРґС‡С‘СЂРєРЅСѓС‚С‹Р№ <code class="bg-base-300 px-1 rounded text-xs">__С‚РµРєСЃС‚__</code>, Р·Р°С‡С‘СЂРєРЅСѓС‚С‹Р№ <code class="bg-base-300 px-1 rounded text-xs">~~</code>/<code class="bg-base-300 px-1 rounded text-xs">~</code>, РјРѕРЅРѕ <code class="bg-base-300 px-1 rounded text-xs">`РєРѕРґ`</code>, Р±Р»РѕРє <code class="bg-base-300 px-1 rounded text-xs">```</code>, СЃСЃС‹Р»РєР° <code class="bg-base-300 px-1 rounded text-xs">[С‚РµРєСЃС‚](url)</code>, СЃРїРѕР№Р»РµСЂ <code class="bg-base-300 px-1 rounded text-xs">||С‚РµРєСЃС‚||</code>, С†РёС‚Р°С‚Р° СЃС‚СЂРѕРєРѕР№ СЃ <code class="bg-base-300 px-1 rounded text-xs">&gt;</code>.</p>
-            <p class="text-xs opacity-70">РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РЅРёР¶Рµ РїРѕРІС‚РѕСЂСЏРµС‚ РїРµСЂРµРЅРѕСЃС‹ СЃС‚СЂРѕРє Рё СЂР°Р·РјРµС‚РєСѓ; РІ Telegram СѓР№РґС‘С‚ СЃРєРѕРЅРІРµСЂС‚РёСЂРѕРІР°РЅРЅС‹Р№ MarkdownV2.</p>
+            <h2 class="card-title text-2xl"><i class="fa-solid fa-bullhorn text-primary mr-2" aria-hidden="true"></i>Рассылка в Telegram</h2>
+            <p class="text-sm opacity-80 leading-relaxed">Отправка всем из БД. Формат: <strong>MarkdownV2</strong> (как в Telegram Bot API): жирный <code class="bg-base-300 px-1 rounded text-xs">**</code> или <code class="bg-base-300 px-1 rounded text-xs">*текст*</code>, курсив <code class="bg-base-300 px-1 rounded text-xs">_курсив_</code>, подчёркнутый <code class="bg-base-300 px-1 rounded text-xs">__текст__</code>, зачёркнутый <code class="bg-base-300 px-1 rounded text-xs">~~</code>/<code class="bg-base-300 px-1 rounded text-xs">~</code>, моно <code class="bg-base-300 px-1 rounded text-xs">`код`</code>, блок <code class="bg-base-300 px-1 rounded text-xs">```</code>, ссылка <code class="bg-base-300 px-1 rounded text-xs">[текст](url)</code>, спойлер <code class="bg-base-300 px-1 rounded text-xs">||текст||</code>, цитата строкой с <code class="bg-base-300 px-1 rounded text-xs">&gt;</code>.</p>
+            <p class="text-xs opacity-70">Предпросмотр ниже повторяет переносы строк и разметку; в Telegram уйдёт сконвертированный MarkdownV2.</p>
             {bc_ch_hint}
-            <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="РўРµРєСЃС‚ СЂР°СЃСЃС‹Р»РєРё..." required></textarea>
+            <textarea name="text" id="bc-text" form="bc-send" class="textarea textarea-bordered min-h-[220px] w-full font-mono text-sm" placeholder="Текст рассылки..." required></textarea>
             <div class="flex flex-wrap gap-1 items-center">
-              <span class="text-xs opacity-60 w-full">Р’СЃС‚Р°РІРєРё:</span>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="**С‚РµРєСЃС‚**">**Р¶РёСЂРЅС‹Р№**</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="*С‚РµРєСЃС‚*">*Р¶РёСЂРЅС‹Р№*</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="_РєСѓСЂСЃРёРІ_">_РєСѓСЂСЃРёРІ_</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="__РїРѕРґС‡С‘СЂРє__">__РїРѕРґС‡С‘СЂРє__</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~~Р·Р°С‡С‘СЂРє~~">~~Р·Р°С‡С‘СЂРє~~</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~Р·Р°С‡С‘СЂРє~">~Р·Р°С‡С‘СЂРє~</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="||СЃРїРѕР№Р»РµСЂ||">||СЃРїРѕР№Р»РµСЂ||</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="`РєРѕРґ`">`РєРѕРґ`</button>
-              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-pre" title="Р‘Р»РѕРє РєРѕРґР°">```Р±Р»РѕРє```</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="[РїРѕРґРїРёСЃСЊ](https://example.com)">СЃСЃС‹Р»РєР°</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="&#10;&gt; С†РёС‚Р°С‚Р°">С†РёС‚Р°С‚Р°</button>
-              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-date">РґР°С‚Р°/РІСЂРµРјСЏ</button>
+              <span class="text-xs opacity-60 w-full">Вставки:</span>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="**текст**">**жирный**</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="*текст*">*жирный*</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="_курсив_">_курсив_</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="__подчёрк__">__подчёрк__</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~~зачёрк~~">~~зачёрк~~</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="~зачёрк~">~зачёрк~</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="||спойлер||">||спойлер||</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="`код`">`код`</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-pre" title="Блок кода">```блок```</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="[подпись](https://example.com)">ссылка</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-bc-ins="&#10;&gt; цитата">цитата</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="bc-ins-date">дата/время</button>
             </div>
             <div id="bc-live-prev" class="rounded-xl border border-base-content/10 bg-base-200/50 p-3 text-sm">
-              <div class="text-xs opacity-60 mb-2">РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ (РїРµСЂРµРЅРѕСЃС‹ СЃС‚СЂРѕРє РєР°Рє РїСЂРё РѕС‚РїСЂР°РІРєРµ)</div>
-              <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] px-3 py-2 text-white shadow text-left" id="bc-live-prev-inner"><span class="opacity-70">РќР°С‡РЅРёС‚Рµ РІРІРѕРґвЂ¦</span></div>
+              <div class="text-xs opacity-60 mb-2">Предпросмотр (переносы строк как при отправке)</div>
+              <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] px-3 py-2 text-white shadow text-left" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
             </div>
             <div class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
-              <span class="text-xs font-medium opacity-80">РљСѓРґР° РѕС‚РїСЂР°РІРёС‚СЊ</span>
+              <span class="text-xs font-medium opacity-80">Куда отправить</span>
               <label class="label cursor-pointer justify-start gap-3 py-1">
                 <input type="checkbox" name="send_users" id="bc-cb-users" form="bc-send" value="1" class="checkbox checkbox-sm" checked />
-                <span class="label-text text-sm">Р’СЃРµРј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РёР· Р±Р°Р·С‹ (РЅРµ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅС‹Рј)</span>
+                <span class="label-text text-sm">Всем пользователям из базы (не заблокированным)</span>
               </label>
               <label class="label cursor-pointer justify-start gap-3 py-1">
                 <input type="checkbox" name="send_channel" id="bc-cb-channel" form="bc-send" value="1" class="checkbox checkbox-sm" />
-                <span class="label-text text-sm">Р’ РіР»Р°РІРЅС‹Р№ РєР°РЅР°Р» (ID РёР· РєРѕРЅС„РёРіР°)</span>
+                <span class="label-text text-sm">В главный канал (ID из конфига)</span>
               </label>
             </div>
             <div class="flex flex-wrap gap-2">
               <form id="bc-send" method="post" action="/admin/broadcast" class="inline flex flex-wrap items-center gap-2">
-                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>РћС‚РїСЂР°РІРёС‚СЊ (РІ С„РѕРЅРµ)</button>
+                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить (в фоне)</button>
               </form>
               <form method="post" action="/admin/broadcast/test" id="bc-test-f" class="inline">
                 <input type="hidden" name="text" id="bc-test-hidden" value="" />
-                <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-vial" aria-hidden="true"></i>РўРµСЃС‚ СЃРµР±Рµ</button>
+                <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-vial" aria-hidden="true"></i>Тест себе</button>
               </form>
             </div>
             <form method="post" action="/admin/broadcast/schedule" id="bc-sched-f" class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
-              <span class="text-sm font-medium">РћС‚РїСЂР°РІРєР° РїРѕ РІСЂРµРјРµРЅРё</span>
+              <span class="text-sm font-medium">Отправка по времени</span>
               <input type="hidden" name="text" id="bc-sched-body" value="" />
               <input type="hidden" name="send_users" id="bc-sched-h-su" value="1" />
               <input type="hidden" name="send_channel" id="bc-sched-h-sc" value="" />
               <input type="hidden" name="scheduled_at_utc" id="bc-sched-utc" value="" />
               <input type="datetime-local" name="scheduled_at_local" id="bc-sched-local" class="input input-bordered input-sm w-full max-w-xs" required />
-              <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 w-fit gap-1.5"><i class="fa-solid fa-clock" aria-hidden="true"></i>Р—Р°РїР»Р°РЅРёСЂРѕРІР°С‚СЊ</button>
-              <span class="text-xs opacity-60">Р’СЂРµРјСЏ Р±РµСЂС‘С‚СЃСЏ РёР· РєР°Р»РµРЅРґР°СЂСЏ Р±СЂР°СѓР·РµСЂР° Рё РїРµСЂРµРІРѕРґРёС‚СЃСЏ РІ UTC Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.</span>
+              <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 w-fit gap-1.5"><i class="fa-solid fa-clock" aria-hidden="true"></i>Запланировать</button>
+              <span class="text-xs opacity-60">Время берётся из календаря браузера и переводится в UTC автоматически.</span>
             </form>
           </div>
         </div>
         <div class="flex flex-col gap-4">
           <div class="card bg-base-100 border border-base-content/10 shadow-lg">
             <div class="card-body gap-3">
-              <h3 class="font-semibold text-lg">РЁР°Р±Р»РѕРЅС‹ РЅР° СЃРµСЂРІРµСЂРµ</h3>
-              <p class="text-xs opacity-70">Р•РґРёРЅС‹Рµ РґР»СЏ РІСЃРµС… Р±СЂР°СѓР·РµСЂРѕРІ Рё СѓСЃС‚СЂРѕР№СЃС‚РІ. В«Р’ РїРѕР»Рµ РІРІРѕРґР°В» РїРѕРґСЃС‚Р°РІР»СЏРµС‚ С‚РµРєСЃС‚ СЃР»РµРІР°.</p>
+              <h3 class="font-semibold text-lg">Шаблоны на сервере</h3>
+              <p class="text-xs opacity-70">Единые для всех браузеров и устройств. «В поле ввода» подставляет текст слева.</p>
               <div class="grid gap-3 max-h-[480px] overflow-y-auto pr-1">{tpl_block}</div>
               <form method="post" action="/admin/broadcast/template" class="flex flex-col gap-2 border-t border-base-content/10 pt-3">
-                <span class="text-sm font-medium">РќРѕРІС‹Р№ С€Р°Р±Р»РѕРЅ</span>
-                <input name="title" class="input input-bordered input-sm" placeholder="РќР°Р·РІР°РЅРёРµ" maxlength="160" />
-                <textarea name="tpl_body" class="textarea textarea-bordered textarea-sm min-h-[90px]" placeholder="РўРµРєСЃС‚ С€Р°Р±Р»РѕРЅР°"></textarea>
-                <button type="submit" class="btn btn-primary btn-sm w-fit gap-1.5"><i class="fa-solid fa-plus" aria-hidden="true"></i>РЎРѕС…СЂР°РЅРёС‚СЊ С€Р°Р±Р»РѕРЅ</button>
+                <span class="text-sm font-medium">Новый шаблон</span>
+                <input name="title" class="input input-bordered input-sm" placeholder="Название" maxlength="160" />
+                <textarea name="tpl_body" class="textarea textarea-bordered textarea-sm min-h-[90px]" placeholder="Текст шаблона"></textarea>
+                <button type="submit" class="btn btn-primary btn-sm w-fit gap-1.5"><i class="fa-solid fa-plus" aria-hidden="true"></i>Сохранить шаблон</button>
               </form>
             </div>
           </div>
           <div class="card bg-base-100 border border-base-content/10 shadow-lg">
             <div class="card-body gap-3">
-              <h3 class="font-semibold">РћС‡РµСЂРµРґСЊ РѕС‚Р»РѕР¶РµРЅРЅС‹С…</h3>
-              <p class="text-xs opacity-70">Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ Рё СѓРґР°Р»РµРЅРёРµ С‚РѕР»СЊРєРѕ РґР»СЏ СЃС‚Р°С‚СѓСЃР° В«РѕР¶РёРґР°РµС‚В».</p>
+              <h3 class="font-semibold">Очередь отложенных</h3>
+              <p class="text-xs opacity-70">Редактирование и удаление только для статуса «ожидает».</p>
               <div class="grid gap-3 max-h-[320px] overflow-y-auto pr-1">{pend_block}</div>
             </div>
           </div>
           <div class="card bg-base-100 border border-base-content/10 shadow-lg">
             <div class="card-body gap-3">
-              <h3 class="font-semibold">РСЃС‚РѕСЂРёСЏ РѕС‚РїСЂР°РІР»РµРЅРёР№</h3>
-              <p class="text-xs opacity-70">РџРѕСЃР»РµРґРЅРёРµ СЂР°СЃСЃС‹Р»РєРё; В«Р’ РїРѕР»Рµ РІРІРѕРґР°В» вЂ” РёР·РјРµРЅРёС‚СЊ С‚РµРєСЃС‚ Рё РѕС‚РїСЂР°РІРёС‚СЊ СЃРЅРѕРІР°.</p>
+              <h3 class="font-semibold">История отправлений</h3>
+              <p class="text-xs opacity-70">Последние рассылки; «В поле ввода» — изменить текст и отправить снова.</p>
               <div class="grid gap-3 max-h-[360px] overflow-y-auto pr-1">{hist_block}</div>
             </div>
           </div>
@@ -3655,22 +3655,22 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     </div>
     <dialog id="bc-tpl-modal" class="modal">
       <div class="modal-box w-[min(96vw,1100px)] max-w-[1100px] max-h-[86vh] overflow-y-auto">
-        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">вњ•</button></form>
-        <h3 class="font-bold text-lg mb-2">Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ С€Р°Р±Р»РѕРЅР°</h3>
+        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
+        <h3 class="font-bold text-lg mb-2">Редактирование шаблона</h3>
         <form method="post" id="bc-tpl-edit-form" action="/admin/broadcast/template/0/edit" class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]" data-no-loading>
           <input type="hidden" name="tpl_id" id="bc-tpl-edit-id" value="0" />
           <div class="flex min-h-[520px] flex-col gap-2">
-            <label class="form-control"><span class="label-text text-xs">РќР°Р·РІР°РЅРёРµ</span>
+            <label class="form-control"><span class="label-text text-xs">Название</span>
               <input name="title" id="bc-tpl-edit-title" class="input input-bordered input-sm" maxlength="160" /></label>
-            <label class="form-control flex-1"><span class="label-text text-xs">РўРµРєСЃС‚</span>
+            <label class="form-control flex-1"><span class="label-text text-xs">Текст</span>
               <textarea name="tpl_body" id="bc-tpl-edit-body" class="textarea textarea-bordered min-h-[420px] flex-1 font-mono text-sm"></textarea></label>
-            <button type="submit" class="btn btn-primary btn-sm w-fit">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+            <button type="submit" class="btn btn-primary btn-sm w-fit">Сохранить</button>
           </div>
           <div class="flex min-h-[520px] flex-col gap-2">
-            <span class="label-text text-xs opacity-80">РџСЂРµРІСЊСЋ</span>
+            <span class="label-text text-xs opacity-80">Превью</span>
             <div class="flex-1 rounded-xl border border-base-content/10 bg-base-200/40 p-3">
               <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow">
-                <div id="bc-tpl-edit-preview" class="whitespace-pre-wrap break-words text-left"><span class="opacity-70">РќР°С‡РЅРёС‚Рµ РІРІРѕРґвЂ¦</span></div>
+                <div id="bc-tpl-edit-preview" class="whitespace-pre-wrap break-words text-left"><span class="opacity-70">Начните ввод…</span></div>
               </div>
             </div>
           </div>
@@ -3680,23 +3680,23 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     </dialog>
     <dialog id="bc-sched-modal" class="modal">
       <div class="modal-box max-w-lg">
-        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">вњ•</button></form>
-        <h3 class="font-bold text-lg mb-2">РћС‚Р»РѕР¶РµРЅРЅР°СЏ РѕС‚РїСЂР°РІРєР°</h3>
+        <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form>
+        <h3 class="font-bold text-lg mb-2">Отложенная отправка</h3>
         <form method="post" id="bc-sched-edit-form" action="/admin/broadcast/schedule/0/edit" class="flex flex-col gap-2">
           <input type="hidden" name="scheduled_at_utc" id="bc-sched-edit-utc" value="" />
-          <label class="form-control"><span class="label-text text-xs">РўРµРєСЃС‚ СЃРѕРѕР±С‰РµРЅРёСЏ</span>
+          <label class="form-control"><span class="label-text text-xs">Текст сообщения</span>
             <textarea name="tpl_body" id="bc-sched-edit-body" class="textarea textarea-bordered min-h-[160px] font-mono text-sm"></textarea></label>
-          <label class="form-control"><span class="label-text text-xs">РљРѕРіРґР° РѕС‚РїСЂР°РІРёС‚СЊ</span>
+          <label class="form-control"><span class="label-text text-xs">Когда отправить</span>
             <input type="datetime-local" id="bc-sched-edit-local" class="input input-bordered input-sm" required /></label>
           <label class="label cursor-pointer justify-start gap-2">
             <input type="checkbox" name="send_users" id="bc-sched-edit-su" value="1" class="checkbox checkbox-sm" checked />
-            <span class="label-text text-xs">РџРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РёР· Р‘Р”</span>
+            <span class="label-text text-xs">Пользователям из БД</span>
           </label>
           <label class="label cursor-pointer justify-start gap-2">
             <input type="checkbox" name="send_channel" id="bc-sched-edit-sc" value="1" class="checkbox checkbox-sm" />
-            <span class="label-text text-xs">Р’ РєР°РЅР°Р»</span>
+            <span class="label-text text-xs">В канал</span>
           </label>
-          <button type="submit" class="btn btn-primary btn-sm">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
         </form>
       </div>
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
@@ -3728,7 +3728,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       async function renderLive(){{
         var v=(ta&&ta.value)||'';
         if(!live)return;
-        if(!v.trim()){{ live.innerHTML='<span class="opacity-70">РќР°С‡РЅРёС‚Рµ РІРІРѕРґвЂ¦</span>'; return; }}
+        if(!v.trim()){{ live.innerHTML='<span class="opacity-70">Начните ввод…</span>'; return; }}
         try{{
           var fd=new FormData(); fd.append('text', v);
           var r=await fetch(previewEndpoint,{{method:'POST', body:fd, credentials:'same-origin'}});
@@ -3750,24 +3750,24 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           var err=u.searchParams.get('err');
           var started=u.searchParams.get('started');
           var mapN={{
-            test_sent:'РўРµСЃС‚РѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ РІР°Рј РІ Telegram.',
-            tpl_ok:'РЁР°Р±Р»РѕРЅ СЃРѕС…СЂР°РЅС‘РЅ.',
-            tpl_del:'РЁР°Р±Р»РѕРЅ СѓРґР°Р»С‘РЅ.',
-            scheduled:'РћС‚Р»РѕР¶РµРЅРЅР°СЏ СЂР°СЃСЃС‹Р»РєР° РґРѕР±Р°РІР»РµРЅР° РІ РѕС‡РµСЂРµРґСЊ.',
-            sched_ok:'РћС‚Р»РѕР¶РµРЅРЅР°СЏ РѕС‚РїСЂР°РІРєР° РѕР±РЅРѕРІР»РµРЅР°.',
-            sched_del:'РћС‚Р»РѕР¶РµРЅРЅР°СЏ РѕС‚РїСЂР°РІРєР° СѓРґР°Р»РµРЅР°.'
+            test_sent:'Тестовое сообщение отправлено вам в Telegram.',
+            tpl_ok:'Шаблон сохранён.',
+            tpl_del:'Шаблон удалён.',
+            scheduled:'Отложенная рассылка добавлена в очередь.',
+            sched_ok:'Отложенная отправка обновлена.',
+            sched_del:'Отложенная отправка удалена.'
           }};
           var mapErr={{
-            empty:'Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ СЃРѕРѕР±С‰РµРЅРёСЏ.',
-            no_bot_token:'BOT_TOKEN РЅРµ Р·Р°РґР°РЅ вЂ” СЂР°СЃСЃС‹Р»РєР° РЅРµРІРѕР·РјРѕР¶РЅР°.',
-            test_no_tg:'РќРµС‚ Telegram ID РІ СЃРµСЃСЃРёРё: РІРѕР№РґРёС‚Рµ С‡РµСЂРµР· Telegram РёР»Рё РѕС‚РєСЂРѕР№С‚Рµ РїСЂРѕС„РёР»СЊ.',
-            schedule_bad_time:'РќРµРІРµСЂРЅР°СЏ РґР°С‚Р° РёР»Рё РІСЂРµРјСЏ РѕС‚Р»РѕР¶РµРЅРЅРѕР№ РѕС‚РїСЂР°РІРєРё.',
-            no_targets:'Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРЅСѓ С†РµР»СЊ: РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РёР· Р‘Р” РёР»Рё РєР°РЅР°Р».',
-            no_channel:'Р’ РЅР°СЃС‚СЂРѕР№РєР°С… РЅРµ Р·Р°РґР°РЅ ID РєР°РЅР°Р»Р° РґР»СЏ СЂР°СЃСЃС‹Р»РєРё (BROADCAST_MAIN_CHANNEL_ID).',
-            template_bad:'Р—Р°РїРѕР»РЅРёС‚Рµ РЅР°Р·РІР°РЅРёРµ Рё С‚РµРєСЃС‚ С€Р°Р±Р»РѕРЅР°.',
-            test_fail:'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ С‚РµСЃС‚: РїСЂРѕРІРµСЂСЊС‚Рµ СЂР°Р·РјРµС‚РєСѓ MarkdownV2 Рё РґРѕСЃС‚СѓРї Рє Telegram.'
+            empty:'Введите текст сообщения.',
+            no_bot_token:'BOT_TOKEN не задан — рассылка невозможна.',
+            test_no_tg:'Нет Telegram ID в сессии: войдите через Telegram или откройте профиль.',
+            schedule_bad_time:'Неверная дата или время отложенной отправки.',
+            no_targets:'Выберите хотя бы одну цель: пользователям из БД или канал.',
+            no_channel:'В настройках не задан ID канала для рассылки (BROADCAST_MAIN_CHANNEL_ID).',
+            template_bad:'Заполните название и текст шаблона.',
+            test_fail:'Не удалось отправить тест: проверьте разметку MarkdownV2 и доступ к Telegram.'
           }};
-          if(started==='1'&&window.remnaToast)window.remnaToast('success','Р Р°СЃСЃС‹Р»РєР° РїРѕСЃС‚Р°РІР»РµРЅР° РІ РѕС‡РµСЂРµРґСЊ РЅР° С„РѕРЅРѕРІСѓСЋ РѕС‚РїСЂР°РІРєСѓ.');
+          if(started==='1'&&window.remnaToast)window.remnaToast('success','Рассылка поставлена в очередь на фоновую отправку.');
           if(n&&mapN[n]&&window.remnaToast)window.remnaToast('success',mapN[n]);
           if(err&&mapErr[err]&&window.remnaToast)window.remnaToast('error',mapErr[err]);
           if(n||err||started){{
@@ -3781,7 +3781,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       async function renderTplPreview(){{
         var v=(tplEditBody&&tplEditBody.value)||'';
         if(!tplEditPreview)return;
-        if(!v.trim()){{ tplEditPreview.innerHTML='<span class="opacity-70">РќР°С‡РЅРёС‚Рµ РІРІРѕРґвЂ¦</span>'; return; }}
+        if(!v.trim()){{ tplEditPreview.innerHTML='<span class="opacity-70">Начните ввод…</span>'; return; }}
         try{{
           var fd=new FormData(); fd.append('text', v);
           var r=await fetch(previewEndpoint,{{method:'POST', body:fd, credentials:'same-origin'}});
@@ -3802,7 +3802,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         if(curT===tplInitTitle && curB===tplInitBody){{
           e.preventDefault();
           if(tplModal) tplModal.close();
-          if(window.remnaToast)window.remnaToast('info','РР·РјРµРЅРµРЅРёР№ РЅРµС‚');
+          if(window.remnaToast)window.remnaToast('info','Изменений нет');
         }}
       }});
       function ins(w){{
@@ -3834,7 +3834,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           var m=btn.getAttribute('data-b64sched'); if(!m||!ta)return;
           var o=jsonFromUtf8B64(m); if(!o)return;
           ta.value=o.body||''; ta.focus(); queueLive();
-          if(window.remnaToast)window.remnaToast('success','РўРµРєСЃС‚ РёР· РѕС‡РµСЂРµРґРё РїРѕРґСЃС‚Р°РІР»РµРЅ');
+          if(window.remnaToast)window.remnaToast('success','Текст из очереди подставлен');
         }});
       }});
       document.querySelectorAll('.bc-pend-edit').forEach(function(btn){{
@@ -3870,13 +3870,13 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           var m=btn.getAttribute('data-b64hist'); if(!m||!ta)return;
           var o=jsonFromUtf8B64(m); if(!o)return;
           ta.value=o.body||''; ta.focus(); queueLive();
-          if(window.remnaToast)window.remnaToast('success','РўРµРєСЃС‚ РёР· РёСЃС‚РѕСЂРёРё РїРѕРґСЃС‚Р°РІР»РµРЅ вЂ” РёР·РјРµРЅРёС‚Рµ Рё РѕС‚РїСЂР°РІСЊС‚Рµ');
+          if(window.remnaToast)window.remnaToast('success','Текст из истории подставлен — измените и отправьте');
         }});
       }});
       document.querySelectorAll('.bc-tpl-use').forEach(function(btn){{
         btn.addEventListener('click',function(){{
           var m=btn.getAttribute('data-b64tpl'); if(!m||!ta)return;
-          try{{ var o=jsonFromUtf8B64(m); if(o){{ ta.value=o.body||''; ta.focus(); queueLive(); if(window.remnaToast)window.remnaToast('success','РЁР°Р±Р»РѕРЅ РїРѕРґСЃС‚Р°РІР»РµРЅ'); }} }}catch(e){{}}
+          try{{ var o=jsonFromUtf8B64(m); if(o){{ ta.value=o.body||''; ta.focus(); queueLive(); if(window.remnaToast)window.remnaToast('success','Шаблон подставлен'); }} }}catch(e){{}}
         }});
       }});
       document.querySelectorAll('.bc-tpl-edit').forEach(function(btn){{
@@ -3921,7 +3921,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
     }})();
     </script>
     """
-    return _layout("Р Р°СЃСЃС‹Р»РєР°", body, request=request)
+    return _layout("Рассылка", body, request=request)
 
 
 @router.post("/broadcast/preview-html")
@@ -4171,9 +4171,9 @@ async def admin_ticket_user_add_balance(
     try:
         amt = Decimal(raw)
     except (InvalidOperation, ValueError):
-        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РќРµРІРµСЂРЅР°СЏ СЃСѓРјРјР°')}", status_code=303)
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Неверная сумма')}", status_code=303)
     if amt <= 0:
-        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РЎСѓРјРјР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ > 0')}", status_code=303)
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
     wauth = request.session.get("wauth") or {}
     admin_tg = int(wauth.get("telegram_id") or 0)
     async with await _session() as session:
@@ -4197,7 +4197,7 @@ async def admin_ticket_user_add_balance(
             payment_provider="admin",
             payment_id=None,
             status="completed",
-            description=f"РђРґРјРёРЅ (web) РґРѕР±Р°РІРёР» Р±Р°Р»Р°РЅСЃ: +{amt} в‚Ѕ",
+            description=f"Админ (web) добавил баланс: +{amt} ₽",
             meta={"admin_id": admin_db_id, "source": "web_tickets"},
         )
         session.add(txn_bal)
@@ -4224,7 +4224,7 @@ async def admin_ticket_user_add_months(
     if denied is not None:
         return denied
     if months < 1 or months > 120:
-        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РњРµСЃСЏС†РµРІ: РѕС‚ 1 РґРѕ 120')}", status_code=303)
+        return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Месяцев: от 1 до 120')}", status_code=303)
     settings = get_settings()
     async with await _session() as session:
         uid = await _ticket_owner_user_id(session, ticket_id)
@@ -4238,10 +4238,10 @@ async def admin_ticket_user_add_months(
             )
         ).scalar_one_or_none()
         if sub is None:
-            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РџРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР°')}", status_code=303)
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
         sub.expires_at = _add_calendar_months(sub.expires_at, months)
         pl = sub.plan
-        if not (sub.status == "trial" and pl is not None and pl.name == "РўСЂРёР°Р»"):
+        if not (sub.status == "trial" and pl is not None and pl.name == "Триал"):
             bp = await get_base_subscription_plan(session)
             if bp is not None:
                 sub.plan_id = bp.id
@@ -4298,7 +4298,7 @@ async def admin_ticket_user_sub_disable(
             return RedirectResponse("/admin/tickets", status_code=303)
         sub = await session.get(Subscription, subscription_id)
         if sub is None or sub.user_id != uid:
-            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РџРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР°')}", status_code=303)
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
         ok, msg = await admin_disable_subscription_record(
             session,
             user_id=uid,
@@ -4327,7 +4327,7 @@ async def admin_ticket_user_sub_enable(
             return RedirectResponse("/admin/tickets", status_code=303)
         sub = await session.get(Subscription, subscription_id)
         if sub is None or sub.user_id != uid:
-            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('РџРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР°')}", status_code=303)
+            return RedirectResponse(f"/admin/tickets/{ticket_id}?err={quote_plus('Подписка не найдена')}", status_code=303)
         ok, msg = await admin_enable_subscription_record(
             session,
             user_id=uid,
@@ -4355,8 +4355,8 @@ async def admin_status(request: Request) -> HTMLResponse:
     placeholder = """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mb-4">
       <div class="card-body gap-2">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>РЎРѕСЃС‚РѕСЏРЅРёРµ СЃРµСЂРІРёСЃРѕРІ</h2>
-        <p class="text-sm opacity-70">РЎС‚СЂР°РЅРёС†Р° РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ СЃСЂР°Р·Сѓ, РїСЂРѕРІРµСЂРєРё СЃС‚Р°С‚СѓСЃРѕРІ РІС‹РїРѕР»РЅСЏСЋС‚СЃСЏ РІ С„РѕРЅРµ.</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-heart-pulse text-primary mr-2" aria-hidden="true"></i>Состояние сервисов</h2>
+        <p class="text-sm opacity-70">Страница открывается сразу, проверки статусов выполняются в фоне.</p>
       </div>
     </div>
     <style>
@@ -4374,7 +4374,7 @@ async def admin_status(request: Request) -> HTMLResponse:
     <div id="status-machine" class="mb-4">
       <div class="card bg-base-100 border border-base-content/10 shadow-lg">
         <div class="card-body gap-3">
-          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>РћС‚С‡РµС‚ Рѕ РјР°С€РёРЅРµ</h3>
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
           <div class="grid gap-2 sm:grid-cols-3">
             <div class="rounded-lg border border-base-content/10 p-3"><span class="status-skel inline-block h-4 w-28 rounded"></span><div class="mt-2 status-skel h-5 w-40 rounded"></div></div>
             <div class="rounded-lg border border-base-content/10 p-3"><span class="status-skel inline-block h-4 w-24 rounded"></span><div class="mt-2 status-skel h-5 w-44 rounded"></div></div>
@@ -4384,10 +4384,10 @@ async def admin_status(request: Request) -> HTMLResponse:
       </div>
     </div>
     <div id="status-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <div id="status-card-panel" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>РџР°РЅРµР»СЊ Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div id="status-card-bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-Р±РѕС‚</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div id="status-card-tickets_bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Р‘РѕС‚ С‚РёРєРµС‚РѕРІ</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
-      <div id="status-card-db" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>Р‘Р°Р·Р° РґР°РЅРЅС‹С…</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-panel" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-server text-primary mr-2" aria-hidden="true"></i>Панель Remnawave (API)</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-brands fa-telegram text-primary mr-2" aria-hidden="true"></i>Telegram-бот</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-tickets_bot" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Бот тикетов</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
+      <div id="status-card-db" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-database text-primary mr-2" aria-hidden="true"></i>База данных</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
       <div id="status-card-redis" class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="fa-solid fa-bolt text-primary mr-2" aria-hidden="true"></i>Redis</h3><span class="badge badge-sm"><span class="status-skel inline-block h-3 w-16 rounded-full"></span></span></div><p class="text-sm opacity-90"><span class="status-skel inline-block h-4 w-56 rounded"></span></p><p class="text-xs opacity-60 mt-1"><span class="status-skel inline-block h-3 w-40 rounded"></span></p></div></div>
     </div>
     <script>
@@ -4396,7 +4396,7 @@ async def admin_status(request: Request) -> HTMLResponse:
       function card(it){
         var ok=!!it.ok;
         var badge=ok?'badge-success':'badge-error';
-        var st=ok?'РћРЅР»Р°Р№РЅ':'РћС€РёР±РєР°';
+        var st=ok?'Онлайн':'Ошибка';
         var lat=it.latency?('<p class="text-xs opacity-60 mt-1">'+esc(it.latency)+'</p>'):'';
         return '<div class="card bg-base-100 border border-base-content/10 shadow-lg transition-all duration-200 hover:shadow-xl hover:border-primary/25"><div class="card-body gap-2"><div class="flex items-start justify-between gap-2"><h3 class="card-title text-base"><i class="'+esc(it.icon)+' text-primary mr-2" aria-hidden="true"></i>'+esc(it.title)+'</h3><span class="badge '+badge+' badge-sm">'+st+'</span></div><p class="text-sm opacity-90 break-words">'+esc(it.detail)+'</p>'+lat+'</div></div>';
       }
@@ -4427,7 +4427,7 @@ async def admin_status(request: Request) -> HTMLResponse:
           if(!r.ok || !j){ throw new Error((j&&j.error)||('HTTP '+r.status)); }
           machine.innerHTML = j.machine_html || '';
         }catch(_e){
-          machine.innerHTML = '<div class="alert alert-error"><span>РћС‚С‡РµС‚ Рѕ РјР°С€РёРЅРµ: timeout</span></div>';
+          machine.innerHTML = '<div class="alert alert-error"><span>Отчет о машине: timeout</span></div>';
         }
       }
       function load(){
@@ -4439,7 +4439,7 @@ async def admin_status(request: Request) -> HTMLResponse:
     })();
     </script>
     """
-    return _layout("РЎС‚Р°С‚СѓСЃ СЃРµСЂРІРёСЃРѕРІ", placeholder, request=request)
+    return _layout("Статус сервисов", placeholder, request=request)
 
 
 @router.get("/status/service/{service_key}")
@@ -4453,16 +4453,16 @@ async def admin_status_service(request: Request, service_key: str) -> JSONRespon
         rw = RemnaWaveClient(settings)
         try:
             ok, msg, ms = await rw.ping_api()
-            lat = f"Р—Р°РґРµСЂР¶РєР° API: {ms} РјСЃ" if ms is not None else None
-            return JSONResponse({"service": {"title": "РџР°РЅРµР»СЊ Remnawave (API)", "icon": "fa-solid fa-server", "ok": ok, "detail": msg, "latency": lat}})
+            lat = f"Задержка API: {ms} мс" if ms is not None else None
+            return JSONResponse({"service": {"title": "Панель Remnawave (API)", "icon": "fa-solid fa-server", "ok": ok, "detail": msg, "latency": lat}})
         except Exception:
-            return JSONResponse({"service": {"title": "РџР°РЅРµР»СЊ Remnawave (API)", "icon": "fa-solid fa-server", "ok": False, "detail": "timeout", "latency": None}})
+            return JSONResponse({"service": {"title": "Панель Remnawave (API)", "icon": "fa-solid fa-server", "ok": False, "detail": "timeout", "latency": None}})
     if key in ("bot", "tickets_bot"):
         token = settings.bot_token if key == "bot" else tickets_config.bot_token
-        title = "Telegram-Р±РѕС‚" if key == "bot" else "Р‘РѕС‚ С‚РёРєРµС‚РѕРІ"
+        title = "Telegram-бот" if key == "bot" else "Бот тикетов"
         icon = "fa-brands fa-telegram" if key == "bot" else "fa-solid fa-headset"
-        missing = "BOT_TOKEN РЅРµ Р·Р°РґР°РЅ РІ РѕРєСЂСѓР¶РµРЅРёРё" if key == "bot" else "TICKETS_BOT_TOKEN РЅРµ Р·Р°РґР°РЅ РІ РѕРєСЂСѓР¶РµРЅРёРё"
-        fallback = "Р±РѕС‚ РѕС‚РІРµС‡Р°РµС‚ (getMe OK)" if key == "bot" else "Р±РѕС‚ С‚РёРєРµС‚РѕРІ РѕС‚РІРµС‡Р°РµС‚ (getMe OK)"
+        missing = "BOT_TOKEN не задан в окружении" if key == "bot" else "TICKETS_BOT_TOKEN не задан в окружении"
+        fallback = "бот отвечает (getMe OK)" if key == "bot" else "бот тикетов отвечает (getMe OK)"
         try:
             async with httpx.AsyncClient(timeout=12.0) as tg_client:
                 ok, msg, lat = await _telegram_bot_getme_status(
@@ -4480,9 +4480,9 @@ async def admin_status_service(request: Request, service_key: str) -> JSONRespon
             async with await _session() as session:
                 await session.execute(text("SELECT 1"))
             ms = round((time.perf_counter() - t0) * 1000, 1)
-            return JSONResponse({"service": {"title": "Р‘Р°Р·Р° РґР°РЅРЅС‹С…", "icon": "fa-solid fa-database", "ok": True, "detail": "PostgreSQL РѕС‚РІРµС‡Р°РµС‚", "latency": f"Р—Р°РґРµСЂР¶РєР°: {ms} РјСЃ"}})
+            return JSONResponse({"service": {"title": "База данных", "icon": "fa-solid fa-database", "ok": True, "detail": "PostgreSQL отвечает", "latency": f"Задержка: {ms} мс"}})
         except Exception as e:
-            return JSONResponse({"service": {"title": "Р‘Р°Р·Р° РґР°РЅРЅС‹С…", "icon": "fa-solid fa-database", "ok": False, "detail": str(e)[:240], "latency": None}})
+            return JSONResponse({"service": {"title": "База данных", "icon": "fa-solid fa-database", "ok": False, "detail": str(e)[:240], "latency": None}})
     if key == "redis":
         try:
             rcli = redis_async.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
@@ -4490,7 +4490,7 @@ async def admin_status_service(request: Request, service_key: str) -> JSONRespon
                 t0 = time.perf_counter()
                 await rcli.ping()
                 ms = round((time.perf_counter() - t0) * 1000, 1)
-                return JSONResponse({"service": {"title": "Redis", "icon": "fa-solid fa-bolt", "ok": True, "detail": "PONG", "latency": f"Р—Р°РґРµСЂР¶РєР°: {ms} РјСЃ"}})
+                return JSONResponse({"service": {"title": "Redis", "icon": "fa-solid fa-bolt", "ok": True, "detail": "PONG", "latency": f"Задержка: {ms} мс"}})
             finally:
                 await rcli.aclose()
         except Exception as e:
@@ -4507,20 +4507,20 @@ async def admin_status_machine(request: Request) -> JSONResponse:
     ip_diag = await _detect_server_ips(request)
     host_ok = bool(machine.get("ok"))
     ip_ok = bool(ip_diag.get("ok"))
-    host_ram = str(machine.get("ram_text") or "RAM: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
-    host_cpu = str(machine.get("cpu_text") or "CPU: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
+    host_ram = str(machine.get("ram_text") or "RAM: недоступно")
+    host_cpu = str(machine.get("cpu_text") or "CPU: недоступно")
     ram_pct = float(machine.get("ram_pct") or 0.0)
     cpu_pct = float(machine.get("cpu_pct") or 0.0)
-    ip_detail = str(ip_diag.get("detail") or "IP: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
+    ip_detail = str(ip_diag.get("detail") or "IP: недоступно")
     ip_lat = ip_diag.get("latency")
     machine_ok = host_ok and ip_ok
     machine_badge = "badge-success" if machine_ok else "badge-warning"
-    machine_state = "РќРѕСЂРјР°" if machine_ok else "Р§Р°СЃС‚РёС‡РЅРѕ"
+    machine_state = "Норма" if machine_ok else "Частично"
     machine_html = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
         <div class="flex items-start justify-between gap-2">
-          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>РћС‚С‡РµС‚ Рѕ РјР°С€РёРЅРµ</h3>
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
           <span class="badge {machine_badge} badge-sm">{machine_state}</span>
         </div>
         <div class="grid gap-2 sm:grid-cols-3">
@@ -4560,24 +4560,24 @@ async def admin_status_data(request: Request) -> JSONResponse:
     settings = get_settings()
     rw = RemnaWaveClient(settings)
     panel_ok, panel_msg, panel_ms = await rw.ping_api()
-    panel_lat = f"Р—Р°РґРµСЂР¶РєР° API: {panel_ms} РјСЃ" if panel_ms is not None else None
+    panel_lat = f"Задержка API: {panel_ms} мс" if panel_ms is not None else None
 
     async with httpx.AsyncClient(timeout=12.0) as tg_client:
         bot_ok, bot_msg, bot_lat = await _telegram_bot_getme_status(
             tg_client,
             token=settings.bot_token,
-            missing_token_msg="BOT_TOKEN РЅРµ Р·Р°РґР°РЅ РІ РѕРєСЂСѓР¶РµРЅРёРё",
-            ok_fallback_msg="Р±РѕС‚ РѕС‚РІРµС‡Р°РµС‚ (getMe OK)",
+            missing_token_msg="BOT_TOKEN не задан в окружении",
+            ok_fallback_msg="бот отвечает (getMe OK)",
         )
         tickets_bot_ok, tickets_bot_msg, tickets_bot_lat = await _telegram_bot_getme_status(
             tg_client,
             token=tickets_config.bot_token,
-            missing_token_msg="TICKETS_BOT_TOKEN РЅРµ Р·Р°РґР°РЅ РІ РѕРєСЂСѓР¶РµРЅРёРё",
-            ok_fallback_msg="Р±РѕС‚ С‚РёРєРµС‚РѕРІ РѕС‚РІРµС‡Р°РµС‚ (getMe OK)",
+            missing_token_msg="TICKETS_BOT_TOKEN не задан в окружении",
+            ok_fallback_msg="бот тикетов отвечает (getMe OK)",
         )
 
     db_ok = False
-    db_msg = "вЂ”"
+    db_msg = "—"
     db_lat: str | None = None
     t0 = time.perf_counter()
     try:
@@ -4585,13 +4585,13 @@ async def admin_status_data(request: Request) -> JSONResponse:
             await session.execute(text("SELECT 1"))
         ms = round((time.perf_counter() - t0) * 1000, 1)
         db_ok = True
-        db_msg = "PostgreSQL РѕС‚РІРµС‡Р°РµС‚"
-        db_lat = f"Р—Р°РґРµСЂР¶РєР°: {ms} РјСЃ"
+        db_msg = "PostgreSQL отвечает"
+        db_lat = f"Задержка: {ms} мс"
     except Exception as e:
         db_msg = str(e)[:240]
 
     redis_ok = False
-    redis_msg = "вЂ”"
+    redis_msg = "—"
     redis_lat: str | None = None
     try:
         rcli = redis_async.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
@@ -4601,7 +4601,7 @@ async def admin_status_data(request: Request) -> JSONResponse:
             ms = round((time.perf_counter() - t0) * 1000, 1)
             redis_ok = True
             redis_msg = "PONG"
-            redis_lat = f"Р—Р°РґРµСЂР¶РєР°: {ms} РјСЃ"
+            redis_lat = f"Задержка: {ms} мс"
         finally:
             await rcli.aclose()
     except Exception as e:
@@ -4611,11 +4611,11 @@ async def admin_status_data(request: Request) -> JSONResponse:
     ip_diag = await _detect_server_ips(request)
     host_ok = bool(machine.get("ok"))
     ip_ok = bool(ip_diag.get("ok"))
-    host_ram = str(machine.get("ram_text") or "RAM: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
-    host_cpu = str(machine.get("cpu_text") or "CPU: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
+    host_ram = str(machine.get("ram_text") or "RAM: недоступно")
+    host_cpu = str(machine.get("cpu_text") or "CPU: недоступно")
     ram_pct = float(machine.get("ram_pct") or 0.0)
     cpu_pct = float(machine.get("cpu_pct") or 0.0)
-    ip_detail = str(ip_diag.get("detail") or "IP: РЅРµРґРѕСЃС‚СѓРїРЅРѕ")
+    ip_detail = str(ip_diag.get("detail") or "IP: недоступно")
     ip_lat = ip_diag.get("latency")
     ip_pct = 100.0 if bool(ip_diag.get("direct_ok")) else 0.0
     if bool(ip_diag.get("proxy_set")) and bool(ip_diag.get("proxy_ok")):
@@ -4624,12 +4624,12 @@ async def admin_status_data(request: Request) -> JSONResponse:
         ip_pct = 50.0 if bool(ip_diag.get("direct_ok")) else 0.0
     machine_ok = host_ok and ip_ok
     machine_badge = "badge-success" if machine_ok else "badge-warning"
-    machine_state = "РќРѕСЂРјР°" if machine_ok else "Р§Р°СЃС‚РёС‡РЅРѕ"
+    machine_state = "Норма" if machine_ok else "Частично"
     machine_html = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
         <div class="flex items-start justify-between gap-2">
-          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>РћС‚С‡РµС‚ Рѕ РјР°С€РёРЅРµ</h3>
+          <h3 class="card-title text-lg"><i class="fa-solid fa-microchip text-primary mr-2" aria-hidden="true"></i>Отчет о машине</h3>
           <span class="badge {machine_badge} badge-sm">{machine_state}</span>
         </div>
         <div class="grid gap-2 sm:grid-cols-3">
@@ -4662,28 +4662,28 @@ async def admin_status_data(request: Request) -> JSONResponse:
 
     services = [
         {
-            "title": "РџР°РЅРµР»СЊ Remnawave (API)",
+            "title": "Панель Remnawave (API)",
             "icon": "fa-solid fa-server",
             "ok": panel_ok,
             "detail": panel_msg,
             "latency": panel_lat,
         },
         {
-            "title": "Telegram-Р±РѕС‚",
+            "title": "Telegram-бот",
             "icon": "fa-brands fa-telegram",
             "ok": bot_ok,
             "detail": bot_msg,
             "latency": bot_lat,
         },
         {
-            "title": "Р‘РѕС‚ С‚РёРєРµС‚РѕРІ",
+            "title": "Бот тикетов",
             "icon": "fa-solid fa-headset",
             "ok": tickets_bot_ok,
             "detail": tickets_bot_msg,
             "latency": tickets_bot_lat,
         },
         {
-            "title": "Р‘Р°Р·Р° РґР°РЅРЅС‹С…",
+            "title": "База данных",
             "icon": "fa-solid fa-database",
             "ok": db_ok,
             "detail": db_msg,
@@ -4851,63 +4851,63 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-6">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Р”РѕС…РѕРґ</h2>
-        <p class="text-sm opacity-70">РЎСѓРјРјС‹ РІ С€Р°РїРєРµ вЂ” РїРѕ UTC-РґРЅСЋ Рё РјРµСЃСЏС†Сѓ СЃРµСЂРІРµСЂР°; РґРЅРµРІРЅР°СЏ С‚Р°Р±Р»РёС†Р° РЅРёР¶Рµ вЂ” <b>РєР°Р»РµРЅРґР°СЂРЅС‹Рµ СЃСѓС‚РєРё РїРѕ РњРЎРљ</b>.</p>
-        <p class="text-base-content/80">Р—Р° РІСЃРµ РІСЂРµРјСЏ: <span class="font-bold text-primary">{_esc(total_income)} в‚Ѕ</span>
-        В· Р—Р° РјРµСЃСЏС†: <span class="font-bold">{_esc(month_income)} в‚Ѕ</span>
-        В· Р—Р° СЃСѓС‚РєРё: <span class="font-bold">{_esc(day_income)} в‚Ѕ</span></p>
-        <p class="text-sm opacity-75">Р—Р°РїРёСЃРµР№ РїРѕРґРїРёСЃРѕРє РІ Р‘Р”: <b>{subs_rows_total}</b>
-        В· Р—Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№: <b>{users_blocked}</b>
-        В· РЈСЃРїРµС€РЅС‹С… РїРѕРїРѕР»РЅРµРЅРёР№ Р·Р° 24 С‡: <b>{topups_24h}</b></p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-sack-dollar text-primary mr-2" aria-hidden="true"></i>Доход</h2>
+        <p class="text-sm opacity-70">Суммы в шапке — по UTC-дню и месяцу сервера; дневная таблица ниже — <b>календарные сутки по МСК</b>.</p>
+        <p class="text-base-content/80">За все время: <span class="font-bold text-primary">{_esc(total_income)} ₽</span>
+        · За месяц: <span class="font-bold">{_esc(month_income)} ₽</span>
+        · За сутки: <span class="font-bold">{_esc(day_income)} ₽</span></p>
+        <p class="text-sm opacity-75">Записей подписок в БД: <b>{subs_rows_total}</b>
+        · Заблокированных пользователей: <b>{users_blocked}</b>
+        · Успешных пополнений за 24 ч: <b>{topups_24h}</b></p>
         <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body items-center text-center gap-2">
-              <p class="text-sm opacity-60">РњРµСЃСЏС† РѕС‚ РІСЃРµРіРѕ РѕР±РѕСЂРѕС‚Р°</p>
+              <p class="text-sm opacity-60">Месяц от всего оборота</p>
               <div class="radial-progress text-primary" style="--value:{month_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{month_pct}">{month_pct}%</div>
             </div>
           </div>
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body items-center text-center gap-2">
-              <p class="text-sm opacity-60">Р”РµРЅСЊ РѕС‚ РјРµСЃСЏС†Р°</p>
+              <p class="text-sm opacity-60">День от месяца</p>
               <div class="radial-progress text-secondary" style="--value:{day_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{day_pct}">{day_pct}%</div>
             </div>
           </div>
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body items-center text-center gap-2">
-              <p class="text-sm opacity-60">РЎ РїРѕРґРїРёСЃРєРѕР№ / РІСЃРµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№</p>
+              <p class="text-sm opacity-60">С подпиской / всего пользователей</p>
               <p class="text-2xl font-bold"><span class="text-success">{active_sub_users}</span> <span class="opacity-40">/</span> <span>{users_count}</span></p>
-              <p class="text-xs opacity-50">РђРєС‚РёРІРЅР°СЏ РёР»Рё С‚СЂРёР°Р», СЃСЂРѕРє РЅРµ РёСЃС‚С‘Рє</p>
+              <p class="text-xs opacity-50">Активная или триал, срок не истёк</p>
               <div class="radial-progress text-success" style="--value:{sub_pct}; --size:7.5rem; --thickness: 10px;" role="progressbar" aria-valuenow="{sub_pct}">{sub_pct}%</div>
             </div>
           </div>
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body justify-center text-center">
-              <p class="text-sm opacity-60 mb-2">РџСЂРѕРјРѕРєРѕРґРѕРІ РІ Р±Р°Р·Рµ</p>
+              <p class="text-sm opacity-60 mb-2">Промокодов в базе</p>
               <p class="text-2xl font-bold text-accent">{promos_count}</p>
             </div>
           </div>
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body justify-center text-center gap-2">
-              <p class="text-sm opacity-60">Р РёСЃРє РјРёРЅСѓСЃР°</p>
-              <p class="text-base"><span class="badge badge-error badge-sm mr-2">1С‡: {risk_1h_users}</span><span class="badge badge-warning badge-sm">24С‡: {risk_24h_users}</span></p>
-              <a class="link link-primary text-xs" href="/admin/users?risk=1h">РћС‚РєСЂС‹С‚СЊ РєСЂРёС‚РёС‡РЅС‹С…</a>
+              <p class="text-sm opacity-60">Риск минуса</p>
+              <p class="text-base"><span class="badge badge-error badge-sm mr-2">1ч: {risk_1h_users}</span><span class="badge badge-warning badge-sm">24ч: {risk_24h_users}</span></p>
+              <a class="link link-primary text-xs" href="/admin/users?risk=1h">Открыть критичных</a>
             </div>
           </div>
           <div class="card bg-base-200/50 border border-base-content/5 shadow-md">
             <div class="card-body justify-center text-center gap-2">
-              <p class="text-sm opacity-60">Observability (24С‡)</p>
+              <p class="text-sm opacity-60">Observability (24ч)</p>
               <p class="text-xs">
                 <span class="badge badge-success badge-xs mr-1">webhook ok: {webhook_ok_24h}</span>
                 <span class="badge badge-warning badge-xs mr-1">dup: {webhook_dup_24h}</span>
                 <span class="badge badge-error badge-xs">invalid: {webhook_invalid_24h}</span>
               </p>
               <p class="text-xs">
-                rating: <b>{rating_events_24h}</b> В· rejects: <b>{ledger_rejects_24h}</b> В· transitions: <b>{transitions_24h}</b>
+                rating: <b>{rating_events_24h}</b> · rejects: <b>{ledger_rejects_24h}</b> · transitions: <b>{transitions_24h}</b>
               </p>
             </div>
           </div>
         </div>
-        <p class="text-sm opacity-60">РЈС‡РёС‚С‹РІР°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ РїР»Р°С‚РµР¶Рё (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
+        <p class="text-sm opacity-60">Учитываются только платежи (<code class="bg-base-300 px-1.5 py-0.5 rounded text-xs">type=topup,status=completed</code>).</p>
       </div>
     </div>
     """
@@ -4917,7 +4917,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
 
 @router.get("/topups")
 async def admin_topups_history(request: Request, limit: int = 200) -> HTMLResponse:
-    """Р›РµРЅС‚Р° РїРѕРїРѕР»РЅРµРЅРёР№ Р±Р°Р»Р°РЅСЃР° (topup + СЂСѓС‡РЅС‹Рµ РЅР°С‡РёСЃР»РµРЅРёСЏ Р°РґРјРёРЅРѕРј)."""
+    """Лента пополнений баланса (topup + ручные начисления админом)."""
     denied = _require_login(request)
     if denied is not None:
         return denied
@@ -4943,9 +4943,9 @@ async def admin_topups_history(request: Request, limit: int = 200) -> HTMLRespon
 
     def _type_label(t: str) -> str:
         if t == "topup":
-            return "РџРѕРїРѕР»РЅРµРЅРёРµ"
+            return "Пополнение"
         if t == "admin_balance_add":
-            return "РќР°С‡РёСЃР»РµРЅРёРµ Р°РґРјРёРЅРѕРј"
+            return "Начисление админом"
         return t
 
     body_rows: list[str] = []
@@ -4959,13 +4959,13 @@ async def admin_topups_history(request: Request, limit: int = 200) -> HTMLRespon
         un = (u.username or "").strip()
         name_bits = " ".join(x for x in ((u.first_name or "").strip(), (u.last_name or "").strip()) if x)
         who = f"@{un}" if un else (name_bits or f"#{u.id}")
-        prov = (txn.payment_provider or "").strip() or "вЂ”"
+        prov = (txn.payment_provider or "").strip() or "—"
         body_rows.append(
             f"<tr class='border-b border-base-content/10 hover:bg-base-200/40'>"
             f"<td class='whitespace-nowrap text-xs opacity-80'>{_esc(rel)}</td>"
             f"<td class='text-sm'><a class='link link-primary font-medium' href='/admin/users/{u.id}'>{_esc(who)}</a>"
-            f"<span class='text-xs opacity-60 ml-1'>#{u.id} В· tg:{u.telegram_id}</span></td>"
-            f"<td class='font-mono font-semibold text-success'>+{_esc(amt_s)} в‚Ѕ</td>"
+            f"<span class='text-xs opacity-60 ml-1'>#{u.id} · tg:{u.telegram_id}</span></td>"
+            f"<td class='font-mono font-semibold text-success'>+{_esc(amt_s)} ₽</td>"
             f"<td class='text-xs'><span class='badge badge-ghost badge-sm'>{_esc(_type_label(txn.type))}</span></td>"
             f"<td class='text-xs opacity-70'>{_esc(prov)}</td>"
             f"<td class='text-xs whitespace-nowrap opacity-60'>{_esc(_fmt_dt_msk(txn.created_at))}</td>"
@@ -4977,18 +4977,18 @@ async def admin_topups_history(request: Request, limit: int = 200) -> HTMLRespon
         "<div class='card-body gap-4'>"
         "<div class='flex flex-wrap items-center justify-between gap-2'>"
         "<h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-money-bill-transfer text-primary mr-2' aria-hidden='true'></i>"
-        "РСЃС‚РѕСЂРёСЏ РїРѕРїРѕР»РЅРµРЅРёР№</h2>"
-        "<span class='text-xs opacity-60'>РџРѕСЃР»РµРґРЅРёРµ Р·Р°РїРёСЃРё: РїРѕРїРѕР»РЅРµРЅРёСЏ С‡РµСЂРµР· РїР»Р°С‚РµР¶Рё Рё СЂСѓС‡РЅС‹Рµ РЅР°С‡РёСЃР»РµРЅРёСЏ РёР· Р°РґРјРёРЅРєРё</span>"
+        "История пополнений</h2>"
+        "<span class='text-xs opacity-60'>Последние записи: пополнения через платежи и ручные начисления из админки</span>"
         "</div>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'>"
         "<thead><tr>"
-        "<th>РљРѕРіРґР°</th><th>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ</th><th>РЎСѓРјРјР°</th><th>РўРёРї</th><th>РџСЂРѕРІР°Р№РґРµСЂ / РёСЃС‚РѕС‡РЅРёРє</th><th>Р”Р°С‚Р° РњРЎРљ</th>"
+        "<th>Когда</th><th>Пользователь</th><th>Сумма</th><th>Тип</th><th>Провайдер / источник</th><th>Дата МСК</th>"
         "</tr></thead>"
-        f"<tbody>{''.join(body_rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Р—Р°РїРёСЃРµР№ РїРѕРєР° РЅРµС‚</td></tr>'}</tbody>"
+        f"<tbody>{''.join(body_rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Записей пока нет</td></tr>'}</tbody>"
         "</table></div></div></div>"
     )
-    return _layout("РСЃС‚РѕСЂРёСЏ РїРѕРїРѕР»РЅРµРЅРёР№", table, request=request)
+    return _layout("История пополнений", table, request=request)
 
 
 @router.get("/tickets")
@@ -5018,65 +5018,65 @@ async def admin_tickets(request: Request) -> HTMLResponse:
             ops_block = (
                 "<div class='card bg-base-100 border border-base-content/10 shadow-lg mb-4'>"
                 "<div class='card-body gap-3'>"
-                "<h3 class='card-title text-lg'><i class='fa-solid fa-user-check text-primary mr-2'></i>РћРїРµСЂР°С‚РѕСЂС‹</h3>"
+                "<h3 class='card-title text-lg'><i class='fa-solid fa-user-check text-primary mr-2'></i>Операторы</h3>"
                 "<div class='overflow-x-auto'><table class='table table-sm'>"
-                "<thead><tr><th>РћРїРµСЂР°С‚РѕСЂ</th><th>Р РµР№С‚РёРЅРі</th><th>рџ‘Ќ / рџ‘Ћ</th><th>Р—Р°РєСЂС‹С‚Рѕ</th></tr></thead>"
+                "<thead><tr><th>Оператор</th><th>Рейтинг</th><th>👍 / 👎</th><th>Закрыто</th></tr></thead>"
                 "<tbody>" + "".join(rows) + "</tbody></table></div></div></div>"
             )
     body = ops_block + """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="card-title text-2xl"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>РўРёРєРµС‚С‹</h2>
-          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/admin/tickets" title="РЎР±СЂРѕСЃРёС‚СЊ С„РёР»СЊС‚СЂС‹"><i class="fa-solid fa-rotate" aria-hidden="true"></i>РЎР±СЂРѕСЃ</a>
+          <h2 class="card-title text-2xl"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Тикеты</h2>
+          <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="/admin/tickets" title="Сбросить фильтры"><i class="fa-solid fa-rotate" aria-hidden="true"></i>Сброс</a>
         </div>
         <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
-          <label class="form-control"><span class="label-text text-xs opacity-70">РЎС‚Р°С‚СѓСЃ</span>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Статус</span>
             <select id="tk-status" class="select select-bordered select-sm h-9 min-h-9 text-sm">
-              <option value="">Р’СЃРµ</option>
-              <option value="open">РћС‚РєСЂС‹С‚</option>
-              <option value="in_progress">Р’ СЂР°Р±РѕС‚Рµ</option>
-              <option value="closed">Р—Р°РєСЂС‹С‚</option>
+              <option value="">Все</option>
+              <option value="open">Открыт</option>
+              <option value="in_progress">В работе</option>
+              <option value="closed">Закрыт</option>
             </select>
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">РўРµРјР° (topic_id)</span>
-            <input id="tk-topic" type="number" min="0" step="1" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="РїСѓСЃС‚Рѕ вЂ” РІСЃРµ" />
+          <label class="form-control"><span class="label-text text-xs opacity-70">Тема (topic_id)</span>
+            <input id="tk-topic" type="number" min="0" step="1" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="пусто — все" />
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">РќР°Р·РЅР°С‡РµРЅРёРµ</span>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Назначение</span>
             <select id="tk-assigned" class="select select-bordered select-sm h-9 min-h-9 text-sm">
-              <option value="">Р’СЃРµ</option>
-              <option value="none">Р‘РµР· РѕС‚РІРµС‚СЃС‚РІРµРЅРЅРѕРіРѕ</option>
-              <option value="me">РќР° РјРЅРµ</option>
+              <option value="">Все</option>
+              <option value="none">Без ответственного</option>
+              <option value="me">На мне</option>
             </select>
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">Р‘РёР»Р»РёРЅРі СЋР·РµСЂР°</span>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Биллинг юзера</span>
             <select id="tk-billing" class="select select-bordered select-sm h-9 min-h-9 text-sm">
-              <option value="">Р’СЃРµ</option>
+              <option value="">Все</option>
               <option value="hybrid">Hybrid</option>
               <option value="legacy">Legacy</option>
             </select>
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">Р”Р°С‚Р° СЃ</span>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Дата с</span>
             <input id="tk-from" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
           </label>
-          <label class="form-control"><span class="label-text text-xs opacity-70">Р”Р°С‚Р° РїРѕ</span>
+          <label class="form-control"><span class="label-text text-xs opacity-70">Дата по</span>
             <input id="tk-to" type="date" class="input input-bordered input-sm h-9 min-h-9 text-sm" />
           </label>
-          <label class="form-control md:col-span-2 xl:col-span-2"><span class="label-text text-xs opacity-70">РџРѕРёСЃРє</span>
-            <input id="tk-q" type="text" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="ID, С‚РµРєСЃС‚, РёРјСЏ, username" />
+          <label class="form-control md:col-span-2 xl:col-span-2"><span class="label-text text-xs opacity-70">Поиск</span>
+            <input id="tk-q" type="text" class="input input-bordered input-sm h-9 min-h-9 text-sm" placeholder="ID, текст, имя, username" />
           </label>
         </div>
         <div class="flex items-center gap-2">
-          <button id="tk-apply" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-filter" aria-hidden="true"></i>РџСЂРёРјРµРЅРёС‚СЊ</button>
+          <button id="tk-apply" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-filter" aria-hidden="true"></i>Применить</button>
           <select id="tk-sort" class="select select-bordered select-sm h-9 min-h-9 text-sm w-[220px]">
-            <option value="desc">РќРѕРІС‹Рµ РїРѕ Р°РєС‚РёРІРЅРѕСЃС‚Рё</option>
-            <option value="asc">РЎС‚Р°СЂС‹Рµ РїРѕ Р°РєС‚РёРІРЅРѕСЃС‚Рё</option>
+            <option value="desc">Новые по активности</option>
+            <option value="asc">Старые по активности</option>
           </select>
         </div>
       </div>
     </div>
     <div id="tk-grid" class="grid gap-4 md:grid-cols-2 mt-4"></div>
-    <div id="tk-empty" class="hidden alert mt-4"><span>РќРµС‚ С‚РёРєРµС‚РѕРІ РїРѕ С‚РµРєСѓС‰РёРј С„РёР»СЊС‚СЂР°Рј.</span></div>
+    <div id="tk-empty" class="hidden alert mt-4"><span>Нет тикетов по текущим фильтрам.</span></div>
     <script>
     (function(){
       var grid=document.getElementById('tk-grid');
@@ -5094,9 +5094,9 @@ async def admin_tickets(request: Request) -> HTMLResponse:
       var inFlight=null;
       function esc(s){return String(s||'').replace(/[&<>\"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]||ch;});}
       function statusBadge(s){
-        if(s==='open')return '<span class=\"badge badge-info badge-sm\">РћС‚РєСЂС‹С‚</span>';
-        if(s==='in_progress')return '<span class=\"badge badge-warning badge-sm\">Р’ СЂР°Р±РѕС‚Рµ</span>';
-        return '<span class=\"badge badge-ghost badge-sm\">Р—Р°РєСЂС‹С‚</span>';
+        if(s==='open')return '<span class=\"badge badge-info badge-sm\">Открыт</span>';
+        if(s==='in_progress')return '<span class=\"badge badge-warning badge-sm\">В работе</span>';
+        return '<span class=\"badge badge-ghost badge-sm\">Закрыт</span>';
       }
       function avatarFor(u){
         var uid=u&&u.id?u.id:'0';
@@ -5112,25 +5112,25 @@ async def admin_tickets(request: Request) -> HTMLResponse:
       }
       function card(t){
         var u=t.user||{};
-        var uname=u.username?('@'+u.username):'вЂ”';
-        var nm=(u.first_name||u.username||('user#'+u.id||'вЂ”'));
+        var uname=u.username?('@'+u.username):'—';
+        var nm=(u.first_name||u.username||('user#'+u.id||'—'));
         var prev=esc((t.preview||'').slice(0,180));
-        var ass=t.operator_id?('#'+t.operator_id):'вЂ”';
+        var ass=t.operator_id?('#'+t.operator_id):'—';
         var top=(t.topic_id!==undefined&&t.topic_id!==null)?('<span class=\"badge badge-ghost badge-xs\">topic '+esc(String(t.topic_id))+'</span>'):'';
         return ''
           +'<div class=\"card bg-base-100 border border-base-content/10 shadow-md hover:shadow-lg transition-shadow\">'
           +'<div class=\"card-body gap-3\">'
           +'<div class=\"flex items-start justify-between gap-2 flex-wrap\">'
-          +'<div class=\"flex items-center gap-2 flex-wrap\"><h3 class=\"card-title text-lg\">РўРёРєРµС‚ #'+t.id+'</h3>'+top+'</div>'
+          +'<div class=\"flex items-center gap-2 flex-wrap\"><h3 class=\"card-title text-lg\">Тикет #'+t.id+'</h3>'+top+'</div>'
           +statusBadge(t.status)+'</div>'
           +'<div class=\"flex items-center gap-3\">'+avatarFor(u)
           +'<div class=\"min-w-0\"><a class=\"link link-primary font-medium truncate block\" href=\"/admin/users/'+u.id+'\">'+esc(nm)+'</a>'
           +'<p class=\"text-xs opacity-70 truncate\">'+esc(uname)+'</p></div></div>'
           +'<p class=\"text-sm opacity-80 line-clamp-3\">'+prev+'</p>'
-          +'<div class=\"text-xs opacity-70\">РЎРѕР·РґР°РЅ: '+esc(t.created_at||'вЂ”')+'</div>'
-          +'<div class=\"text-xs opacity-70\">РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ: '+esc(t.last_activity||'вЂ”')+'</div>'
-          +'<div class=\"text-xs opacity-70\">РќР°Р·РЅР°С‡РµРЅ: '+esc(ass)+'</div>'
-          +'<div class=\"card-actions justify-end\"><a class=\"btn btn-ghost btn-sm\" href=\"/admin/tickets/'+t.id+'\">РћС‚РєСЂС‹С‚СЊ</a></div>'
+          +'<div class=\"text-xs opacity-70\">Создан: '+esc(t.created_at||'—')+'</div>'
+          +'<div class=\"text-xs opacity-70\">Последняя активность: '+esc(t.last_activity||'—')+'</div>'
+          +'<div class=\"text-xs opacity-70\">Назначен: '+esc(ass)+'</div>'
+          +'<div class=\"card-actions justify-end\"><a class=\"btn btn-ghost btn-sm\" href=\"/admin/tickets/'+t.id+'\">Открыть</a></div>'
           +'</div></div>';
       }
       async function loadTickets(){
@@ -5148,7 +5148,7 @@ async def admin_tickets(request: Request) -> HTMLResponse:
         p.set('limit','200');
         try{
           var res=await fetch('/api/tickets?'+p.toString(),{credentials:'include',signal:inFlight.signal});
-          if(!res.ok){grid.innerHTML='<div class=\"alert alert-error\"><span>РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё: '+res.status+'</span></div>';empty.classList.add('hidden');return;}
+          if(!res.ok){grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки: '+res.status+'</span></div>';empty.classList.add('hidden');return;}
           var data=await res.json();
           var items=(data&&data.items)||[];
           if(!items.length){grid.innerHTML='';empty.classList.remove('hidden');return;}
@@ -5156,7 +5156,7 @@ async def admin_tickets(request: Request) -> HTMLResponse:
           grid.innerHTML=items.map(card).join('');
         }catch(e){
           if(e && e.name==='AbortError')return;
-          grid.innerHTML='<div class=\"alert alert-error\"><span>РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё СЃРїРёСЃРєР° С‚РёРєРµС‚РѕРІ.</span></div>';
+          grid.innerHTML='<div class=\"alert alert-error\"><span>Ошибка загрузки списка тикетов.</span></div>';
           empty.classList.add('hidden');
         }
       }
@@ -5191,7 +5191,7 @@ async def admin_payg_mass_convert(
         return denied
     if (confirm_word or "").strip().upper() != "PAYG":
         return RedirectResponse(
-            "/admin?err=" + quote_plus("РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РЅРµ РїСЂРѕС€Р»Рѕ: РІРІРµРґРёС‚Рµ PAYG."),
+            "/admin?err=" + quote_plus("Подтверждение не прошло: введите PAYG."),
             status_code=303,
         )
     async with await _session() as session:
@@ -5223,7 +5223,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         return denied
     settings = get_settings()
     admin_opts: list[dict[str, object]] = []
-    # Р—Р°РіСЂСѓР¶Р°РµРј РѕРїРµСЂР°С‚РѕСЂРѕРІ РёР· С‚Р°Р±Р»РёС†С‹ admin_users (RBAC) вЂ” db_id = admin_users.id
+    # Загружаем операторов из таблицы admin_users (RBAC) — db_id = admin_users.id
     async with await _session() as session:
         from shared.models.admin_user import AdminUser
         au_rows = (
@@ -5237,7 +5237,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             name = ((u.first_name or u.username or "").strip() or f"admin#{au.id}")
             label = f"#{u.id} {name}"
             admin_opts.append({
-                "db_id": int(au.id),          # admin_users.id вЂ” FK РІ tickets.operator_id
+                "db_id": int(au.id),          # admin_users.id — FK в tickets.operator_id
                 "tg_id": int(u.telegram_id),
                 "label": label,
             })
@@ -5246,43 +5246,43 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     <div class="grid gap-4 lg:grid-cols-3 items-start">
       <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-1 self-start">
         <div class="card-body gap-3">
-          <h2 class="card-title text-2xl"><i class="fa-solid fa-ticket text-primary mr-2" aria-hidden="true"></i>РўРёРєРµС‚ #{ticket_id}</h2>
-          <div id="tk-meta" class="text-sm opacity-80">Р—Р°РіСЂСѓР·РєР°...</div>
+          <h2 class="card-title text-2xl"><i class="fa-solid fa-ticket text-primary mr-2" aria-hidden="true"></i>Тикет #{ticket_id}</h2>
+          <div id="tk-meta" class="text-sm opacity-80">Загрузка...</div>
           <div id="tk-user" class="text-sm border border-base-content/10 rounded-lg p-2 bg-base-200/30 mt-2 hidden"></div>
           <div id="tk-mgmt" class="text-sm border border-warning/25 rounded-lg p-2 bg-base-200/40 mt-2 hidden"></div>
           <div class="grid gap-2">
             <label class="form-control">
-              <span class="label-text text-xs opacity-70">РќР°Р·РЅР°С‡РµРЅРЅС‹Р№ Р°РґРјРёРЅ</span>
+              <span class="label-text text-xs opacity-70">Назначенный админ</span>
               <select id="tk-assign" class="select select-bordered select-sm h-9 min-h-9 text-sm"></select>
             </label>
-            <button id="tk-assign-save" class="btn btn-outline btn-sm h-9 min-h-9">РЎРѕС…СЂР°РЅРёС‚СЊ РЅР°Р·РЅР°С‡РµРЅРёРµ</button>
+            <button id="tk-assign-save" class="btn btn-outline btn-sm h-9 min-h-9">Сохранить назначение</button>
           </div>
           <div class="flex flex-wrap gap-2 pt-1">
-            <button id="tk-set-open" class="btn btn-ghost btn-sm h-9 min-h-9">РћС‚РєСЂС‹С‚</button>
-            <button id="tk-set-progress" class="btn btn-warning btn-sm h-9 min-h-9">Р’ СЂР°Р±РѕС‚Рµ</button>
-            <button id="tk-set-closed" class="btn btn-error btn-sm h-9 min-h-9">Р—Р°РєСЂС‹С‚СЊ</button>
+            <button id="tk-set-open" class="btn btn-ghost btn-sm h-9 min-h-9">Открыт</button>
+            <button id="tk-set-progress" class="btn btn-warning btn-sm h-9 min-h-9">В работе</button>
+            <button id="tk-set-closed" class="btn btn-error btn-sm h-9 min-h-9">Закрыть</button>
           </div>
         </div>
       </div>
       <div class="card bg-base-100 border border-base-content/10 shadow-lg lg:col-span-2 self-start">
         <div class="card-body gap-3">
-          <h3 class="card-title text-xl"><i class="fa-solid fa-comments text-primary mr-2" aria-hidden="true"></i>Р”РёР°Р»РѕРі</h3>
+          <h3 class="card-title text-xl"><i class="fa-solid fa-comments text-primary mr-2" aria-hidden="true"></i>Диалог</h3>
           <div id="tk-chat" class="max-h-[62vh] overflow-y-auto rounded-xl border border-base-content/10 bg-base-200/40 p-3 space-y-2"></div>
           <div id="tk-compose" class="grid gap-2">
             <div class="flex items-start gap-2">
               <input id="tk-file-input" type="file" accept="image/*,video/*" class="hidden"/>
-              <button id="tk-attach" class="btn btn-ghost btn-sm btn-square h-10 min-h-10" title="РџСЂРёРєСЂРµРїРёС‚СЊ С„РѕС‚Рѕ/РІРёРґРµРѕ"><i class="fa-solid fa-paperclip" aria-hidden="true"></i></button>
-              <textarea id="tk-text" class="textarea textarea-bordered min-h-[44px] h-[44px] max-h-56 resize-none flex-1" placeholder="Р’РІРµРґРёС‚Рµ РѕС‚РІРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ РёР»Рё Р·Р°РјРµС‚РєСѓ (Enter = РѕС‚РїСЂР°РІРёС‚СЊ, Shift+Enter = РЅРѕРІР°СЏ СЃС‚СЂРѕРєР°)"></textarea>
-              <button id="tk-send-reply" class="btn btn-primary btn-sm btn-square h-10 min-h-10" title="РћС‚РїСЂР°РІРёС‚СЊ РѕС‚РІРµС‚"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
+              <button id="tk-attach" class="btn btn-ghost btn-sm btn-square h-10 min-h-10" title="Прикрепить фото/видео"><i class="fa-solid fa-paperclip" aria-hidden="true"></i></button>
+              <textarea id="tk-text" class="textarea textarea-bordered min-h-[44px] h-[44px] max-h-56 resize-none flex-1" placeholder="Введите ответ пользователю или заметку (Enter = отправить, Shift+Enter = новая строка)"></textarea>
+              <button id="tk-send-reply" class="btn btn-primary btn-sm btn-square h-10 min-h-10" title="Отправить ответ"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
             </div>
-            <button id="tk-send-note" class="btn btn-outline btn-sm w-full h-10 min-h-10" title="Р”РѕР±Р°РІРёС‚СЊ РІРЅСѓС‚СЂРµРЅРЅСЋСЋ Р·Р°РјРµС‚РєСѓ"><i class="fa-solid fa-note-sticky mr-2" aria-hidden="true"></i>Р”РѕР±Р°РІРёС‚СЊ Р·Р°РјРµС‚РєСѓ</button>
-            <button id="tk-sound-toggle" class="btn btn-ghost btn-xs self-end" type="button" title="Р’РєР»/РІС‹РєР» Р·РІСѓРє СѓРІРµРґРѕРјР»РµРЅРёР№">Р—РІСѓРє: РІРєР»</button>
+            <button id="tk-send-note" class="btn btn-outline btn-sm w-full h-10 min-h-10" title="Добавить внутреннюю заметку"><i class="fa-solid fa-note-sticky mr-2" aria-hidden="true"></i>Добавить заметку</button>
+            <button id="tk-sound-toggle" class="btn btn-ghost btn-xs self-end" type="button" title="Вкл/выкл звук уведомлений">Звук: вкл</button>
           </div>
         </div>
       </div>
     </div>
-    <div id="tk-photo-lb" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6 cursor-zoom-out" role="dialog" aria-modal="true" aria-label="РџСЂРѕСЃРјРѕС‚СЂ РІР»РѕР¶РµРЅРёСЏ">
-      <a id="tk-media-download" href="#" download class="absolute top-5 right-5 btn btn-circle btn-sm btn-ghost text-white/90 hover:text-white" title="РЎРєР°С‡Р°С‚СЊ"><i class="fa-solid fa-download"></i></a>
+    <div id="tk-photo-lb" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6 cursor-zoom-out" role="dialog" aria-modal="true" aria-label="Просмотр вложения">
+      <a id="tk-media-download" href="#" download class="absolute top-5 right-5 btn btn-circle btn-sm btn-ghost text-white/90 hover:text-white" title="Скачать"><i class="fa-solid fa-download"></i></a>
       <img id="tk-photo-lb-img" src="" alt="" class="hidden max-h-[90vh] max-w-[min(95vw,1280px)] w-auto h-auto object-contain rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" decoding="async"/>
       <video id="tk-photo-lb-video" class="hidden max-h-[90vh] max-w-[min(95vw,1280px)] rounded-lg shadow-2xl ring-2 ring-white/10 cursor-default pointer-events-auto" controls playsinline></video>
     </div>
@@ -5299,7 +5299,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
     (function(){{
       var ticketId={ticket_id};
       var admins={admins_json};
-      var stMap={{"open":["badge-info","РћС‚РєСЂС‹С‚"],"in_progress":["badge-warning","Р’ СЂР°Р±РѕС‚Рµ"],"closed":["badge-ghost","Р—Р°РєСЂС‹С‚"]}};
+      var stMap={{"open":["badge-info","Открыт"],"in_progress":["badge-warning","В работе"],"closed":["badge-ghost","Закрыт"]}};
       var meta=document.getElementById('tk-meta');
       var user=document.getElementById('tk-user');
       var chat=document.getElementById('tk-chat');
@@ -5349,7 +5349,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       function updateSoundBtn() {{
         var b=document.getElementById('tk-sound-toggle');
         if(!b) return;
-        b.textContent='Р—РІСѓРє: '+(soundEnabled?'РІРєР»':'РІС‹РєР»');
+        b.textContent='Звук: '+(soundEnabled?'вкл':'выкл');
       }}
       function playNotifyTone() {{
         if(!soundEnabled || document.hidden) return;
@@ -5372,7 +5372,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       }}
       function initAssign() {{
         assign.innerHTML='';
-        var opt=document.createElement('option');opt.value='';opt.textContent='вЂ” РЅРµ РЅР°Р·РЅР°С‡РµРЅ вЂ”';assign.appendChild(opt);
+        var opt=document.createElement('option');opt.value='';opt.textContent='— не назначен —';assign.appendChild(opt);
         admins.forEach(function(a){{
           var o=document.createElement('option');
           o.value=String(a.tg_id||'');
@@ -5384,16 +5384,16 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       function renderMeta() {{
         if(!model) return;
         var t=model.ticket||{{}};
-        var u=t.user_id||'вЂ”';
+        var u=t.user_id||'—';
         var tg=t.telegram_user_id||0;
         var st=t.status||'open';
         var b=stMap[st]||['badge-ghost',st];
         meta.innerHTML=''
-          +'РЎС‚Р°С‚СѓСЃ: <span class="badge '+b[0]+' badge-sm">'+esc(b[1])+'</span><br>'
-          +'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <a class="link link-primary" href="/admin/users/'+u+'">#'+u+'</a>'+(tg?(' В· <a class="link" href="tg://user?id='+tg+'">tg://user?id='+tg+'</a>'):'')+'<br>'
-          +'РЎРѕР·РґР°РЅ: '+esc(t.created_at||'вЂ”')+'<br>'
-          +'РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ: '+esc(t.last_activity||'вЂ”')+'<br>'
-          +'Р—Р°РєСЂС‹С‚: '+esc(t.closed_at||'вЂ”');
+          +'Статус: <span class="badge '+b[0]+' badge-sm">'+esc(b[1])+'</span><br>'
+          +'Пользователь: <a class="link link-primary" href="/admin/users/'+u+'">#'+u+'</a>'+(tg?(' · <a class="link" href="tg://user?id='+tg+'">tg://user?id='+tg+'</a>'):'')+'<br>'
+          +'Создан: '+esc(t.created_at||'—')+'<br>'
+          +'Последняя активность: '+esc(t.last_activity||'—')+'<br>'
+          +'Закрыт: '+esc(t.closed_at||'—');
         compose.classList.toggle('hidden', st==='closed');
       }}
       function renderUserPanel() {{
@@ -5402,16 +5402,16 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         var s=model&&model.user_subscription;
         if(!u){{ user.innerHTML=''; user.classList.add('hidden'); return; }}
         user.classList.remove('hidden');
-        var name=((u.first_name||'')+' '+(u.last_name||'')).trim()||'вЂ”';
-        var un=u.username?('@'+u.username):'вЂ”';
+        var name=((u.first_name||'')+' '+(u.last_name||'')).trim()||'—';
+        var un=u.username?('@'+u.username):'—';
         var sub=s
-          ? '<p class="text-xs mt-1">РџРѕРґРїРёСЃРєР°: <span class="badge badge-success badge-sm">'+esc(s.status)+'</span> '+esc(s.plan_name||'')+' В· РґРѕ '+esc(s.expires_at||'')+'</p>'
-          : '<p class="text-xs opacity-60 mt-1">РђРєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё РІ Р±РѕС‚Рµ РЅРµС‚</p>';
+          ? '<p class="text-xs mt-1">Подписка: <span class="badge badge-success badge-sm">'+esc(s.status)+'</span> '+esc(s.plan_name||'')+' · до '+esc(s.expires_at||'')+'</p>'
+          : '<p class="text-xs opacity-60 mt-1">Активной подписки в боте нет</p>';
         user.innerHTML='<div class="font-semibold">'+esc(name)+'</div>'
-          +'<p class="text-xs opacity-70">'+esc(un)+' В· tg id '+esc(String(u.telegram_id))+'</p>'
-          +'<p class="text-xs">Р‘Р°Р»Р°РЅСЃ: <b>'+esc(String(u.balance))+' в‚Ѕ</b>'
-          +(u.is_blocked?' В· <span class="badge badge-error badge-sm">Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ</span>':'')
-          +' В· <a class="link link-primary" href="/admin/users/'+u.id+'">РџСЂРѕС„РёР»СЊ</a></p>'
+          +'<p class="text-xs opacity-70">'+esc(un)+' · tg id '+esc(String(u.telegram_id))+'</p>'
+          +'<p class="text-xs">Баланс: <b>'+esc(String(u.balance))+' ₽</b>'
+          +(u.is_blocked?' · <span class="badge badge-error badge-sm">заблокирован</span>':'')
+          +' · <a class="link link-primary" href="/admin/users/'+u.id+'">Профиль</a></p>'
           +sub;
       }}
       function renderMgmt() {{
@@ -5423,20 +5423,20 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         if(!u||u.is_blocked){{ m.classList.add('hidden'); m.innerHTML=''; return; }}
         m.classList.remove('hidden');
         var base='/admin/tickets/'+ticketId+'/user';
-        var html='<div class="font-semibold text-warning">РЈРїСЂР°РІР»РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»РµРј</div>';
+        var html='<div class="font-semibold text-warning">Управление пользователем</div>';
         html+='<form method="post" action="'+base+'/add-balance" class="flex flex-wrap gap-2 items-end mt-2">'
-          +'<label class="form-control"><span class="label-text text-xs">Р‘Р°Р»Р°РЅСЃ +в‚Ѕ</span>'
+          +'<label class="form-control"><span class="label-text text-xs">Баланс +₽</span>'
           +'<input type="text" name="amount" class="input input-bordered input-sm w-28" placeholder="0" required/></label>'
-          +'<button type="submit" class="btn btn-primary btn-sm">РџРѕРїРѕР»РЅРёС‚СЊ</button>'
+          +'<button type="submit" class="btn btn-primary btn-sm">Пополнить</button>'
           +'</form>';
         if(s&&s.id){{
           html+='<form method="post" action="'+base+'/add-months" class="flex flex-wrap gap-2 items-end mt-2">'
             +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
-            +'<label class="form-control"><span class="label-text text-xs">РџСЂРѕРґР»РµРЅРёРµ (РјРµСЃ.)</span>'
+            +'<label class="form-control"><span class="label-text text-xs">Продление (мес.)</span>'
             +'<input type="number" name="months" min="1" max="120" class="input input-bordered input-sm w-24" value="1" required/></label>'
-            +'<button type="submit" class="btn btn-outline btn-sm">РџСЂРѕРґР»РёС‚СЊ</button>'
+            +'<button type="submit" class="btn btn-outline btn-sm">Продлить</button>'
             +'<div class="w-full flex items-center gap-1 text-xs opacity-80">'
-            +'<span>Р‘С‹СЃС‚СЂРѕ:</span>'
+            +'<span>Быстро:</span>'
             +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=1">1</button>'
             +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=3">3</button>'
             +'<button type="button" class="btn btn-ghost btn-xs" onclick="this.closest(&quot;form&quot;).querySelector(&quot;input[name=months]&quot;).value=6">6</button>'
@@ -5445,20 +5445,20 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +'</form>';
           var ar=!!s.auto_renew;
           var nxt=ar?'0':'1';
-          var lbl=ar?'Р’С‹РєР»СЋС‡РёС‚СЊ Р°РІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ':'Р’РєР»СЋС‡РёС‚СЊ Р°РІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ';
+          var lbl=ar?'Выключить авто-продление':'Включить авто-продление';
           html+='<form method="post" action="'+base+'/subscription/auto-renew" class="mt-2">'
             +'<input type="hidden" name="enabled" value="'+nxt+'"/>'
             +'<button type="submit" class="btn btn-ghost btn-xs">'+esc(lbl)+'</button>'
             +'</form>';
-          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" data-remna-confirm-msg="РћС‚РєР»СЋС‡РёС‚СЊ РїРѕРґРїРёСЃРєСѓ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ?">'
+          html+='<form method="post" action="'+base+'/subscription/disable" class="mt-2" data-remna-confirm-msg="Отключить подписку пользователя?">'
             +'<input type="hidden" name="subscription_id" value="'+s.id+'"/>'
-            +'<button type="submit" class="btn btn-error btn-outline btn-sm">РћС‚РєР»СЋС‡РёС‚СЊ РїРѕРґРїРёСЃРєСѓ</button>'
+            +'<button type="submit" class="btn btn-error btn-outline btn-sm">Отключить подписку</button>'
             +'</form>';
         }}
         if(!s&&lc){{
           html+='<form method="post" action="'+base+'/subscription/enable" class="mt-2">'
             +'<input type="hidden" name="subscription_id" value="'+lc+'"/>'
-            +'<button type="submit" class="btn btn-success btn-sm">Р’РєР»СЋС‡РёС‚СЊ РѕС‚РєР»СЋС‡С‘РЅРЅСѓСЋ РїРѕРґРїРёСЃРєСѓ</button>'
+            +'<button type="submit" class="btn btn-success btn-sm">Включить отключённую подписку</button>'
             +'</form>';
         }}
         m.innerHTML=html;
@@ -5470,11 +5470,11 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var isPos=r.is_positive;
           var badge=isPos?'badge-success':'badge-error';
           var icon=isPos?'fa-thumbs-up':'fa-thumbs-down';
-          var label=isPos?'РџРѕР»РѕР¶РёС‚РµР»СЊРЅР°СЏ':'РћС‚СЂРёС†Р°С‚РµР»СЊРЅР°СЏ';
+          var label=isPos?'Положительная':'Отрицательная';
           var html='<div id="tk-rating-block" class="flex items-center gap-2 px-3 py-2 rounded-xl border '+
             (isPos?'border-success/30 bg-success/10':'border-error/30 bg-error/10')+'">'
             +'<i class="fa-solid '+icon+' '+(isPos?'text-success':'text-error')+'"></i>'
-            +'<span class="text-sm font-medium">РћС†РµРЅРєР° РїРѕРґРґРµСЂР¶РєРё:</span>'
+            +'<span class="text-sm font-medium">Оценка поддержки:</span>'
             +'<span class="badge '+badge+' badge-sm">'+esc(label)+'</span>'
             +'<span class="text-xs opacity-60">'+esc(r.created_at||'')+'</span>'
             +'</div>';
@@ -5494,23 +5494,23 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       function renderChat(shouldStickBottom) {{
         var msgs=(model&&model.messages)||[];
         if(!msgs.length) {{
-          chat.innerHTML='<div class="opacity-60 text-sm">РЎРѕРѕР±С‰РµРЅРёР№ РїРѕРєР° РЅРµС‚.</div>'; return;
+          chat.innerHTML='<div class="opacity-60 text-sm">Сообщений пока нет.</div>'; return;
         }}
         chat.innerHTML=msgs.map(function(m){{
           var left=m.sender_role==='user';
           var note=!!m.is_internal;
           var cls=note?'bg-warning/15 border-warning/35':(left?'bg-base-100 border-base-content/15':'bg-primary/10 border-primary/30');
           var row=left?'justify-start':'justify-end';
-          var who=note?'Р—Р°РјРµС‚РєР°':(left?'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ':'РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ');
-          if(!left && m.sender_label){{ who='РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ '+String(m.sender_label); }}
+          var who=note?'Заметка':(left?'Пользователь':'Администратор');
+          if(!left && m.sender_label){{ who='Администратор '+String(m.sender_label); }}
           var mediaHtml='';
           if(m.photo_file_id){{
             var psrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/photo';
-            mediaHtml+='<div class="mt-2 relative"><img src="'+psrc+'" alt="" title="РќР°Р¶РјРёС‚Рµ, С‡С‚РѕР±С‹ РѕС‚РєСЂС‹С‚СЊ РєСЂСѓРїРЅРѕ" data-kind="image" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/><a href="'+psrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="РЎРєР°С‡Р°С‚СЊ"><i class="fa-solid fa-download"></i></a></div>';
+            mediaHtml+='<div class="mt-2 relative"><img src="'+psrc+'" alt="" title="Нажмите, чтобы открыть крупно" data-kind="image" class="tk-ticket-thumb max-h-64 max-w-full rounded-lg border border-base-content/10 object-contain bg-base-300/30 cursor-pointer hover:opacity-90 transition-opacity" loading="lazy" decoding="async"/><a href="'+psrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
           }}
           if(m.video_file_id){{
             var vsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video';
-            mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="РЎРєР°С‡Р°С‚СЊ"><i class="fa-solid fa-download"></i></a></div>';
+            mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
           }}
           if(m.document_file_id){{
             var dsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/document';
@@ -5521,7 +5521,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           return ''
             +'<div class="flex w-full '+row+'">'
             +'<div class="max-w-[88%] rounded-xl border px-3 py-2 '+cls+' tk-msg-enter">'
-            +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' В· '+esc(m.created_at||'')+'</div>'
+            +'<div class="text-xs opacity-70 mb-1">'+esc(who)+' · '+esc(m.created_at||'')+'</div>'
             +textHtml
             +mediaHtml
             +'</div></div>';
@@ -5581,9 +5581,9 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var prevHeight=chat?chat.scrollHeight:0;
           var wasNearBottom=chat?(prevTop+chat.clientHeight>=prevHeight-24):true;
           var r=await fetch('/api/tickets/'+ticketId,{{credentials:'include'}});
-          if(!r.ok){{meta.textContent='РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё: HTTP '+r.status;chat.innerHTML='<div class="text-error text-sm">HTTP '+r.status+'</div>';return;}}
+          if(!r.ok){{meta.textContent='Ошибка загрузки: HTTP '+r.status;chat.innerHTML='<div class="text-error text-sm">HTTP '+r.status+'</div>';return;}}
           var ct=(r.headers.get('content-type')||'');
-          if(ct.indexOf('application/json')===-1){{meta.textContent='РћС‚РІРµС‚ РЅРµ JSON (РїСЂРѕРІРµСЂСЊС‚Рµ, С‡С‚Рѕ /api РѕС‚РєСЂС‹С‚ РЅР° СЌС‚РѕРј Р¶Рµ РґРѕРјРµРЅРµ)';chat.innerHTML='';return;}}
+          if(ct.indexOf('application/json')===-1){{meta.textContent='Ответ не JSON (проверьте, что /api открыт на этом же домене)';chat.innerHTML='';return;}}
           var nextModel=await r.json();
           var nextMsgs=(nextModel&&nextModel.messages)||[];
           if(notifyInit && nextMsgs.length>lastMsgCount){{
@@ -5606,8 +5606,8 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var atg=(model.ticket&&model.ticket.telegram_assigned_admin_id)||'';
           assign.value=atg?String(atg):'';
         }} catch(e) {{
-          meta.textContent='РћС€РёР±РєР° СЂР°Р·Р±РѕСЂР° РѕС‚РІРµС‚Р°: '+(e&&e.message?e.message:String(e));
-          chat.innerHTML='<div class="text-error text-sm opacity-90">РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РѕР±СЂР°Р·РёС‚СЊ С‚РёРєРµС‚. РћС‚РєСЂРѕР№С‚Рµ РєРѕРЅСЃРѕР»СЊ Р±СЂР°СѓР·РµСЂР° (F12) Рё РІРєР»Р°РґРєСѓ Network РґР»СЏ /api/tickets/'+ticketId+'.</div>';
+          meta.textContent='Ошибка разбора ответа: '+(e&&e.message?e.message:String(e));
+          chat.innerHTML='<div class="text-error text-sm opacity-90">Не удалось отобразить тикет. Откройте консоль браузера (F12) и вкладку Network для /api/tickets/'+ticketId+'.</div>';
         }} finally {{
           loadInFlight=false;
         }}
@@ -5618,7 +5618,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         return await r.json();
       }}
       function failToast(message){{
-        if(window.remnaToast) window.remnaToast('error', message||'РћС€РёР±РєР°');
+        if(window.remnaToast) window.remnaToast('error', message||'Ошибка');
       }}
       async function sendMedia(isInternal) {{
         var f=fileInput&&fileInput.files&&fileInput.files[0];
@@ -5638,24 +5638,24 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
       }}
       document.getElementById('tk-send-reply').addEventListener('click', async function(){{
         var v=(txt.value||'').trim(); if(!v) return;
-        try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё РѕС‚РІРµС‚Р°');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/reply','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('Ошибка отправки ответа');}}
       }});
       document.getElementById('tk-send-note').addEventListener('click', async function(){{
         var v=(txt.value||'').trim(); if(!v) return;
-        try{{await sendJson('/api/tickets/'+ticketId+'/note','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('РћС€РёР±РєР° РґРѕР±Р°РІР»РµРЅРёСЏ Р·Р°РјРµС‚РєРё');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/note','POST',{{text:v}}); txt.value=''; await load();}}catch(e){{failToast('Ошибка добавления заметки');}}
       }});
-      document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{failToast('РќРµ СѓРґР°Р»РѕСЃСЊ СЃРјРµРЅРёС‚СЊ СЃС‚Р°С‚СѓСЃ');}}}});
-      document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{failToast('РќРµ СѓРґР°Р»РѕСЃСЊ СЃРјРµРЅРёС‚СЊ СЃС‚Р°С‚СѓСЃ');}}}});
+      document.getElementById('tk-set-open').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'open'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
+      document.getElementById('tk-set-progress').addEventListener('click', async function(){{try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'in_progress'}});await load();}}catch(e){{failToast('Не удалось сменить статус');}}}});
       document.getElementById('tk-set-closed').addEventListener('click', async function(){{
         var ok=false;
-        try{{ ok = await window.remnaConfirmPromise('Р—Р°РєСЂС‹С‚СЊ С‚РёРєРµС‚?','РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ'); }}catch(_e){{ return; }}
+        try{{ ok = await window.remnaConfirmPromise('Закрыть тикет?','Подтверждение'); }}catch(_e){{ return; }}
         if(!ok)return;
-        try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{failToast('РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РєСЂС‹С‚СЊ С‚РёРєРµС‚');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/status','PATCH',{{status:'closed'}});await load();}}catch(e){{failToast('Не удалось закрыть тикет');}}
       }});
       document.getElementById('tk-assign-save').addEventListener('click', async function(){{
         var tg=assign.value||'';
         var db=assign.options[assign.selectedIndex] ? (assign.options[assign.selectedIndex].dataset.dbId||'') : '';
-        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{operator_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{failToast('РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ РЅР°Р·РЅР°С‡РµРЅРёРµ');}}
+        try{{await sendJson('/api/tickets/'+ticketId+'/assign','PATCH',{{operator_id:db?parseInt(db,10):null,telegram_assigned_admin_id:tg?parseInt(tg,10):null}});await load();}}catch(e){{failToast('Не удалось сохранить назначение');}}
       }});
       if(txt){{
         txt.addEventListener('input', autosizeText);
@@ -5681,7 +5681,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
         attachBtn.addEventListener('click', function(){{ fileInput.click(); }});
         fileInput.addEventListener('change', async function(){{
           if(!fileInput.files||!fileInput.files.length) return;
-          try{{await sendMedia(false); await load();}}catch(e){{failToast('РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё С„Р°Р№Р»Р°');}}
+          try{{await sendMedia(false); await load();}}catch(e){{failToast('Ошибка отправки файла');}}
         }});
       }}
       var liveTimer=null;
@@ -5694,7 +5694,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var d=await r.json();
           var c=Number(d&&d.count||0);
           if(notifyInited && c>lastTicketCount && document.hidden && 'Notification' in window && Notification.permission==='granted'){{
-            new Notification('РќРѕРІС‹Р№ С‚РёРєРµС‚',{{body:'РџРѕСЃС‚СѓРїРёР» РЅРѕРІС‹Р№ С‚РёРєРµС‚ РІ РїРѕРґРґРµСЂР¶РєСѓ'}});
+            new Notification('Новый тикет',{{body:'Поступил новый тикет в поддержку'}});
           }}
           lastTicketCount=c;
           notifyInited=true;
@@ -5794,8 +5794,8 @@ async def admin_users(
         count_query = select(func.count()).select_from(User)
         if needle:
             if needle.isdigit():
-                # Р—Р°С‰РёС‚Р° РѕС‚ РїРµСЂРµРїРѕР»РЅРµРЅРёСЏ bigint РІ Р‘Р”: СЃР»РёС€РєРѕРј РґР»РёРЅРЅС‹Р№ numeric-Р·Р°РїСЂРѕСЃ
-                # РЅРµ РґРѕР»Р¶РµРЅ РїР°РґР°С‚СЊ 500, Р° РїСЂРѕСЃС‚Рѕ РґР°РІР°С‚СЊ РїСѓСЃС‚СѓСЋ РІС‹Р±РѕСЂРєСѓ.
+                # Защита от переполнения bigint в БД: слишком длинный numeric-запрос
+                # не должен падать 500, а просто давать пустую выборку.
                 if len(needle) > 19:
                     query = query.where(text("1=0"))
                     count_query = count_query.where(text("1=0"))
@@ -5919,15 +5919,15 @@ async def admin_users(
         display = u.first_name or u.username or "-"
         username = f"@{u.username}" if u.username else "-"
         av = _avatar_with_fallback(u, px=36, ring_tw=ring_tw)
-        risk_badge = "<span class='badge badge-ghost badge-xs'>вЂ”</span>"
+        risk_badge = "<span class='badge badge-ghost badge-xs'>—</span>"
         if u.risk_notified_1h_at is not None:
-            risk_badge = "<span class='badge badge-error badge-xs'>1С‡</span>"
+            risk_badge = "<span class='badge badge-error badge-xs'>1ч</span>"
         elif u.risk_notified_24h_at is not None:
-            risk_badge = "<span class='badge badge-warning badge-xs'>24С‡</span>"
+            risk_badge = "<span class='badge badge-warning badge-xs'>24ч</span>"
         dev_slot = _active_subscription_devices_slots(now_utc, subs_by_user.get(u.id, []))
-        dev_cell = str(dev_slot) if dev_slot is not None else "вЂ”"
+        dev_cell = str(dev_slot) if dev_slot is not None else "—"
         rows.append(
-            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='РћС‚РєСЂС‹С‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ'>"
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
             f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
@@ -5955,40 +5955,40 @@ async def admin_users(
     sub_opts = (
         '<option value=""'
         + (" selected" if not sub_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="active"'
         + (" selected" if sub_f == "active" else "")
-        + '>РЎ Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРѕР№</option>'
+        + '>С активной подпиской</option>'
         + '<option value="none"'
         + (" selected" if sub_f == "none" else "")
-        + '>Р‘РµР· Р°РєС‚РёРІРЅРѕР№</option>'
+        + '>Без активной</option>'
     )
     blk_opts = (
         '<option value=""'
         + (" selected" if not blk_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="1"'
         + (" selected" if blk_f == "1" else "")
-        + '>Р—Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅС‹Рµ</option>'
+        + '>Заблокированные</option>'
         + '<option value="0"'
         + (" selected" if blk_f == "0" else "")
-        + '>РќРµ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅС‹Рµ</option>'
+        + '>Не заблокированные</option>'
     )
     risk_opts = (
         '<option value=""'
         + (" selected" if not risk_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="24h"'
         + (" selected" if risk_f == "24h" else "")
-        + '>Р РёСЃРє 24С‡</option>'
+        + '>Риск 24ч</option>'
         + '<option value="1h"'
         + (" selected" if risk_f == "1h" else "")
-        + '>Р РёСЃРє 1С‡</option>'
+        + '>Риск 1ч</option>'
     )
     bill_opts = (
         '<option value=""'
         + (" selected" if not bill_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="legacy"'
         + (" selected" if bill_f == "legacy" else "")
         + '>Legacy</option>'
@@ -5999,80 +5999,80 @@ async def admin_users(
     gh_opts = (
         '<option value=""'
         + (" selected" if not gh_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="1"'
         + (" selected" if gh_f == "1" else "")
-        + '>GitHub РµСЃС‚СЊ</option>'
+        + '>GitHub есть</option>'
         + '<option value="0"'
         + (" selected" if gh_f == "0" else "")
-        + '>Р‘РµР· GitHub</option>'
+        + '>Без GitHub</option>'
     )
     usage_opts = (
         '<option value=""'
         + (" selected" if not usage_f else "")
-        + '>Р’СЃРµ</option>'
+        + '>Все</option>'
         + '<option value="payg_active"'
         + (" selected" if usage_f == "payg_active" else "")
-        + '>PAYG Р·Р° 14 РґРЅ.</option>'
+        + '>PAYG за 14 дн.</option>'
         + '<option value="heavy"'
         + (" selected" if usage_f == "heavy" else "")
-        + '>РњР°СЃСЃРѕРІРѕРµ РїРѕС‚СЂРµР±Р»РµРЅРёРµ (в‰Ґ45 СЃРѕР±С‹С‚РёР№ / 30 РґРЅ.)</option>'
+        + '>Массовое потребление (≥45 событий / 30 дн.)</option>'
     )
     sort_opts = (
         '<option value=""'
         + (" selected" if not sort_f else "")
-        + '>Р РёСЃРє в†’ ID</option>'
+        + '>Риск → ID</option>'
         + '<option value="id_desc"'
         + (" selected" if sort_f == "id_desc" else "")
-        + '>ID СѓР±С‹РІ.</option>'
+        + '>ID убыв.</option>'
         + '<option value="id_asc"'
         + (" selected" if sort_f == "id_asc" else "")
-        + '>ID РІРѕР·СЂ.</option>'
+        + '>ID возр.</option>'
         + '<option value="bal_desc"'
         + (" selected" if sort_f == "bal_desc" else "")
-        + '>Р‘Р°Р»Р°РЅСЃ в†“</option>'
+        + '>Баланс ↓</option>'
         + '<option value="bal_asc"'
         + (" selected" if sort_f == "bal_asc" else "")
-        + '>Р‘Р°Р»Р°РЅСЃ в†‘</option>'
+        + '>Баланс ↑</option>'
     )
     dev_opts_parts: list[str] = [
-        '<option value=""' + (" selected" if not dev_slots_f else "") + ">Р’СЃРµ</option>"
+        '<option value=""' + (" selected" if not dev_slots_f else "") + ">Все</option>"
     ]
     for dv in range(1, 33):
         sel = " selected" if dev_slots_f == str(dv) else ""
-        dev_opts_parts.append(f"<option value='{dv}'{sel}>{dv} СЃР»РѕС‚.</option>")
+        dev_opts_parts.append(f"<option value='{dv}'{sel}>{dv} слот.</option>")
     dev_opts = "".join(dev_opts_parts)
     users_results_inner = (
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ</th><th>Telegram</th><th>Telegram ID</th><th>ID РІ Р±РѕС‚Рµ</th><th>Р‘Р°Р»Р°РЅСЃ</th><th>РџРѕРґРїРёСЃРєР°</th><th class='text-center'>РЎР»РѕС‚С‹</th><th>Р РёСЃРє</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">РќРµС‚ РґР°РЅРЅС‹С…</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}"
     )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
-        "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>РџРѕР»СЊР·РѕРІР°С‚РµР»Рё</h2>"
+        "<h2 class='card-title text-2xl'><i class='fa-solid fa-users text-primary mr-2' aria-hidden='true'></i>Пользователи</h2>"
         "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2' "
         "hx-get='/admin/users' hx-target='#remna-users-results' hx-swap='innerHTML' hx-push-url='true' "
         "hx-trigger='submit, change from:select, keyup changed delay:320ms from:#us-q'>"
-        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, РёРјСЏ'/>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>РџРѕРґРїРёСЃРєР°</span>"
+        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, имя'/>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
         f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>РђРєРєР°СѓРЅС‚</span>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
         f"<select id='us-blocked' name='blocked' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{blk_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Р РёСЃРє РјРёРЅСѓСЃР°</span>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Риск минуса</span>"
         f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Р‘РёР»Р»РёРЅРі</span>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Биллинг</span>"
         f"<select id='us-bill' name='bill' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{bill_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>GitHub</span>"
         f"<select id='us-gh' name='gh' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{gh_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>РџРѕС‚СЂРµР±Р»РµРЅРёРµ</span>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Потребление</span>"
         f"<select id='us-usage' name='usage' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{usage_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>РЎР»РѕС‚С‹ (active/trial)</span>"
-        f"<select id='us-dev' name='dev_slots' class='select select-bordered select-sm h-9 min-h-9 text-sm' title='РџРѕ С‡РёСЃР»Сѓ devices_count Сѓ РЅРµРёСЃС‚С‘РєС€РµР№ РїРѕРґРїРёСЃРєРё'>{dev_opts}</select></label>"
-        f"<label class='form-control'><span class='label-text text-xs opacity-70'>РЎРѕСЂС‚РёСЂРѕРІРєР°</span>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Слоты (active/trial)</span>"
+        f"<select id='us-dev' name='dev_slots' class='select select-bordered select-sm h-9 min-h-9 text-sm' title='По числу devices_count у неистёкшей подписки'>{dev_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Сортировка</span>"
         f"<select id='us-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
-        "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/users' title='РЎР±СЂРѕСЃРёС‚СЊ РІСЃРµ С„РёР»СЊС‚СЂС‹'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>РЎР±СЂРѕСЃРёС‚СЊ</a>"
-        "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>РџСЂРёРјРµРЅРёС‚СЊ</button></form>"
+        "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/users' title='Сбросить все фильтры'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>Сбросить</a>"
+        "<button id='us-apply' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
         "<div id='remna-users-results'>"
         f"{users_results_inner}"
         "</div>"
@@ -6116,7 +6116,7 @@ async def admin_subscription_history(request: Request, page: int = 1) -> HTMLRes
     for sub, u, pl in rows:
         disp = u.first_name or u.username or f"#{u.id}"
         tr.append(
-            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='РљР°СЂС‚РѕС‡РєР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ'>"
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Карточка пользователя'>"
             f"<td class='whitespace-nowrap text-xs opacity-80'>{_fmt_dt_msk(sub.created_at)}</td>"
             f"<td><span class='link link-primary font-medium'>{_esc(disp)}</span></td>"
             f"<td class='font-mono text-xs'>{u.id}</td>"
@@ -6129,15 +6129,15 @@ async def admin_subscription_history(request: Request, page: int = 1) -> HTMLRes
     pager = _pagination_bar(page=page, total_pages=total_pages, base_path="/admin/subscriptions", query_extra={})
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
-        "<h2 class='card-title text-2xl'><i class='fa-solid fa-clock-rotate-left text-primary mr-2' aria-hidden='true'></i>РСЃС‚РѕСЂРёСЏ РїРѕРґРїРёСЃРѕРє</h2>"
-        "<p class='text-sm opacity-60'>Р’СЃРµ Р·Р°РїРёСЃРё РїРѕРґРїРёСЃРѕРє РёР· Р±Р°Р·С‹, РѕС‚ РЅРѕРІС‹С… Рє СЃС‚Р°СЂС‹Рј (РїРѕ РґР°С‚Рµ СЃРѕР·РґР°РЅРёСЏ Р·Р°РїРёСЃРё). РћРґРЅРѕРјСѓ РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‚ РЅРµСЃРєРѕР»СЊРєРѕ СЃС‚СЂРѕРє РїСЂРё РїСЂРѕРґР»РµРЅРёСЏС… Рё СЃРјРµРЅР°С… С‚Р°СЂРёС„Р°.</p>"
+        "<h2 class='card-title text-2xl'><i class='fa-solid fa-clock-rotate-left text-primary mr-2' aria-hidden='true'></i>История подписок</h2>"
+        "<p class='text-sm opacity-60'>Все записи подписок из базы, от новых к старым (по дате создания записи). Одному пользователю соответствуют несколько строк при продлениях и сменах тарифа.</p>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
         "<table class='table table-zebra table-sm'><thead><tr>"
-        "<th>РЎРѕР·РґР°РЅР°</th><th>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ</th><th>ID</th><th>РўР°СЂРёС„</th><th>РЎС‚Р°С‚СѓСЃ</th><th>РЎС‚Р°СЂС‚</th><th>РСЃС‚РµРєР°РµС‚</th><th>РЎР»РѕС‚РѕРІ</th></tr></thead>"
-        f"<tbody>{''.join(tr) or '<tr><td colspan=\"8\" class=\"opacity-50\">РќРµС‚ Р·Р°РїРёСЃРµР№</td></tr>'}</tbody></table></div>"
+        "<th>Создана</th><th>Пользователь</th><th>ID</th><th>Тариф</th><th>Статус</th><th>Старт</th><th>Истекает</th><th>Слотов</th></tr></thead>"
+        f"<tbody>{''.join(tr) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет записей</td></tr>'}</tbody></table></div>"
         f"{pager}</div></div>"
     )
-    return _layout("РСЃС‚РѕСЂРёСЏ РїРѕРґРїРёСЃРѕРє", body, request=request)
+    return _layout("История подписок", body, request=request)
 
 
 @router.get("/users/{user_id}/telegram-photo")
@@ -6195,7 +6195,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         if user is None:
             return _layout(
                 "User not found",
-                "<div class='alert alert-warning shadow-lg'><i class='fa-solid fa-user-slash mr-2' aria-hidden='true'></i><span>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ</span></div>",
+                "<div class='alert alert-warning shadow-lg'><i class='fa-solid fa-user-slash mr-2' aria-hidden='true'></i><span>Пользователь не найден</span></div>",
                 request=request,
                 back_href="/admin/users",
             )
@@ -6295,36 +6295,36 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             pack_m = await usage_package_breakdown(session, user_id=user.id, from_dt=month_from, to_dt=month_to)
             month_total = summarize_month_total(rows_m)
             if row_td is None:
-                today_html = '<p class="text-sm opacity-80">Р—Р° СЃРµРіРѕРґРЅСЏ СЃРїРёСЃР°РЅРёР№ РЅРµС‚.</p>'
+                today_html = '<p class="text-sm opacity-80">За сегодня списаний нет.</p>'
             else:
                 today_html = (
                     "<ul class=\"list-disc list-inside text-sm\">"
-                    f"<li>Р“Р‘ Рє РѕРїР»Р°С‚Рµ: {_esc(row_td.gb_amount_rub)} в‚Ѕ ({_esc(row_td.gb_units)} С€С‚.)</li>"
-                    f"<li>РЈСЃС‚СЂРѕР№СЃС‚РІР°: {_esc(row_td.device_amount_rub)} в‚Ѕ ({_esc(row_td.device_units)} С€С‚.)</li>"
-                    f"<li>РњРѕР±. РёРЅС‚РµСЂРЅРµС‚: {_esc(row_td.mobile_amount_rub)} в‚Ѕ ({_esc(row_td.mobile_gb_units)} С€С‚.)</li>"
-                    f"<li><b>РС‚РѕРіРѕ Р·Р° РґРµРЅСЊ: {_esc(row_td.total_amount_rub)} в‚Ѕ</b></li>"
+                    f"<li>ГБ к оплате: {_esc(row_td.gb_amount_rub)} ₽ ({_esc(row_td.gb_units)} шт.)</li>"
+                    f"<li>Устройства: {_esc(row_td.device_amount_rub)} ₽ ({_esc(row_td.device_units)} шт.)</li>"
+                    f"<li>Моб. интернет: {_esc(row_td.mobile_amount_rub)} ₽ ({_esc(row_td.mobile_gb_units)} шт.)</li>"
+                    f"<li><b>Итого за день: {_esc(row_td.total_amount_rub)} ₽</b></li>"
                     "</ul>"
-                    f"<p class=\"text-xs opacity-70\">РџР°РєРµС‚: Р“Р‘ РїРѕРєСЂС‹С‚Рѕ {_esc(pack_td['gb_covered'])}, СѓСЃС‚СЂРѕР№СЃС‚РІР° "
-                    f"{_esc(pack_td['device_covered'])}; СЃРІРµСЂС… РїР°РєРµС‚Р° Р“Р‘ {_esc(pack_td['gb_charged'])}, СѓСЃС‚СЂРѕР№СЃС‚РІР° "
+                    f"<p class=\"text-xs opacity-70\">Пакет: ГБ покрыто {_esc(pack_td['gb_covered'])}, устройства "
+                    f"{_esc(pack_td['device_covered'])}; сверх пакета ГБ {_esc(pack_td['gb_charged'])}, устройства "
                     f"{_esc(pack_td['device_charged'])}.</p>"
                 )
             days_rows = "".join(
                 f"<tr><td>{_esc(r.day.strftime('%d.%m.%Y'))}</td>"
-                f"<td class=\"text-right font-mono\">{_esc(r.total_amount_rub)} в‚Ѕ</td></tr>"
+                f"<td class=\"text-right font-mono\">{_esc(r.total_amount_rub)} ₽</td></tr>"
                 for r in rows_m[:31]
             )
             billing_detail_block = f"""
     <div class="card bg-base-100 border border-info/25 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-chart-column text-info mr-2" aria-hidden="true"></i>Р”РµС‚Р°Р»РёР·Р°С†РёСЏ СЃРїРёСЃР°РЅРёР№ (РіРёР±СЂРёРґ v2)</h3>
-        <p class="text-xs opacity-70 mb-2">РЎСѓС‚РєРё Рё РјРµСЃСЏС† вЂ” РїРѕ <code class="text-xs bg-base-300 px-1 rounded">{_esc(settings.billing_calendar_timezone)}</code>.</p>
-        <h4 class="text-sm font-semibold">РЎРµРіРѕРґРЅСЏ ({_esc(bt.strftime('%d.%m.%Y'))})</h4>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-chart-column text-info mr-2" aria-hidden="true"></i>Детализация списаний (гибрид v2)</h3>
+        <p class="text-xs opacity-70 mb-2">Сутки и месяц — по <code class="text-xs bg-base-300 px-1 rounded">{_esc(settings.billing_calendar_timezone)}</code>.</p>
+        <h4 class="text-sm font-semibold">Сегодня ({_esc(bt.strftime('%d.%m.%Y'))})</h4>
         {today_html}
         <div class="divider my-1"></div>
-        <h4 class="text-sm font-semibold">РўРµРєСѓС‰РёР№ РєР°Р»РµРЅРґР°СЂРЅС‹Р№ РјРµСЃСЏС†</h4>
-        <p class="text-sm"><b>РС‚РѕРіРѕ:</b> {_esc(month_total)} в‚Ѕ</p>
-        <p class="text-xs opacity-70 mb-2">РџР°РєРµС‚ Р·Р° РјРµСЃСЏС†: Р“Р‘ РїРѕРєСЂС‹С‚Рѕ {_esc(pack_m['gb_covered'])}, СѓСЃС‚СЂРѕР№СЃС‚РІР° {_esc(pack_m['device_covered'])}; СЃРІРµСЂС… РїР°РєРµС‚Р° Р“Р‘ {_esc(pack_m['gb_charged'])}, СѓСЃС‚СЂРѕР№СЃС‚РІР° {_esc(pack_m['device_charged'])}.</p>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10 max-h-60 overflow-y-auto"><table class="table table-zebra table-sm"><thead><tr><th>Р”РµРЅСЊ</th><th class="text-right">РЎСѓРјРјР°</th></tr></thead><tbody>{days_rows or '<tr><td colspan="2" class="opacity-50">РќРµС‚ СЃС‚СЂРѕРє</td></tr>'}</tbody></table></div>
+        <h4 class="text-sm font-semibold">Текущий календарный месяц</h4>
+        <p class="text-sm"><b>Итого:</b> {_esc(month_total)} ₽</p>
+        <p class="text-xs opacity-70 mb-2">Пакет за месяц: ГБ покрыто {_esc(pack_m['gb_covered'])}, устройства {_esc(pack_m['device_covered'])}; сверх пакета ГБ {_esc(pack_m['gb_charged'])}, устройства {_esc(pack_m['device_charged'])}.</p>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10 max-h-60 overflow-y-auto"><table class="table table-zebra table-sm"><thead><tr><th>День</th><th class="text-right">Сумма</th></tr></thead><tbody>{days_rows or '<tr><td colspan="2" class="opacity-50">Нет строк</td></tr>'}</tbody></table></div>
       </div>
     </div>
     """
@@ -6422,19 +6422,19 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         exp = active_snap["expires_at"]
         if exp is not None and exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
-        left_phr = _humanize_left_ru(exp, now_utc) if exp else "вЂ”"
+        left_phr = _humanize_left_ru(exp, now_utc) if exp else "—"
         exp_msk = _fmt_dt_msk(exp)
         if uinf:
             used_gb, _lim_u = extract_traffic_gb_from_rw_user(uinf)
-            used_s = f"{used_gb:.2f}" if used_gb is not None else "вЂ”"
+            used_s = f"{used_gb:.2f}" if used_gb is not None else "—"
             if is_rw_traffic_unlimited(uinf):
-                lim_s = "в€ћ"
+                lim_s = "∞"
             else:
                 lg = traffic_limit_gb_for_display(uinf)
-                lim_s = f"{lg:.1f}" if lg is not None else "вЂ”"
+                lim_s = f"{lg:.1f}" if lg is not None else "—"
             traffic_line = (
-                f"<span class='font-mono'><b>{used_s}</b> / <b>{lim_s}</b> Р“Р‘</span>"
-                "<span class='text-xs opacity-60'> (РїР°РЅРµР»СЊ Remnawave)</span>"
+                f"<span class='font-mono'><b>{used_s}</b> / <b>{lim_s}</b> ГБ</span>"
+                "<span class='text-xs opacity-60'> (панель Remnawave)</span>"
             )
         else:
             plg = ""
@@ -6443,11 +6443,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             except (TypeError, ValueError):
                 pt_ok = False
             if pt_ok:
-                plg = f" В· Р»РёРјРёС‚ РїРѕ С‚Р°СЂРёС„Сѓ РІ Р±РѕС‚Рµ: ~{plan_traffic} Р“Р‘"
-            traffic_line = f"<span class='opacity-70'>РґР°РЅРЅС‹Рµ РїР°РЅРµР»Рё РЅРµРґРѕСЃС‚СѓРїРЅС‹</span>{_esc(plg)}"
+                plg = f" · лимит по тарифу в боте: ~{plan_traffic} ГБ"
+            traffic_line = f"<span class='opacity-70'>данные панели недоступны</span>{_esc(plg)}"
         slots_line = (
             f"<span class='font-mono'><b>{n_occ}</b> / <b>{active_snap['devices_count']}</b></span>"
-            "<span class='text-xs opacity-60'> (Р·Р°РЅСЏС‚Рѕ / СЃР»РѕС‚РѕРІ РІ Р±РѕС‚Рµ)</span>"
+            "<span class='text-xs opacity-60'> (занято / слотов в боте)</span>"
         )
         st_badge = "success" if active_snap["status"] in ("active", "trial") else "warning"
         conn_extra = ""
@@ -6455,20 +6455,20 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             oa = rw_user_online_at(uinf)
             fa = rw_user_first_connected_at(uinf)
             if oa is not None:
-                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ РІ РїР°РЅРµР»Рё: <b>{_fmt_dt_msk(oa)}</b></p>"
+                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b></p>"
             if fa is not None:
-                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>РџРµСЂРІРѕРµ РїРѕРґРєР»СЋС‡РµРЅРёРµ: <b>{_fmt_dt_msk(fa)}</b></p>"
-        snap_title = "РђРєС‚РёРІРЅР°СЏ РїРѕРґРїРёСЃРєР°"
+                conn_extra += f"<p class='sm:col-span-2 text-xs text-base-content/80'>Первое подключение: <b>{_fmt_dt_msk(fa)}</b></p>"
+        snap_title = "Активная подписка"
         if exp is not None and exp <= now_utc:
-            snap_title = "РџРѕРґРїРёСЃРєР° (СЃСЂРѕРє РёСЃС‚С‘Рє)"
+            snap_title = "Подписка (срок истёк)"
         sub_summary_html = f"""
     <div class="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-base-200/90 to-base-100 p-4 shadow-md backdrop-blur-sm">
       <h3 class="mb-3 text-xs font-bold uppercase tracking-wider text-primary">{_esc(snap_title)}</h3>
       <div class="grid gap-3 text-sm sm:grid-cols-2">
-        <p>РўР°СЂРёС„: <b>{_esc(plan_name or 'вЂ”')}</b> В· <span class="badge badge-{st_badge} badge-sm">{_esc(active_snap['status'])}</span></p>
-        <p>РўСЂР°С„РёРє: {traffic_line}</p>
-        <p>РЈСЃС‚СЂРѕР№СЃС‚РІР°: {slots_line}</p>
-        <p class="sm:col-span-2">РћРєРѕРЅС‡Р°РЅРёРµ: <b>{_esc(exp_msk)}</b> <span class="opacity-70">(РѕСЃС‚Р°Р»РѕСЃСЊ: {_esc(left_phr)})</span></p>
+        <p>Тариф: <b>{_esc(plan_name or '—')}</b> · <span class="badge badge-{st_badge} badge-sm">{_esc(active_snap['status'])}</span></p>
+        <p>Трафик: {traffic_line}</p>
+        <p>Устройства: {slots_line}</p>
+        <p class="sm:col-span-2">Окончание: <b>{_esc(exp_msk)}</b> <span class="opacity-70">(осталось: {_esc(left_phr)})</span></p>
         {conn_extra}
       </div>
     </div>"""
@@ -6480,16 +6480,16 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             if oa is not None or fa is not None:
                 bits = []
                 if oa is not None:
-                    bits.append(f"РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ РІ РїР°РЅРµР»Рё: <b>{_fmt_dt_msk(oa)}</b>")
+                    bits.append(f"Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b>")
                 if fa is not None:
-                    bits.append(f"РџРµСЂРІРѕРµ РїРѕРґРєР»СЋС‡РµРЅРёРµ: <b>{_fmt_dt_msk(fa)}</b>")
+                    bits.append(f"Первое подключение: <b>{_fmt_dt_msk(fa)}</b>")
                 conn_only = (
                     "<div class='rounded-xl border border-base-content/15 bg-base-200/40 p-3 text-sm shadow-sm'>"
-                    f"<p class='text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-2'>РџР°РЅРµР»СЊ Remnawave</p>"
+                    f"<p class='text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-2'>Панель Remnawave</p>"
                     f"{'<br/>'.join(bits)}</div>"
                 )
         sub_summary_html = (
-            "<div class='alert alert-info text-sm shadow-sm'>РќРµС‚ Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё (СЃС‚Р°С‚СѓСЃС‹ active/trial СЃ РЅРµРёСЃС‚С‘РєС€РёРј СЃСЂРѕРєРѕРј).</div>"
+            "<div class='alert alert-info text-sm shadow-sm'>Нет активной подписки (статусы active/trial с неистёкшим сроком).</div>"
             + conn_only
         )
 
@@ -6503,30 +6503,30 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     tix_open = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st in ("open", "in_progress"))
     tix_closed = sum(1 for _tid, st, _ca, _cl, _rt in tix_tuples if st == "closed")
     tix_rates = [1 if rt is True else 0 for _tid, _st, _ca, _cl, rt in tix_tuples if rt is not None]
-    tix_rate_pct = f"{(sum(tix_rates) / len(tix_rates) * 100):.0f}%" if tix_rates else "вЂ”"
-    tix_status_label = {"open": "РћС‚РєСЂС‹С‚", "in_progress": "Р’ СЂР°Р±РѕС‚Рµ", "closed": "Р—Р°РєСЂС‹С‚"}
+    tix_rate_pct = f"{(sum(tix_rates) / len(tix_rates) * 100):.0f}%" if tix_rates else "—"
+    tix_status_label = {"open": "Открыт", "in_progress": "В работе", "closed": "Закрыт"}
     tix_rows_html = "".join(
         f"<tr>"
         f"<td><a class='link link-primary' href='/admin/tickets/{tid}'>#{tid}</a></td>"
         f"<td><span class='badge badge-sm {'badge-warning' if st == 'in_progress' else ('badge-info' if st == 'open' else 'badge-ghost')}'>{_esc(tix_status_label.get(st, st))}</span></td>"
         f"<td>{_fmt_dt_msk(ca)}</td>"
-        f"<td>{_fmt_dt_msk(cl) if cl else 'вЂ”'}</td>"
-        f"<td>{'рџ‘Ќ' if rt is True else ('рџ‘Ћ' if rt is False else 'вЂ”')}</td>"
+        f"<td>{_fmt_dt_msk(cl) if cl else '—'}</td>"
+        f"<td>{'👍' if rt is True else ('👎' if rt is False else '—')}</td>"
         f"</tr>"
         for tid, st, ca, cl, rt in tix_tuples
     )
     tickets_block = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>РўРёРєРµС‚С‹ ({tix_total})</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-headset text-primary mr-2" aria-hidden="true"></i>Тикеты ({tix_total})</h3>
         <div class="grid gap-2 sm:grid-cols-4 text-sm">
-          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Р’СЃРµРіРѕ</div><div class="text-lg font-semibold">{tix_total}</div></div>
-          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">РђРєС‚РёРІРЅС‹Рµ</div><div class="text-lg font-semibold">{tix_open}</div></div>
-          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Р—Р°РєСЂС‹С‚С‹Рµ</div><div class="text-lg font-semibold">{tix_closed}</div></div>
-          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">РџРѕР·РёС‚РёРІРЅС‹Рµ РѕС†РµРЅРєРё</div><div class="text-lg font-semibold">{_esc(tix_rate_pct)}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Всего</div><div class="text-lg font-semibold">{tix_total}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Активные</div><div class="text-lg font-semibold">{tix_open}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Закрытые</div><div class="text-lg font-semibold">{tix_closed}</div></div>
+          <div class="rounded-lg border border-base-content/10 p-2.5"><div class="opacity-60 text-xs">Позитивные оценки</div><div class="text-lg font-semibold">{_esc(tix_rate_pct)}</div></div>
         </div>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>РЎС‚Р°С‚СѓСЃ</th><th>РЎРѕР·РґР°РЅ</th><th>Р—Р°РєСЂС‹С‚</th><th>РћС†РµРЅРєР°</th></tr></thead>
-        <tbody>{tix_rows_html or '<tr><td colspan="5" class="opacity-50">РўРёРєРµС‚РѕРІ РїРѕРєР° РЅРµС‚</td></tr>'}</tbody></table></div>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Статус</th><th>Создан</th><th>Закрыт</th><th>Оценка</th></tr></thead>
+        <tbody>{tix_rows_html or '<tr><td colspan="5" class="opacity-50">Тикетов пока нет</td></tr>'}</tbody></table></div>
       </div>
     </div>
     """
@@ -6538,40 +6538,40 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         sub_url_rw = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings)
 
     risk_badge = "badge-ghost"
-    risk_text = "РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РґР°РЅРЅС‹С…"
-    eta_txt = "вЂ”"
+    risk_text = "Недостаточно данных"
+    eta_txt = "—"
     if isinstance(ud.eta_to_floor_hours, float):
         if ud.eta_to_floor_hours <= 0:
             risk_badge = "badge-error"
-            risk_text = "РџРѕСЂРѕРі СѓР¶Рµ РґРѕСЃС‚РёРіРЅСѓС‚"
-            eta_txt = "0 С‡"
+            risk_text = "Порог уже достигнут"
+            eta_txt = "0 ч"
         else:
             eta_delta = timedelta(hours=ud.eta_to_floor_hours)
             hh = int(eta_delta.total_seconds() // 3600)
             mm = int((eta_delta.total_seconds() % 3600) // 60)
-            eta_txt = f"{hh} С‡ {mm} РјРёРЅ"
+            eta_txt = f"{hh} ч {mm} мин"
             if ud.eta_to_floor_hours <= 1.5:
                 risk_badge = "badge-error"
-                risk_text = "Р’С‹СЃРѕРєРёР№ СЂРёСЃРє (< 1.5С‡)"
+                risk_text = "Высокий риск (< 1.5ч)"
             elif ud.eta_to_floor_hours <= 26:
                 risk_badge = "badge-warning"
-                risk_text = "Р РёСЃРє РІ РіРѕСЂРёР·РѕРЅС‚Рµ СЃСѓС‚РѕРє"
+                risk_text = "Риск в горизонте суток"
             else:
                 risk_badge = "badge-success"
-                risk_text = "Р РёСЃРє РІРЅРµ Р±Р»РёР¶Р°Р№С€РёС… СЃСѓС‚РѕРє"
-    risk_24 = _fmt_dt_msk(ud.risk_notified_24h_at) if ud.risk_notified_24h_at else "вЂ”"
-    risk_1 = _fmt_dt_msk(ud.risk_notified_1h_at) if ud.risk_notified_1h_at else "вЂ”"
+                risk_text = "Риск вне ближайших суток"
+    risk_24 = _fmt_dt_msk(ud.risk_notified_24h_at) if ud.risk_notified_24h_at else "—"
+    risk_1 = _fmt_dt_msk(ud.risk_notified_1h_at) if ud.risk_notified_1h_at else "—"
     admin_ids_ui = frozenset(int(x) for x in (settings.admin_telegram_ids or []))
     show_github_in_profile = int(ud.telegram_id) in admin_ids_ui
     github_lines_html = ""
     if show_github_in_profile:
         github_lines_html = (
             f"<p>GitHub: <b>{_esc(ud.github_username or '-')}</b></p>"
-            + _copy_line(label="GitHub URL", value=str(ud.github_profile_url) if ud.github_profile_url else "вЂ”")
+            + _copy_line(label="GitHub URL", value=str(ud.github_profile_url) if ud.github_profile_url else "—")
         )
     else:
         github_lines_html = (
-            "<p class=\"text-xs opacity-70\">GitHub СЃРєСЂС‹С‚: СЃСЃС‹Р»РєР° Рё РїСЂРѕС„РёР»СЊ РїРѕРєР°Р·С‹РІР°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ РґР»СЏ Telegram ID РёР· "
+            "<p class=\"text-xs opacity-70\">GitHub скрыт: ссылка и профиль показываются только для Telegram ID из "
             "<code class=\"bg-base-300 px-1 rounded text-[11px]\">ADMIN_TELEGRAM_IDS</code>.</p>"
         )
 
@@ -6587,32 +6587,32 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     )
     personal_pricing_block = f"""
     <div class="rounded-2xl border border-secondary/30 bg-base-200/30 p-4 mt-3">
-      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">РџРµСЂСЃРѕРЅР°Р»СЊРЅС‹Рµ С‚Р°СЂРёС„С‹</h3>
-      <p class="text-xs opacity-70 mb-3">Р”РµР№СЃС‚РІСѓСЋС‚ С‚РѕР»СЊРєРѕ РґР»СЏ СЌС‚РѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ. РЎРІРѕСЏ С†РµРЅР° Рё СЃРєРёРґРєР° % СЃСѓРјРјРёСЂСѓСЋС‚СЃСЏ (СЃРєРёРґРєР° РїСЂРёРјРµРЅСЏРµС‚СЃСЏ Рє РїРµСЂСЃРѕРЅР°Р»СЊРЅРѕР№ С†РµРЅРµ).</p>
+      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Персональные тарифы</h3>
+      <p class="text-xs opacity-70 mb-3">Действуют только для этого пользователя. Своя цена и скидка % суммируются (скидка применяется к персональной цене).</p>
       <div class="flex flex-wrap items-end gap-3">
         <form method="post" action="/admin/users/{user_id}/personal-pricing/custom-month-price" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РЎРІРѕСЏ С†РµРЅР° в‚Ѕ/РјРµСЃ</span>
+            <span class="label-text text-xs opacity-70">Своя цена ₽/мес</span>
             <input type="text" name="price_rub" inputmode="decimal" placeholder="150" value="{_esc(custom_price_cur)}" class="input input-bordered input-sm h-9 min-h-9 w-28" />
           </label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
         </form>
         <form method="post" action="/admin/users/{user_id}/personal-pricing/custom-month-price" class="inline">
           <input type="hidden" name="price_rub" value="" />
-          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">РЎР±СЂРѕСЃРёС‚СЊ С†РµРЅСѓ</button>
+          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">Сбросить цену</button>
         </form>
       </div>
       <div class="flex flex-wrap items-end gap-3 mt-3">
         <form method="post" action="/admin/users/{user_id}/personal-pricing/discount" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РЎРєРёРґРєР° РЅР° С‚Р°СЂРёС„С‹ %</span>
+            <span class="label-text text-xs opacity-70">Скидка на тарифы %</span>
             <input type="text" name="discount_percent" inputmode="decimal" placeholder="10" value="{_esc(personal_disc_cur)}" class="input input-bordered input-sm h-9 min-h-9 w-24" />
           </label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
         </form>
         <form method="post" action="/admin/users/{user_id}/personal-pricing/discount" class="inline">
           <input type="hidden" name="discount_percent" value="" />
-          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">РЎР±СЂРѕСЃРёС‚СЊ СЃРєРёРґРєСѓ</button>
+          <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">Сбросить скидку</button>
         </form>
       </div>
     </div>
@@ -6620,19 +6620,19 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
 
     negative_risk_block = f"""
     <div class="rounded-2xl border border-warning/30 bg-base-200/30 p-4">
-      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Р РёСЃРє СѓС…РѕРґР° РІ РјРёРЅСѓСЃ</h3>
+      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Риск ухода в минус</h3>
       <div class="grid gap-2 text-sm sm:grid-cols-2">
-        <p>Р РµР¶РёРј Р±РёР»Р»РёРЅРіР°: <b>{_esc(ud.billing_mode)}</b></p>
-        <p>РЎС‚Р°С‚СѓСЃ: <span class="badge {risk_badge} badge-sm">{_esc(risk_text)}</span></p>
-        <p>РЎСЂРµРґРЅРёР№ СЂР°СЃС…РѕРґ/РґРµРЅСЊ (3Рґ): <b>{_esc(ud.avg_daily_spend)} в‚Ѕ</b></p>
-        <p>ETA РґРѕ {_esc(str(settings.billing_balance_floor_rub))} в‚Ѕ: <b>{_esc(eta_txt)}</b></p>
-        <p>РџРѕСЃР»РµРґРЅРµРµ СѓРІРµРґРѕРјР»РµРЅРёРµ 24С‡: <b>{_esc(risk_24)}</b></p>
-        <p>РџРѕСЃР»РµРґРЅРµРµ СѓРІРµРґРѕРјР»РµРЅРёРµ 1С‡: <b>{_esc(risk_1)}</b></p>
+        <p>Режим биллинга: <b>{_esc(ud.billing_mode)}</b></p>
+        <p>Статус: <span class="badge {risk_badge} badge-sm">{_esc(risk_text)}</span></p>
+        <p>Средний расход/день (3д): <b>{_esc(ud.avg_daily_spend)} ₽</b></p>
+        <p>ETA до {_esc(str(settings.billing_balance_floor_rub))} ₽: <b>{_esc(eta_txt)}</b></p>
+        <p>Последнее уведомление 24ч: <b>{_esc(risk_24)}</b></p>
+        <p>Последнее уведомление 1ч: <b>{_esc(risk_1)}</b></p>
       </div>
       <form method="post" action="/admin/users/{user_id}/risk-notify/reset" class="inline mt-3"
-        data-remna-confirm-msg="{_esc_attr('РЎР±СЂРѕСЃРёС‚СЊ РѕС‚РјРµС‚РєРё СѓРІРµРґРѕРјР»РµРЅРёР№ Рѕ СЂРёСЃРєРµ РјРёРЅСѓСЃР° (СѓРІРµРґРѕРјР»РµРЅРёСЏ 24 С‡ Рё 1 С‡)?')}">
+        data-remna-confirm-msg="{_esc_attr('Сбросить отметки уведомлений о риске минуса (уведомления 24 ч и 1 ч)?')}">
         <button type="submit" class="btn btn-outline btn-warning btn-sm h-9 min-h-9 gap-1.5">
-          <i class="fa-solid fa-bell-slash" aria-hidden="true"></i>РЎР±СЂРѕСЃРёС‚СЊ СЃС‚Р°С‚РёСЃС‚РёРєСѓ СЂРёСЃРєР°
+          <i class="fa-solid fa-bell-slash" aria-hidden="true"></i>Сбросить статистику риска
         </button>
       </form>
     </div>
@@ -6643,10 +6643,10 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         vpn_link_card = f"""
     <div class="card bg-base-100 border border-accent/25 shadow-lg bg-gradient-to-br from-accent/8 via-base-100 to-base-100">
       <div class="card-body gap-4">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-qrcode text-accent mr-2" aria-hidden="true"></i>РџРѕРґРєР»СЋС‡РµРЅРёРµ VPN</h3>
-        {_copy_line(label="РЎСЃС‹Р»РєР° РїРѕРґРїРёСЃРєРё", value=sub_url_rw)}
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-qrcode text-accent mr-2" aria-hidden="true"></i>Подключение VPN</h3>
+        {_copy_line(label="Ссылка подписки", value=sub_url_rw)}
         <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/40 p-4">
-          <p class="text-xs opacity-60">QR РґР»СЏ РёРјРїРѕСЂС‚Р° РІ РєР»РёРµРЅС‚</p>
+          <p class="text-xs opacity-60">QR для импорта в клиент</p>
           <img src="/admin/users/{user_id}/subscription-qr.png" alt="QR" class="max-w-[240px] rounded-lg border border-base-content/15 bg-base-100 p-2 shadow-inner" width="240" height="240" loading="lazy" />
         </div>
       </div>
@@ -6661,22 +6661,22 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         expired_notice = ""
         if exp_chk is None:
             expired_notice = (
-                '<div class="alert alert-warning text-sm mb-3"><span>РЈ Р·Р°РїРёСЃРё РЅРµС‚ РґР°С‚С‹ РѕРєРѕРЅС‡Р°РЅРёСЏ вЂ” '
-                "РґРѕР±Р°РІР»РµРЅРёРµ РґРЅРµР№ РјРѕР¶РµС‚ Р±С‹С‚СЊ РЅРµРґРѕСЃС‚СѓРїРЅРѕ РґРѕ РїРѕСЏРІР»РµРЅРёСЏ СЃСЂРѕРєР°.</span></div>"
+                '<div class="alert alert-warning text-sm mb-3"><span>У записи нет даты окончания — '
+                "добавление дней может быть недоступно до появления срока.</span></div>"
             )
         elif exp_chk <= now_check:
             expired_notice = (
-                '<div class="alert alert-warning text-sm mb-3"><span><b>РЎСЂРѕРє РїРѕРґРїРёСЃРєРё РёСЃС‚С‘Рє.</b> '
-                "РќРёР¶Рµ РјРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ РґРЅРё (РѕС‚СЃС‡С‘С‚ РѕС‚ СЃРµРіРѕРґРЅСЏ) Рё РёР·РјРµРЅРёС‚СЊ Р»РёРјРёС‚ СЃР»РѕС‚РѕРІ СѓСЃС‚СЂРѕР№СЃС‚РІ.</span></div>"
+                '<div class="alert alert-warning text-sm mb-3"><span><b>Срок подписки истёк.</b> '
+                "Ниже можно добавить дни (отсчёт от сегодня) и изменить лимит слотов устройств.</span></div>"
             )
         ar_on = active_snap["auto_renew"]
         nxt = "0" if ar_on else "1"
-        lbl = "Р’С‹РєР»СЋС‡РёС‚СЊ Р°РІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ" if ar_on else "Р’РєР»СЋС‡РёС‚СЊ Р°РІС‚Рѕ-РїСЂРѕРґР»РµРЅРёРµ"
-        tip = "РџРѕСЃР»Рµ СЃСЂРѕРєР° СЃРїРёСЃР°РЅРёРµ РЅРµ РїСЂРѕРёР·РѕР№РґС‘С‚." if ar_on else "Р—Р° ~1 С‡ РґРѕ РєРѕРЅС†Р° вЂ” РїРѕРїС‹С‚РєР° РїСЂРѕРґР»РёС‚СЊ СЃ Р±Р°Р»Р°РЅСЃР°."
+        lbl = "Выключить авто-продление" if ar_on else "Включить авто-продление"
+        tip = "После срока списание не произойдёт." if ar_on else "За ~1 ч до конца — попытка продлить с баланса."
         mgmt_html = f"""
     <div class="card bg-base-100 border border-warning/35 shadow-lg">
       <div class="card-body gap-4">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-sliders text-warning mr-2" aria-hidden="true"></i>РЈРїСЂР°РІР»РµРЅРёРµ РїРѕРґРїРёСЃРєРѕР№</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-sliders text-warning mr-2" aria-hidden="true"></i>Управление подпиской</h3>
         {expired_notice}
         <form method="post" action="/admin/users/{user_id}/subscription/auto-renew" class="flex flex-wrap items-center gap-3">
           <input type="hidden" name="enabled" value="{nxt}"/>
@@ -6684,26 +6684,26 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <span class="text-xs opacity-60 max-w-xs">{_esc(tip)}</span>
         </form>
         <div class="divider my-0"></div>
-        <p class="text-sm font-medium">РР·РјРµРЅРёС‚СЊ СЃСЂРѕРє РїРѕРґРїРёСЃРєРё</p>
-        <p class="text-xs opacity-70 mb-2">РЎРґРІРёРіР°РµС‚ РґР°С‚Сѓ РѕРєРѕРЅС‡Р°РЅРёСЏ РЅР° СѓРєР°Р·Р°РЅРЅРѕРµ С‡РёСЃР»Рѕ РєР°Р»РµРЅРґР°СЂРЅС‹С… РґРЅРµР№ (РїРѕР»РѕР¶РёС‚РµР»СЊРЅРѕРµ вЂ” РїСЂРѕРґР»РёС‚СЊ, РѕС‚СЂРёС†Р°С‚РµР»СЊРЅРѕРµ вЂ” СЃРѕРєСЂР°С‚РёС‚СЊ; РµСЃР»Рё РїРѕРґРїРёСЃРєР° РёСЃС‚РµРєР»Р° вЂ” РѕС‚СЃС‡С‘С‚ РѕС‚ СЃРµРіРѕРґРЅСЏ).</p>
+        <p class="text-sm font-medium">Изменить срок подписки</p>
+        <p class="text-xs opacity-70 mb-2">Сдвигает дату окончания на указанное число календарных дней (положительное — продлить, отрицательное — сократить; если подписка истекла — отсчёт от сегодня).</p>
         <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="flex flex-wrap items-end gap-2">
           <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
           <label class="form-control w-32">
-            <span class="label-text text-xs">Р”РЅРµР№ (+/в€’)</span>
+            <span class="label-text text-xs">Дней (+/−)</span>
             <input type="number" name="days" min="-3650" max="3650" value="30" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
           </label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">РџСЂРёРјРµРЅРёС‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Применить</button>
         </form>
         <div class="flex flex-wrap gap-2 mt-2">
           <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
             <input type="hidden" name="days" value="-7"/>
-            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">в€’7</button>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">−7</button>
           </form>
           <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
             <input type="hidden" name="days" value="-30"/>
-            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">в€’30</button>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9">−30</button>
           </form>
           <form method="post" action="/admin/users/{user_id}/subscription/add-days" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
@@ -6722,44 +6722,44 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           </form>
         </div>
         <div class="divider my-0"></div>
-        <p class="text-sm font-medium">Р›РёРјРёС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ (СЃР»РѕС‚С‹)</p>
-        <p class="text-xs opacity-70 mb-2">РњРµРЅСЏРµС‚ <code class="text-xs bg-base-300 px-1 rounded">devices_count</code> РІ Р·Р°РїРёСЃРё РїРѕРґРїРёСЃРєРё Рё Р»РёРјРёС‚ HWID РІ Remnawave (РµСЃР»Рё РІ РїР°РЅРµР»Рё РЅРµ РѕС‚РєР»СЋС‡С‘РЅ Р»РёРјРёС‚).</p>
-        <p class="text-xs opacity-60 mb-2">РџР»Р°РЅРѕРІС‹Р№ Р±РёР»Р»РёРЅРі (РЅРµ РІ Р±РѕС‚Рµ): РґРѕ {_esc(str(settings.subscription_included_device_slots))} СѓСЃС‚СЂ. Р±РµР· РѕС‚РґРµР»СЊРЅРѕР№ РґРѕРїР»Р°С‚С‹; СЃРІРµСЂС… вЂ” {_esc(str(settings.extra_device_monthly_rub))} в‚Ѕ/РјРµСЃ Р·Р° СЃР»РѕС‚. РџСЂРё С‚РµРєСѓС‰РµРј Р»РёРјРёС‚Рµ РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ: <b>{_esc(dev_bill_preview_rub)}</b> в‚Ѕ/РјРµСЃ.</p>
-        <p class="text-xs opacity-60 mb-2">РњРёРЅРёРјСѓРј {MIN_DEVICES} СЃР»РѕС‚Р° (Р±Р°Р·РѕРІР°СЏ РїРѕРґРїРёСЃРєР°), РјР°РєСЃРёРјСѓРј {MAX_DEVICES}. Р‘РµР· СЃРїРёСЃР°РЅРёСЏ СЃ Р±Р°Р»Р°РЅСЃР°.</p>
+        <p class="text-sm font-medium">Лимит устройств (слоты)</p>
+        <p class="text-xs opacity-70 mb-2">Меняет <code class="text-xs bg-base-300 px-1 rounded">devices_count</code> в записи подписки и лимит HWID в Remnawave (если в панели не отключён лимит).</p>
+        <p class="text-xs opacity-60 mb-2">Плановый биллинг (не в боте): до {_esc(str(settings.subscription_included_device_slots))} устр. без отдельной доплаты; сверх — {_esc(str(settings.extra_device_monthly_rub))} ₽/мес за слот. При текущем лимите предпросмотр: <b>{_esc(dev_bill_preview_rub)}</b> ₽/мес.</p>
+        <p class="text-xs opacity-60 mb-2">Минимум {MIN_DEVICES} слота (базовая подписка), максимум {MAX_DEVICES}. Без списания с баланса.</p>
         <form method="post" action="/admin/users/{user_id}/subscription/set-device-slots" class="flex flex-wrap items-end gap-2">
           <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}"/>
           <label class="form-control w-32">
-            <span class="label-text text-xs">РЎР»РѕС‚РѕРІ</span>
+            <span class="label-text text-xs">Слотов</span>
             <input type="number" name="devices_count" min="{MIN_DEVICES}" max="{MAX_DEVICES}" value="{int(active_snap['devices_count'])}" class="input input-bordered input-sm h-9 min-h-9 w-full" required />
           </label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Сохранить</button>
         </form>
         <div class="flex flex-wrap gap-2 mt-2">
           <form method="post" action="/admin/users/{user_id}/subscription/adjust-device-slots" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}" />
             <input type="hidden" name="delta" value="1" />
-            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) >= MAX_DEVICES else ""}>+1 СЃР»РѕС‚</button>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) >= MAX_DEVICES else ""}>+1 слот</button>
           </form>
           <form method="post" action="/admin/users/{user_id}/subscription/adjust-device-slots" class="inline">
             <input type="hidden" name="subscription_id" value="{int(active_snap['id'])}" />
             <input type="hidden" name="delta" value="-1" />
-            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) <= MIN_DEVICES else ""}>в€’1 СЃР»РѕС‚</button>
+            <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9" {"disabled" if int(active_snap['devices_count']) <= MIN_DEVICES else ""}>−1 слот</button>
           </form>
         </div>
         <div class="divider my-0"></div>
-        <p class="text-sm opacity-80">РџРѕР»РЅРѕРµ РѕС‚РєР»СЋС‡РµРЅРёРµ (РєР°Рє РІ Telegram-Р°РґРјРёРЅРєРµ): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> РІ Р‘Р” Рё <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> РІ РїР°РЅРµР»Рё.</p>
-        <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_snap['id']}">РћС‚РєР»СЋС‡РёС‚СЊ РїРѕРґРїРёСЃРєСѓ</button>
+        <p class="text-sm opacity-80">Полное отключение (как в Telegram-админке): <code class="text-xs bg-base-300 px-1 rounded">cancelled</code> в БД и <code class="text-xs bg-base-300 px-1 rounded">DISABLED</code> в панели.</p>
+        <button type="button" class="btn btn-error btn-outline btn-sm h-9 min-h-9 w-fit" data-remna-open-sub-disable data-no-row-nav data-user-id="{user_id}" data-sub-id="{active_snap['id']}">Отключить подписку</button>
       </div>
     </div>"""
     elif last_cancelled_id is not None:
         mgmt_html = f"""
     <div class="card bg-base-100 border border-success/35 shadow-lg">
       <div class="card-body gap-4">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-plug-circle-check text-success mr-2" aria-hidden="true"></i>Р’РєР»СЋС‡РёС‚СЊ РїРѕРґРїРёСЃРєСѓ</h3>
-        <p class="text-sm opacity-80">РџРѕСЃР»РµРґРЅСЏСЏ РѕС‚РєР»СЋС‡С‘РЅРЅР°СЏ Р·Р°РїРёСЃСЊ: <b>#{last_cancelled_id}</b>.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-plug-circle-check text-success mr-2" aria-hidden="true"></i>Включить подписку</h3>
+        <p class="text-sm opacity-80">Последняя отключённая запись: <b>#{last_cancelled_id}</b>.</p>
         <form method="post" action="/admin/users/{user_id}/subscription/enable" class="flex flex-wrap gap-2">
           <input type="hidden" name="subscription_id" value="{last_cancelled_id}"/>
-          <button type="submit" class="btn btn-success btn-sm h-9 min-h-9">Р’РєР»СЋС‡РёС‚СЊ СЃРЅРѕРІР°</button>
+          <button type="submit" class="btn btn-success btn-sm h-9 min-h-9">Включить снова</button>
         </form>
       </div>
     </div>"""
@@ -6767,9 +6767,9 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     ref_by_block = ""
     if referrer_sn is not None:
         r_disp = referrer_sn.first_name or referrer_sn.username or f"#{referrer_sn.id}"
-        ref_by_block = f"<p>РџСЂРёРіР»Р°СЃРёР»: <a class='link link-primary font-medium' href='/admin/users/{referrer_sn.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer_sn.id})</span></p>"
+        ref_by_block = f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer_sn.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer_sn.id})</span></p>"
     else:
-        ref_by_block = "<p class='opacity-60'>РџСЂРёРіР»Р°СЃРёС‚РµР»СЊ: РЅРµ СѓРєР°Р·Р°РЅ (РїСЂСЏРјР°СЏ СЂРµРіРёСЃС‚СЂР°С†РёСЏ).</p>"
+        ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
 
     invited_rows = "".join(
         f"<tr><td>{iid}</td><td><a class='link link-primary font-medium' href='/admin/users/{iid}'>{_esc(str(ifn or '').strip() or (str(iun).strip() if iun is not None else '') or '-')}</a></td>"
@@ -6780,11 +6780,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     )
     ref_block = f"""
     <div class="divider my-0"></div>
-    <h3 class="text-lg font-semibold"><i class="fa-solid fa-user-group text-primary mr-2" aria-hidden="true"></i>Р РµС„РµСЂР°Р»С‹</h3>
+    <h3 class="text-lg font-semibold"><i class="fa-solid fa-user-group text-primary mr-2" aria-hidden="true"></i>Рефералы</h3>
     {ref_by_block}
-    <p>РџСЂРёРІРµР»Рё РїРѕ СЂРµС„-СЃСЃС‹Р»РєРµ: <b class="text-primary">{invited_count}</b></p>
-    <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>РРјСЏ</th><th>Username</th><th>Telegram</th><th>Р РµРіРёСЃС‚СЂР°С†РёСЏ</th></tr></thead>
-    <tbody>{invited_rows or '<tr><td colspan="5" class="opacity-50">РџРѕРєР° РЅРёРєРѕРіРѕ</td></tr>'}</tbody></table></div>
+    <p>Привели по реф-ссылке: <b class="text-primary">{invited_count}</b></p>
+    <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Имя</th><th>Username</th><th>Telegram</th><th>Регистрация</th></tr></thead>
+    <tbody>{invited_rows or '<tr><td colspan="5" class="opacity-50">Пока никого</td></tr>'}</tbody></table></div>
     """
 
     hwid_rows = []
@@ -6797,7 +6797,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         hwid = str(d.get("hwid") or "")
         title = hwid_device_title(d, i + 1)
         dt = format_rw_device_datetime_local(str(d.get("createdAt") or ""))
-        plat = _esc(str(d.get("platform") or "вЂ”"))
+        plat = _esc(str(d.get("platform") or "—"))
         detail = _hwid_device_json_block(d)
         hwid_rows.append(
             "<tr>"
@@ -6805,22 +6805,22 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             f"<td class='align-top'>{detail}</td>"
             "<td class='text-right align-top'>"
             f"<button type='button' class='btn btn-error btn-outline btn-sm h-9 min-h-9' data-remna-open-hwid data-no-row-nav "
-            f'data-user-id="{user_id}" data-hwid="{_esc_attr(hwid)}" data-title="{_esc_attr(title)}" data-slot-removable="{slot_rm_attr}">РћС‚РІСЏР·Р°С‚СЊ</button></td></tr>'
+            f'data-user-id="{user_id}" data-hwid="{_esc_attr(hwid)}" data-title="{_esc_attr(title)}" data-slot-removable="{slot_rm_attr}">Отвязать</button></td></tr>'
         )
     hwid_alert = ""
     if hwid_err:
         hwid_alert = f"<div class='alert alert-warning text-sm'>{_esc(hwid_err)}</div>"
     elif not ud.remnawave_uuid:
-        hwid_alert = "<p class='text-sm opacity-60'>РќРµС‚ RemnaWave UUID вЂ” СЃРїРёСЃРѕРє HWID СЃ РїР°РЅРµР»Рё РЅРµРґРѕСЃС‚СѓРїРµРЅ.</p>"
+        hwid_alert = "<p class='text-sm opacity-60'>Нет RemnaWave UUID — список HWID с панели недоступен.</p>"
 
     devices_block = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-mobile-screen-button text-accent mr-2" aria-hidden="true"></i>РЈСЃС‚СЂРѕР№СЃС‚РІР° РїР°РЅРµР»Рё (HWID)</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-mobile-screen-button text-accent mr-2" aria-hidden="true"></i>Устройства панели (HWID)</h3>
         {hwid_alert}
-        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>РЈСЃС‚СЂРѕР№СЃС‚РІРѕ</th><th>РџР»Р°С‚С„РѕСЂРјР°</th><th>РЎРѕР·РґР°РЅРѕ</th><th>Р”Р°РЅРЅС‹Рµ</th><th></th></tr></thead>
-        <tbody>{''.join(hwid_rows) or '<tr><td colspan="5" class="opacity-50">РќРµС‚ РїСЂРёРІСЏР·Р°РЅРЅС‹С… СѓСЃС‚СЂРѕР№СЃС‚РІ</td></tr>'}</tbody></table></div>
-        <p class="text-xs opacity-60">В«РћС‚РІСЏР·Р°С‚СЊВ»: РІ РјРѕРґР°Р»СЊРЅРѕРј РѕРєРЅРµ вЂ” В«РћС‚РІСЏР·Р°С‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕВ» (С‚РѕР»СЊРєРѕ РїР°РЅРµР»СЊ) РёР»Рё В«РЈРґР°Р»РёС‚СЊ СЃР»РѕС‚В» СЃ РїРѕРґРїРёСЃРєРё (РµСЃР»Рё СЃР»РѕС‚РѕРІ Р±РѕР»СЊС€Рµ РґРІСѓС…).</p>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>Устройство</th><th>Платформа</th><th>Создано</th><th>Данные</th><th></th></tr></thead>
+        <tbody>{''.join(hwid_rows) or '<tr><td colspan="5" class="opacity-50">Нет привязанных устройств</td></tr>'}</tbody></table></div>
+        <p class="text-xs opacity-60">«Отвязать»: в модальном окне — «Отвязать устройство» (только панель) или «Удалить слот» с подписки (если слотов больше двух).</p>
       </div>
     </div>
     """
@@ -6832,7 +6832,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="flex flex-wrap items-start gap-4">
             {_avatar_with_fallback(ud, px=64, ring_tw=ring_tw, ring_offset="ring-offset-4")}
             <div class="min-w-0 flex-1">
-              <h2 class="text-2xl font-bold">РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ #{ud.id}</h2>
+              <h2 class="text-2xl font-bold">Пользователь #{ud.id}</h2>
               <p class="text-sm opacity-60">{_esc(ud.first_name or ud.username or '-')}</p>
               {_telegram_profile_actions(ud)}
             </div>
@@ -6840,28 +6840,28 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <div class="divider my-0"></div>
           {sub_summary_html}
           <div class="divider my-0"></div>
-          <h3 class="text-sm font-bold uppercase tracking-wide text-base-content/50">Р”Р°РЅРЅС‹Рµ Р°РєРєР°СѓРЅС‚Р°</h3>
+          <h3 class="text-sm font-bold uppercase tracking-wide text-base-content/50">Данные аккаунта</h3>
           <div class="grid gap-2 text-sm sm:grid-cols-2">
-            <p>РРјСЏ: <b>{_esc((ud.first_name or '') + ' ' + (ud.last_name or ''))}</b></p>
+            <p>Имя: <b>{_esc((ud.first_name or '') + ' ' + (ud.last_name or ''))}</b></p>
             <p>Username: <b>{_esc(ud.username or '-')}</b></p>
             {github_lines_html}
           </div>
-          {_copy_line(label="ID РІ Р±РѕС‚Рµ", value=str(ud.id))}
+          {_copy_line(label="ID в боте", value=str(ud.id))}
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
-          {_copy_line(label="UUID РІ РїР°РЅРµР»Рё Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "вЂ”")}
-          {_copy_line(label="Р РµС„. РєРѕРґ", value=str(ud.referral_code))}
+          {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
+          {_copy_line(label="Реф. код", value=str(ud.referral_code))}
           <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3">
-            <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Remnawave: РїСЂРѕРІРµСЂРєР° Рё СЂСѓС‡РЅР°СЏ РїСЂРёРІСЏР·РєР°</h4>
+            <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Remnawave: проверка и ручная привязка</h4>
             <div class="flex flex-wrap items-end gap-3">
               <form method="post" action="/admin/users/{user_id}/remnawave/check" class="flex items-end gap-2">
                 <button type="submit" class="btn btn-outline btn-sm h-10 min-h-10 gap-1.5">
-                  <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>РџСЂРѕРІРµСЂРёС‚СЊ РІ РїР°РЅРµР»Рё
+                  <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>Проверить в панели
                 </button>
               </form>
               <form method="post" action="/admin/users/{user_id}/subscription/manual-bind" class="flex items-end gap-2"
-                data-remna-confirm-msg="{_esc_attr(f'РџСЂРёРІСЏР·Р°С‚СЊ СЃСѓС‰РµСЃС‚РІСѓСЋС‰СѓСЋ РїРѕРґРїРёСЃРєСѓ Рє РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ #{user_id}?')}">
+                data-remna-confirm-msg="{_esc_attr(f'Привязать существующую подписку к пользователю #{user_id}?')}">
                 <label class="form-control">
-                  <span class="label-text text-xs opacity-70">Р СѓС‡РЅР°СЏ РїСЂРёРІСЏР·РєР°: ID РїРѕРґРїРёСЃРєРё (Р»РѕРєР°Р»СЊРЅС‹Р№) РёР»Рё ID РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ Remnawave</span>
+                  <span class="label-text text-xs opacity-70">Ручная привязка: ID подписки (локальный) или ID пользователя Remnawave</span>
                   <input
                     type="text"
                     name="subscription_id"
@@ -6872,23 +6872,23 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                   />
                 </label>
                 <button type="submit" class="btn btn-secondary btn-sm h-10 min-h-10 gap-1.5">
-                  <i class="fa-solid fa-link" aria-hidden="true"></i>РџСЂРёРІСЏР·Р°С‚СЊ
+                  <i class="fa-solid fa-link" aria-hidden="true"></i>Привязать
                 </button>
               </form>
             </div>
           </div>
           <div class="flex flex-wrap items-end gap-2">
-            <p class="m-0">Р‘Р°Р»Р°РЅСЃ: <b class="text-primary">{_esc(ud.balance)} в‚Ѕ</b></p>
+            <p class="m-0">Баланс: <b class="text-primary">{_esc(ud.balance)} ₽</b></p>
             <p class="m-0">Billing mode: <b>{_esc(ud.billing_mode)}</b></p>
             <form method="post" action="/admin/users/{user_id}/billing-mode/toggle"
-              data-remna-confirm-msg="{_esc_attr(f'РџРµСЂРµРєР»СЋС‡РёС‚СЊ billing mode РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ #{user_id}?')}">
+              data-remna-confirm-msg="{_esc_attr(f'Переключить billing mode пользователя #{user_id}?')}">
               <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5">
-                <i class="fa-solid fa-right-left" aria-hidden="true"></i>РџРµСЂРµРєР»СЋС‡РёС‚СЊ billing mode
+                <i class="fa-solid fa-right-left" aria-hidden="true"></i>Переключить billing mode
               </button>
             </form>
             <form method="post" action="/admin/users/{user_id}/add-balance" class="flex flex-wrap items-end gap-2">
               <label class="form-control">
-                <span class="label-text text-xs opacity-70">Р‘Р°Р»Р°РЅСЃ +в‚Ѕ</span>
+                <span class="label-text text-xs opacity-70">Баланс +₽</span>
                 <input
                   type="text"
                   name="amount"
@@ -6899,34 +6899,34 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
                 />
               </label>
               <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
-                <i class="fa-solid fa-plus" aria-hidden="true"></i>Р’С‹РґР°С‚СЊ
+                <i class="fa-solid fa-plus" aria-hidden="true"></i>Выдать
               </button>
             </form>
             <form method="post" action="/admin/users/{user_id}/reset-balance"
-              data-remna-confirm-msg="{_esc_attr(f'РћР±РЅСѓР»РёС‚СЊ Р±Р°Р»Р°РЅСЃ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ #{user_id}?')}">
+              data-remna-confirm-msg="{_esc_attr(f'Обнулить баланс пользователя #{user_id}?')}">
               <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
-                <i class="fa-solid fa-eraser" aria-hidden="true"></i>РћР±РЅСѓР»РёС‚СЊ
+                <i class="fa-solid fa-eraser" aria-hidden="true"></i>Обнулить
               </button>
             </form>
           </div>
           {personal_pricing_block}
           {negative_risk_block}
           {billing_detail_block}
-          <p>Р РµРіРёСЃС‚СЂР°С†РёСЏ: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
-          <p>Р’СЃРµРіРѕ РѕРїР»Р°С‚РёР» (Р±РµР· Р°РґРјРёРЅ-Р±РѕРЅСѓСЃРѕРІ): <b>{_esc(payments_total)} в‚Ѕ</b></p>
+          <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
+          <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>
           {ref_block}
           <div class="divider my-0"></div>
           <div class="rounded-xl border border-error/40 bg-error/5 p-4">
-            <h3 class="text-sm font-bold uppercase tracking-wide text-error">РћРїР°СЃРЅР°СЏ Р·РѕРЅР°</h3>
-            <p class="text-xs opacity-80 mt-2">РџРѕР»РЅРѕРµ СѓРґР°Р»РµРЅРёРµ РёР· PostgreSQL (РїРѕРґРїРёСЃРєРё, С‚СЂР°РЅР·Р°РєС†РёРё Рё СЃРІСЏР·Р°РЅРЅС‹Рµ РґР°РЅРЅС‹Рµ РїРѕ CASCADE) Рё СѓРґР°Р»РµРЅРёРµ СѓС‡С‘С‚РЅРѕР№ Р·Р°РїРёСЃРё РІ Remnawave, РµСЃР»Рё Р·Р°РґР°РЅ UUID Рё РЅРµ РІРєР»СЋС‡С‘РЅ REMNAWAVE_STUB.</p>
+            <h3 class="text-sm font-bold uppercase tracking-wide text-error">Опасная зона</h3>
+            <p class="text-xs opacity-80 mt-2">Полное удаление из PostgreSQL (подписки, транзакции и связанные данные по CASCADE) и удаление учётной записи в Remnawave, если задан UUID и не включён REMNAWAVE_STUB.</p>
             <form method="post" action="/admin/users/{user_id}/delete" class="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
-              data-remna-confirm-msg="{_esc_attr('РЈРґР°Р»РёС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅР°РІСЃРµРіРґР°? Р­С‚Рѕ РЅРµРѕР±СЂР°С‚РёРјРѕ.')}">
+              data-remna-confirm-msg="{_esc_attr('Удалить пользователя навсегда? Это необратимо.')}">
               <label class="form-control w-full max-w-xs">
-                <span class="label-text text-xs font-medium">РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ: РІРІРµРґРёС‚Рµ Telegram ID</span>
+                <span class="label-text text-xs font-medium">Подтверждение: введите Telegram ID</span>
                 <input type="text" name="confirm_telegram_id" required inputmode="numeric" autocomplete="off" placeholder="{_esc(str(ud.telegram_id))}" class="input input-bordered input-sm h-9 min-h-9 font-mono" />
               </label>
               <button type="submit" class="btn btn-error btn-sm h-9 min-h-9 gap-1.5">
-                <i class="fa-solid fa-user-slash" aria-hidden="true"></i>РЈРґР°Р»РёС‚СЊ РёР· Р‘Р” Рё РїР°РЅРµР»Рё
+                <i class="fa-solid fa-user-slash" aria-hidden="true"></i>Удалить из БД и панели
               </button>
             </form>
           </div>
@@ -6941,17 +6941,17 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     <div class="grid gap-4 mt-4 xl:grid-cols-2">
       <div class="card bg-base-100 border border-base-content/10 shadow-lg">
         <div class="card-body gap-3">
-          <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>РСЃС‚РѕСЂРёСЏ РїРѕРґРїРёСЃРѕРє ({len(subs_tuples)})</h3>
-          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>РЎС‚Р°С‚СѓСЃ</th><th>РЎС‚Р°СЂС‚</th><th>Р”Рѕ</th><th>РЈСЃС‚СЂРѕР№СЃС‚РІР°</th></tr></thead>
-          <tbody>{subs_rows or '<tr><td colspan="5" class="opacity-50">РќРµС‚ РїРѕРґРїРёСЃРѕРє</td></tr>'}</tbody></table></div>
+          <h3 class="text-lg font-semibold"><i class="fa-solid fa-clock-rotate-left text-secondary mr-2" aria-hidden="true"></i>История подписок ({len(subs_tuples)})</h3>
+          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>До</th><th>Устройства</th></tr></thead>
+          <tbody>{subs_rows or '<tr><td colspan="5" class="opacity-50">Нет подписок</td></tr>'}</tbody></table></div>
         </div>
       </div>
       <div class="card bg-base-100 border border-base-content/10 shadow-lg">
         <div class="card-body gap-3">
-          <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>РСЃС‚РѕСЂРёСЏ С‚СЂР°РЅР·Р°РєС†РёР№ ({len(txs_tuples)})</h3>
-          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>РўРёРї</th><th>РЎСѓРјРјР°</th><th>РЎС‚Р°С‚СѓСЃ</th><th>РџСЂРѕРІР°Р№РґРµСЂ</th><th>Р”Р°С‚Р°</th><th class="whitespace-nowrap">Р”РµР№СЃС‚РІРёРµ</th></tr></thead>
-          <tbody>{tx_rows or '<tr><td colspan="7" class="opacity-50">РќРµС‚ С‚СЂР°РЅР·Р°РєС†РёР№</td></tr>'}</tbody></table></div>
-          <p class="text-xs opacity-70">Р’РѕР·РІСЂР°С‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РґР»СЏ РїРѕРєСѓРїРєРё С‚Р°СЂРёС„Р° РёР»Рё СЃР»РѕС‚Р° СѓСЃС‚СЂРѕР№СЃС‚РІР° СЃ Р±Р°Р»Р°РЅСЃР° (РЅРµ РґР»СЏ PAYG Рё РїРѕРїРѕР»РЅРµРЅРёР№).</p>
+          <h3 class="text-lg font-semibold"><i class="fa-solid fa-receipt text-accent mr-2" aria-hidden="true"></i>История транзакций ({len(txs_tuples)})</h3>
+          <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Тип</th><th>Сумма</th><th>Статус</th><th>Провайдер</th><th>Дата</th><th class="whitespace-nowrap">Действие</th></tr></thead>
+          <tbody>{tx_rows or '<tr><td colspan="7" class="opacity-50">Нет транзакций</td></tr>'}</tbody></table></div>
+          <p class="text-xs opacity-70">Возврат доступен только для покупки тарифа или слота устройства с баланса (не для PAYG и пополнений).</p>
         </div>
       </div>
     </div>
@@ -7051,9 +7051,9 @@ async def admin_user_add_balance(
     try:
         amt = Decimal(raw)
     except (InvalidOperation, ValueError):
-        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('РќРµРІРµСЂРЅР°СЏ СЃСѓРјРјР°')}", status_code=303)
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('Неверная сумма')}", status_code=303)
     if amt <= 0:
-        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('РЎСѓРјРјР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ > 0')}", status_code=303)
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
     wauth = request.session.get("wauth") or {}
     admin_tg = int(wauth.get("telegram_id") or 0)
     async with await _session() as session:
@@ -7074,7 +7074,7 @@ async def admin_user_add_balance(
             payment_provider="admin",
             payment_id=None,
             status="completed",
-            description=f"РђРґРјРёРЅ (web user) РґРѕР±Р°РІРёР» Р±Р°Р»Р°РЅСЃ: +{amt} в‚Ѕ",
+            description=f"Админ (web user) добавил баланс: +{amt} ₽",
             meta={"admin_id": admin_db_id, "source": "web_user"},
         )
         session.add(txn_bal)
@@ -7092,10 +7092,10 @@ async def admin_user_add_balance(
         await session.commit()
         await notify_admin(
             settings,
-            title="рџ’° " + bold("Р‘Р°Р»Р°РЅСЃ РїРѕРїРѕР»РЅРµРЅ (web-admin)"),
+            title="💰 " + bold("Баланс пополнен (web-admin)"),
             lines=[
                 web_admin_target_user_line(settings, u),
-                plain("РЎСѓРјРјР°: ") + bold(f"+{amt} в‚Ѕ"),
+                plain("Сумма: ") + bold(f"+{amt} ₽"),
                 web_admin_actor_notify_line(),
             ],
             event_type="admin_balance_add_web",
@@ -7135,7 +7135,7 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
                 payment_provider="admin",
                 payment_id=None,
                 status="completed",
-                description=f"РђРґРјРёРЅ (web user) РѕР±РЅСѓР»РёР» Р±Р°Р»Р°РЅСЃ: {before} в‚Ѕ -> 0 в‚Ѕ",
+                description=f"Админ (web user) обнулил баланс: {before} ₽ -> 0 ₽",
                 meta={
                     "admin_id": admin_db_id,
                     "source": "web_user",
@@ -7153,10 +7153,10 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
         await session.commit()
         await notify_admin(
             settings,
-            title="рџ’° " + bold("Р‘Р°Р»Р°РЅСЃ РѕР±РЅСѓР»С‘РЅ (web-admin)"),
+            title="💰 " + bold("Баланс обнулён (web-admin)"),
             lines=[
                 web_admin_target_user_line(settings, u),
-                plain("Р‘С‹Р»Рѕ: ") + bold(f"{before} в‚Ѕ") + plain(" в†’ ") + bold("0 в‚Ѕ"),
+                plain("Было: ") + bold(f"{before} ₽") + plain(" → ") + bold("0 ₽"),
                 web_admin_actor_notify_line(),
             ],
             event_type="admin_balance_reset_web",
@@ -7186,12 +7186,12 @@ async def admin_user_delete_post(
             return RedirectResponse("/admin/users", status_code=303)
         if ct != str(user.telegram_id):
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('Р’РІРµРґРёС‚Рµ РІ РїРѕР»Рµ С‚РѕС‡РЅС‹Р№ Telegram ID СЌС‚РѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ (РєР°Рє РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ).')}",
+                f"/admin/users/{user_id}?err={quote_plus('Введите в поле точный Telegram ID этого пользователя (как подтверждение).')}",
                 status_code=303,
             )
         if linked is not None and linked.id == user.id:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('РќРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ СЃРІРѕСЋ СЃРѕР±СЃС‚РІРµРЅРЅСѓСЋ СѓС‡С‘С‚РЅСѓСЋ Р·Р°РїРёСЃСЊ.')}",
+                f"/admin/users/{user_id}?err={quote_plus('Нельзя удалить свою собственную учётную запись.')}",
                 status_code=303,
             )
         target_line = web_admin_target_user_line(settings, user)
@@ -7203,10 +7203,10 @@ async def admin_user_delete_post(
         await session.commit()
         await notify_admin(
             settings,
-            title="рџ—‘ " + bold("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ СѓРґР°Р»С‘РЅ (web-admin)"),
+            title="🗑 " + bold("Пользователь удалён (web-admin)"),
             lines=[
                 target_line,
-                plain("РЈРґР°Р»С‘РЅ РёР· Р‘Р” Рё Remnawave (РµСЃР»Рё Р±С‹Р» UUID)."),
+                plain("Удалён из БД и Remnawave (если был UUID)."),
                 web_admin_actor_notify_line(),
             ],
             event_type="user_delete_web",
@@ -7250,7 +7250,7 @@ async def admin_user_remnawave_check(
     settings = get_settings()
     if settings.remnawave_stub:
         return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('REMNAWAVE_STUB РІРєР»СЋС‡РµРЅ: РїСЂРѕРІРµСЂРєР° РЅРµРґРѕСЃС‚СѓРїРЅР°')}",
+            f"/admin/users/{user_id}?err={quote_plus('REMNAWAVE_STUB включен: проверка недоступна')}",
             status_code=303,
         )
     async with await _session() as session:
@@ -7265,25 +7265,25 @@ async def admin_user_remnawave_check(
                 hit, _ = await _web_lookup_remnawave_by_tg_or_username(rw, str(user.username))
         except RemnaWaveError as e:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('РћС€РёР±РєР° Remnawave: ' + str(e)[:220])}",
+                f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
                 status_code=303,
             )
         if hit is None:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('Р’ РїР°РЅРµР»Рё Remnawave Р·Р°РїРёСЃСЊ РЅРµ РЅР°Р№РґРµРЅР° РїРѕ Telegram ID/username РѕС‚РєСЂС‹С‚РѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ')}",
+                f"/admin/users/{user_id}?err={quote_plus('В панели Remnawave запись не найдена по Telegram ID/username открытого пользователя')}",
                 status_code=303,
             )
         rw_uuid_raw = str(hit.get("uuid") or "").strip()
         if not rw_uuid_raw:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('РџР°РЅРµР»СЊ РІРµСЂРЅСѓР»Р° Р·Р°РїРёСЃСЊ Р±РµР· UUID')}",
+                f"/admin/users/{user_id}?err={quote_plus('Панель вернула запись без UUID')}",
                 status_code=303,
             )
         try:
             rw_uuid = UUID(rw_uuid_raw)
         except ValueError:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('UUID РёР· РїР°РЅРµР»Рё РёРјРµРµС‚ РЅРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚')}",
+                f"/admin/users/{user_id}?err={quote_plus('UUID из панели имеет неверный формат')}",
                 status_code=303,
             )
         user.remnawave_uuid = rw_uuid
@@ -7314,13 +7314,13 @@ async def admin_user_manual_bind_subscription(
     sid_raw = (subscription_id or "").strip()
     if not sid_raw.isdigit():
         return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('РќРµРІРµСЂРЅС‹Р№ ID РїРѕРґРїРёСЃРєРё')}",
+            f"/admin/users/{user_id}?err={quote_plus('Неверный ID подписки')}",
             status_code=303,
         )
     sid = int(sid_raw)
     if sid <= 0:
         return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus('РќРµРІРµСЂРЅС‹Р№ ID РїРѕРґРїРёСЃРєРё')}",
+            f"/admin/users/{user_id}?err={quote_plus('Неверный ID подписки')}",
             status_code=303,
         )
     async with await _session() as session:
@@ -7333,7 +7333,7 @@ async def admin_user_manual_bind_subscription(
             settings = get_settings()
             if settings.remnawave_stub:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РџРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР° Р»РѕРєР°Р»СЊРЅРѕ: #' + str(sid))}",
+                    f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена локально: #' + str(sid))}",
                     status_code=303,
                 )
             rw = RemnaWaveClient(settings)
@@ -7341,25 +7341,25 @@ async def admin_user_manual_bind_subscription(
                 rw_user = await rw.find_user_by_panel_id(sid)
             except RemnaWaveError as e:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РћС€РёР±РєР° Remnawave: ' + str(e)[:220])}",
+                    f"/admin/users/{user_id}?err={quote_plus('Ошибка Remnawave: ' + str(e)[:220])}",
                     status_code=303,
                 )
             if rw_user is None:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РќРµ РЅР°Р№РґРµРЅРѕ: РЅРё Р»РѕРєР°Р»СЊРЅР°СЏ РїРѕРґРїРёСЃРєР° #' + str(sid) + ', РЅРё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ Remnawave СЃ id=' + str(sid))}",
+                    f"/admin/users/{user_id}?err={quote_plus('Не найдено: ни локальная подписка #' + str(sid) + ', ни пользователь Remnawave с id=' + str(sid))}",
                     status_code=303,
                 )
             rw_uuid_raw = str(rw_user.get("uuid") or "").strip()
             if not rw_uuid_raw:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РЈ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ Remnawave РЅРµС‚ UUID')}",
+                    f"/admin/users/{user_id}?err={quote_plus('У пользователя Remnawave нет UUID')}",
                     status_code=303,
                 )
             try:
                 rw_uuid = UUID(rw_uuid_raw)
             except ValueError:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('UUID РёР· Remnawave РёРјРµРµС‚ РЅРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚')}",
+                    f"/admin/users/{user_id}?err={quote_plus('UUID из Remnawave имеет неверный формат')}",
                     status_code=303,
                 )
             sub = (
@@ -7372,7 +7372,7 @@ async def admin_user_manual_bind_subscription(
             ).scalar_one_or_none()
             if sub is None:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('Р’ РїР°РЅРµР»Рё РЅР°Р№РґРµРЅ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ id=' + str(sid) + ', РЅРѕ Р»РѕРєР°Р»СЊРЅР°СЏ РїРѕРґРїРёСЃРєР° СЃ РµРіРѕ UUID РЅРµ РЅР°Р№РґРµРЅР°')}",
+                    f"/admin/users/{user_id}?err={quote_plus('В панели найден пользователь id=' + str(sid) + ', но локальная подписка с его UUID не найдена')}",
                     status_code=303,
                 )
             panel_id_used = True
@@ -7500,7 +7500,7 @@ async def admin_user_subscription_set_device_slots(
     dc = int(devices_count)
     if dc < MIN_DEVICES or dc > MAX_DEVICES:
         return RedirectResponse(
-            f"/admin/users/{user_id}?err={quote_plus(f'РЎР»РѕС‚РѕРІ: С†РµР»РѕРµ С‡РёСЃР»Рѕ РѕС‚ {MIN_DEVICES} РґРѕ {MAX_DEVICES}')}",
+            f"/admin/users/{user_id}?err={quote_plus(f'Слотов: целое число от {MIN_DEVICES} до {MAX_DEVICES}')}",
             status_code=303,
         )
     settings = get_settings()
@@ -7518,7 +7518,7 @@ async def admin_user_subscription_set_device_slots(
         ).scalar_one_or_none()
         if sub is None:
             return RedirectResponse(
-                f"/admin/users/{user_id}?err={quote_plus('РџРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР°')}",
+                f"/admin/users/{user_id}?err={quote_plus('Подписка не найдена')}",
                 status_code=303,
             )
         sub.devices_count = dc
@@ -7587,7 +7587,7 @@ async def admin_user_set_custom_month_price(
                 amount = Decimal(raw)
             except InvalidOperation:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ С†РµРЅР°')}",
+                    f"/admin/users/{user_id}?err={quote_plus('Некорректная цена')}",
                     status_code=303,
                 )
             if amount <= 0:
@@ -7620,14 +7620,14 @@ async def admin_user_set_personal_discount(
                 pct = Decimal(raw)
             except InvalidOperation:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ СЃРєРёРґРєР°')}",
+                    f"/admin/users/{user_id}?err={quote_plus('Некорректная скидка')}",
                     status_code=303,
                 )
             if pct <= 0:
                 user.personal_tariff_discount_percent = None
             elif pct > 100:
                 return RedirectResponse(
-                    f"/admin/users/{user_id}?err={quote_plus('РЎРєРёРґРєР° РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ 100%')}",
+                    f"/admin/users/{user_id}?err={quote_plus('Скидка не может быть больше 100%')}",
                     status_code=303,
                 )
             else:
@@ -7723,7 +7723,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     display = (settings.web_admin_profile_display_name or "").strip() or str(
         (linked.first_name if linked is not None and linked.first_name else "")
         or auth.get("label")
-        or "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ"
+        or "Администратор"
     )
     kind = str(auth.get("kind") or "")
     avatar = _esc(_user_avatar_photo_src(linked) if linked is not None else _auth_avatar(request))
@@ -7736,72 +7736,72 @@ async def admin_profile(request: Request) -> HTMLResponse:
         except (TypeError, ValueError):
             tid_int = None
         un = str(auth.get("username") or "").strip()
-        parts.append("<p class='text-base'>Р’С…РѕРґ С‡РµСЂРµР· <b>Telegram</b>.</p>")
+        parts.append("<p class='text-base'>Вход через <b>Telegram</b>.</p>")
         if tid_int is not None:
             parts.append(f"<p>Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{tid_int}</code></p>")
         if un:
             tg_url = f"https://t.me/{url_quote(un)}"
             parts.append(
-                f"<p>РџСЂРѕС„РёР»СЊ: <a class='link link-primary font-medium' href=\"{_esc(tg_url)}\" target=\"_blank\" rel=\"noopener\">@{_esc(un)}</a></p>"
+                f"<p>Профиль: <a class='link link-primary font-medium' href=\"{_esc(tg_url)}\" target=\"_blank\" rel=\"noopener\">@{_esc(un)}</a></p>"
             )
     elif kind == "github":
         login = str(auth.get("login") or auth.get("username") or "").strip()
-        parts.append("<p class='text-base'>Р’С…РѕРґ С‡РµСЂРµР· <b>GitHub</b>.</p>")
+        parts.append("<p class='text-base'>Вход через <b>GitHub</b>.</p>")
         tg_from_session = auth.get("telegram_id")
         if tg_from_session is not None:
             parts.append(
-                "<p>РЎРІСЏР·Р°РЅРЅС‹Р№ Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>"
+                "<p>Связанный Telegram ID: <code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>"
                 + _esc(str(tg_from_session))
-                + "</code> (РїСЂРёРѕСЂРёС‚РµС‚РЅС‹Р№ Р°РєРєР°СѓРЅС‚)</p>"
+                + "</code> (приоритетный аккаунт)</p>"
             )
         if login:
             parts.append(
-                f"<p>РђРєРєР°СѓРЅС‚: <a class='link link-primary font-medium' href=\"https://github.com/{_esc(login)}\" target=\"_blank\" rel=\"noopener\">{_esc(login)}</a></p>"
+                f"<p>Аккаунт: <a class='link link-primary font-medium' href=\"https://github.com/{_esc(login)}\" target=\"_blank\" rel=\"noopener\">{_esc(login)}</a></p>"
             )
     else:
-        parts.append("<p class='opacity-70'>РЎРїРѕСЃРѕР± РІС…РѕРґР° РЅРµ РѕРїСЂРµРґРµР»С‘РЅ.</p>")
+        parts.append("<p class='opacity-70'>Способ входа не определён.</p>")
 
     panel_raw = (settings.remnawave_public_url or settings.remnawave_api_url or "").strip().rstrip("/")
     if panel_raw:
         parts.append(
             f"<p><a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5 normal-case' href=\"{_esc(panel_raw)}\" target=\"_blank\" rel=\"noopener\">"
-            "<i class='fa-solid fa-arrow-up-right-from-square' aria-hidden='true'></i>РџР°РЅРµР»СЊ Remnawave</a></p>"
+            "<i class='fa-solid fa-arrow-up-right-from-square' aria-hidden='true'></i>Панель Remnawave</a></p>"
         )
     ties = "\n".join(parts)
     bot_profile_href = f"/admin/users/{int(linked.id)}" if linked is not None else "/admin/profile"
     account_link_button = ""
     if linked is not None and (linked.github_username or "").strip():
         account_link_button = """
-          <form method="post" action="/admin/profile/github/unlink" data-remna-confirm-msg="РћС‚РјРµРЅРёС‚СЊ СЃРІСЏР·РєСѓ Telegram Рё GitHub?">
+          <form method="post" action="/admin/profile/github/unlink" data-remna-confirm-msg="Отменить связку Telegram и GitHub?">
             <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9 gap-1.5">
-              <i class="fa-solid fa-link-slash" aria-hidden="true"></i>РћС‚РјРµРЅРёС‚СЊ СЃРІСЏР·РєСѓ Р°РєРєР°СѓРЅС‚РѕРІ
+              <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отменить связку аккаунтов
             </button>
           </form>
         """
     else:
         account_link_button = (
             '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
-            '<i class="fa-solid fa-link" aria-hidden="true"></i>РЎРІСЏР·Р°С‚СЊ Telegram Рё GitHub</a>'
+            '<i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub</a>'
         )
     profile_notice = ""
     ncode = (request.query_params.get("n") or "").strip()
     err = (request.query_params.get("err") or "").strip()
     if ncode == "bal_ok":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>Р‘Р°Р»Р°РЅСЃ СѓСЃРїРµС€РЅРѕ РїРѕРїРѕР»РЅРµРЅ.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Баланс успешно пополнен.</span></div>"
     elif ncode == "linked_gh":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub СѓСЃРїРµС€РЅРѕ РїСЂРёРІСЏР·Р°РЅ Рє РІР°С€РµРјСѓ Telegram-РїСЂРѕС„РёР»СЋ.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub успешно привязан к вашему Telegram-профилю.</span></div>"
     elif ncode == "linked_tg":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram СѓСЃРїРµС€РЅРѕ РїСЂРёРІСЏР·Р°РЅ. РўРµРїРµСЂСЊ РїСЂРѕС„РёР»СЊ СЂР°Р±РѕС‚Р°РµС‚ СЃ РїСЂРёРѕСЂРёС‚РµС‚РѕРј Telegram ID.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram успешно привязан. Теперь профиль работает с приоритетом Telegram ID.</span></div>"
     elif ncode == "gh_unlinked":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub РѕС‚РІСЏР·Р°РЅ РѕС‚ РїСЂРѕС„РёР»СЏ.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub отвязан от профиля.</span></div>"
     elif ncode == "2fa_setup":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>РЎРµРєСЂРµС‚ 2FA СЃРѕР·РґР°РЅ. РћС‚СЃРєР°РЅРёСЂСѓР№С‚Рµ QR Рё РїРѕРґС‚РІРµСЂРґРёС‚Рµ РєРѕРґ.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Секрет 2FA создан. Отсканируйте QR и подтвердите код.</span></div>"
     elif ncode == "2fa_on":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA РІРєР»СЋС‡РµРЅР° РґР»СЏ РІС…РѕРґР° РІ web-admin.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA включена для входа в web-admin.</span></div>"
     elif ncode == "2fa_off":
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA РѕС‚РєР»СЋС‡РµРЅР°.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>2FA отключена.</span></div>"
     elif ncode == "session_revoked" or ncode.startswith("sessions_revoked_"):
-        profile_notice = "<div class='alert alert-success shadow-sm'><span>РЎРµСЃСЃРёСЏ РѕС‚РѕР·РІР°РЅР°. РџРѕРІС‚РѕСЂРЅС‹Р№ РІС…РѕРґ РїРѕС‚СЂРµР±СѓРµС‚ OAuth Рё 2FA.</span></div>"
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Сессия отозвана. Повторный вход потребует OAuth и 2FA.</span></div>"
     elif err:
         profile_notice = (
             "<div class='alert alert-error shadow-sm'><span>"
@@ -7835,24 +7835,24 @@ async def admin_profile(request: Request) -> HTMLResponse:
             gh = _esc(linked.github_username)
             link_badges = (
                 "<div class='flex flex-wrap items-center gap-2 text-xs'>"
-                "<span class='badge badge-success badge-sm'>Telegram СЃРІСЏР·Р°РЅ</span>"
+                "<span class='badge badge-success badge-sm'>Telegram связан</span>"
                 f"<span class='badge badge-outline badge-sm'>GitHub: @{gh}</span>"
                 "</div>"
             )
         profile_balance_block = f"""
     <div class="card bg-base-100 border border-primary/25 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-primary mr-2" aria-hidden="true"></i>Р‘Р°Р»Р°РЅСЃ РІ Р±РѕС‚Рµ</h3>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-primary mr-2" aria-hidden="true"></i>Баланс в боте</h3>
         {link_badges}
-        <p class="text-sm opacity-75">РџСЂРёРІСЏР·Р°РЅРЅС‹Р№ РїСЂРѕС„РёР»СЊ: <b>#{linked.id}</b> В· Telegram ID: <code class="bg-base-300 px-1 rounded text-xs">{linked.telegram_id}</code></p>
-        <p class="text-base">РўРµРєСѓС‰РёР№ Р±Р°Р»Р°РЅСЃ: <b class="text-primary text-xl">{_esc(linked.balance)} в‚Ѕ</b></p>
+        <p class="text-sm opacity-75">Привязанный профиль: <b>#{linked.id}</b> · Telegram ID: <code class="bg-base-300 px-1 rounded text-xs">{linked.telegram_id}</code></p>
+        <p class="text-base">Текущий баланс: <b class="text-primary text-xl">{_esc(linked.balance)} ₽</b></p>
         <form method="post" action="/admin/profile/add-balance" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РЎСѓРјРјР° РїРѕРїРѕР»РЅРµРЅРёСЏ, в‚Ѕ</span>
+            <span class="label-text text-xs opacity-70">Сумма пополнения, ₽</span>
             <input type="text" name="amount" required class="input input-bordered input-sm h-9 min-h-9 w-40" placeholder="100" />
           </label>
           <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-plus" aria-hidden="true"></i>РџРѕРїРѕР»РЅРёС‚СЊ
+            <i class="fa-solid fa-plus" aria-hidden="true"></i>Пополнить
           </button>
         </form>
       </div>
@@ -7861,8 +7861,8 @@ async def admin_profile(request: Request) -> HTMLResponse:
         profile_balance_block = """
     <div class="card bg-base-100 border border-warning/30 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-warning mr-2" aria-hidden="true"></i>Р‘Р°Р»Р°РЅСЃ РІ Р±РѕС‚Рµ</h3>
-        <p class="text-sm opacity-80">РќРµ РЅР°Р№РґРµРЅ СЃРІСЏР·Р°РЅРЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РѕС‚Р°. РќР°Р¶РјРёС‚Рµ <b>/start</b> РІ Р±РѕС‚Рµ Рё РѕР±РЅРѕРІРёС‚Рµ СЃС‚СЂР°РЅРёС†Сѓ.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-wallet text-warning mr-2" aria-hidden="true"></i>Баланс в боте</h3>
+        <p class="text-sm opacity-80">Не найден связанный пользователь бота. Нажмите <b>/start</b> в боте и обновите страницу.</p>
       </div>
     </div>"""
     if linked is not None:
@@ -7873,19 +7873,19 @@ async def admin_profile(request: Request) -> HTMLResponse:
             profile_2fa_block = f"""
     <div class="card bg-base-100 border border-info/30 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-info mr-2" aria-hidden="true"></i>Р”РІСѓС…СЌС‚Р°РїРЅР°СЏ Р°РІС‚РѕСЂРёР·Р°С†РёСЏ (2FA)</h3>
-        <p class="text-sm opacity-80">1) РћС‚СЃРєР°РЅРёСЂСѓР№С‚Рµ QR РІ Google Authenticator.<br/>2) Р’РІРµРґРёС‚Рµ 6-Р·РЅР°С‡РЅС‹Р№ РєРѕРґ РґР»СЏ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-info mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">1) Отсканируйте QR в Google Authenticator.<br/>2) Введите 6-значный код для подтверждения.</p>
         <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/50 p-4">
           <img src="{_esc(qr_data)}" alt="QR 2FA" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
           <code class="text-xs opacity-70">{_esc(setup_secret)}</code>
         </div>
         <form method="post" action="/admin/profile/2fa/enable" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РљРѕРґ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ</span>
+            <span class="label-text text-xs opacity-70">Код подтверждения</span>
             <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{{6,8}}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
           </label>
           <button type="submit" class="btn btn-info btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-check" aria-hidden="true"></i>Р’РєР»СЋС‡РёС‚СЊ 2FA
+            <i class="fa-solid fa-check" aria-hidden="true"></i>Включить 2FA
           </button>
         </form>
       </div>
@@ -7894,15 +7894,15 @@ async def admin_profile(request: Request) -> HTMLResponse:
             profile_2fa_block = """
     <div class="card bg-base-100 border border-success/30 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-success mr-2" aria-hidden="true"></i>Р”РІСѓС…СЌС‚Р°РїРЅР°СЏ Р°РІС‚РѕСЂРёР·Р°С†РёСЏ (2FA)</h3>
-        <p class="text-sm opacity-80">2FA РІРєР»СЋС‡РµРЅР°. РџСЂРё РІС…РѕРґРµ РІ web-admin РЅСѓР¶РЅРѕ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РєРѕРґРѕРј РёР· Google Authenticator.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-success mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">2FA включена. При входе в web-admin нужно подтверждение кодом из Google Authenticator.</p>
         <form method="post" action="/admin/profile/2fa/disable" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РљРѕРґ РґР»СЏ РѕС‚РєР»СЋС‡РµРЅРёСЏ</span>
+            <span class="label-text text-xs opacity-70">Код для отключения</span>
             <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{6,8}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
           </label>
           <button type="submit" class="btn btn-error btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-power-off" aria-hidden="true"></i>РћС‚РєР»СЋС‡РёС‚СЊ 2FA
+            <i class="fa-solid fa-power-off" aria-hidden="true"></i>Отключить 2FA
           </button>
         </form>
       </div>
@@ -7911,11 +7911,11 @@ async def admin_profile(request: Request) -> HTMLResponse:
             profile_2fa_block = """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-primary mr-2" aria-hidden="true"></i>Р”РІСѓС…СЌС‚Р°РїРЅР°СЏ Р°РІС‚РѕСЂРёР·Р°С†РёСЏ (2FA)</h3>
-        <p class="text-sm opacity-80">Р”РѕР±Р°РІСЊС‚Рµ РІС‚РѕСЂРѕР№ С„Р°РєС‚РѕСЂ С‡РµСЂРµР· Google Authenticator РґР»СЏ Р·Р°С‰РёС‚С‹ РІС…РѕРґР° РІ web-admin.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-primary mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
+        <p class="text-sm opacity-80">Добавьте второй фактор через Google Authenticator для защиты входа в web-admin.</p>
         <form method="post" action="/admin/profile/2fa/setup">
           <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-qrcode" aria-hidden="true"></i>РќР°СЃС‚СЂРѕРёС‚СЊ 2FA
+            <i class="fa-solid fa-qrcode" aria-hidden="true"></i>Настроить 2FA
           </button>
         </form>
       </div>
@@ -7926,20 +7926,20 @@ async def admin_profile(request: Request) -> HTMLResponse:
             oa = rw_user_online_at(uinf_p)
             fa = rw_user_first_connected_at(uinf_p)
             if oa is not None:
-                conn_lines += f"<p class='text-sm text-base-content/75'>РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ РІ РїР°РЅРµР»Рё: <b>{_fmt_dt_msk(oa)}</b></p>"
+                conn_lines += f"<p class='text-sm text-base-content/75'>Последняя активность в панели: <b>{_fmt_dt_msk(oa)}</b></p>"
             if fa is not None:
-                conn_lines += f"<p class='text-sm text-base-content/75'>РџРµСЂРІРѕРµ РїРѕРґРєР»СЋС‡РµРЅРёРµ: <b>{_fmt_dt_msk(fa)}</b></p>"
+                conn_lines += f"<p class='text-sm text-base-content/75'>Первое подключение: <b>{_fmt_dt_msk(fa)}</b></p>"
         vpn_block = f"""
     <div class="card bg-base-100 border border-success/30 shadow-lg overflow-hidden">
       <div class="h-1.5 w-full bg-gradient-to-r from-success/70 via-primary/60 to-accent/60"></div>
       <div class="card-body gap-4">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-link text-success mr-2" aria-hidden="true"></i>РњРѕСЏ VPN-РїРѕРґРїРёСЃРєР°</h3>
-        <p class="text-xs opacity-70">Р”Р°РЅРЅС‹Рµ РІР°С€РµРіРѕ Р°РєРєР°СѓРЅС‚Р° РІ Р±РѕС‚Рµ (СЃРѕРІРїР°РґР°СЋС‰РёР№ Telegram ID).</p>
-        {_copy_line(label="РЎСЃС‹Р»РєР° РїРѕРґРїРёСЃРєРё", value=sub_url_p)}
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-link text-success mr-2" aria-hidden="true"></i>Моя VPN-подписка</h3>
+        <p class="text-xs opacity-70">Данные вашего аккаунта в боте (совпадающий Telegram ID).</p>
+        {_copy_line(label="Ссылка подписки", value=sub_url_p)}
         {conn_lines}
         <div class="flex flex-col items-center gap-2 rounded-xl border border-base-content/10 bg-base-200/50 p-4">
-          <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">QR-РєРѕРґ</span>
-          <img src="/admin/profile/vpn-qr.png" alt="QR РїРѕРґРїРёСЃРєРё" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
+          <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">QR-код</span>
+          <img src="/admin/profile/vpn-qr.png" alt="QR подписки" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
         </div>
       </div>
     </div>"""
@@ -7947,24 +7947,24 @@ async def admin_profile(request: Request) -> HTMLResponse:
         vpn_block = """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-circle-info text-info mr-2" aria-hidden="true"></i>VPN-РїРѕРґРїРёСЃРєР°</h3>
-        <p class="text-sm opacity-80">РЎСЃС‹Р»РєСѓ РїРѕРґРїРёСЃРєРё Рё QR РјРѕР¶РЅРѕ РїРѕСЃРјРѕС‚СЂРµС‚СЊ, РІРѕР№РґСЏ РІ Р°РґРјРёРЅРєСѓ С‡РµСЂРµР· <b>Telegram</b> С‚РµРј Р¶Рµ Р°РєРєР°СѓРЅС‚РѕРј, С‡С‚Рѕ РІ Р±РѕС‚Рµ.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-circle-info text-info mr-2" aria-hidden="true"></i>VPN-подписка</h3>
+        <p class="text-sm opacity-80">Ссылку подписки и QR можно посмотреть, войдя в админку через <b>Telegram</b> тем же аккаунтом, что в боте.</p>
       </div>
     </div>"""
     elif kind == "telegram" and linked is None:
         vpn_block = """
     <div class="card bg-base-100 border border-warning/30 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-triangle-exclamation text-warning mr-2" aria-hidden="true"></i>VPN-РїРѕРґРїРёСЃРєР°</h3>
-        <p class="text-sm opacity-80">Р’ Р±Р°Р·Рµ Р±РѕС‚Р° РЅРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ СЃ РІР°С€РёРј Telegram ID. РќР°Р¶РјРёС‚Рµ /start РІ Р±РѕС‚Рµ, Р·Р°С‚РµРј РѕР±РЅРѕРІРёС‚Рµ СЌС‚Сѓ СЃС‚СЂР°РЅРёС†Сѓ.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-triangle-exclamation text-warning mr-2" aria-hidden="true"></i>VPN-подписка</h3>
+        <p class="text-sm opacity-80">В базе бота нет пользователя с вашим Telegram ID. Нажмите /start в боте, затем обновите эту страницу.</p>
       </div>
     </div>"""
     elif kind == "telegram" and linked is not None and linked.remnawave_uuid is None:
         vpn_block = """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-2">
-        <h3 class="text-lg font-semibold">VPN-РїРѕРґРїРёСЃРєР°</h3>
-        <p class="text-sm opacity-80">РЈ Р·Р°РїРёСЃРё РІ Р±РѕС‚Рµ РµС‰С‘ РЅРµС‚ UUID РїР°РЅРµР»Рё Remnawave вЂ” Р°РєС‚РёРІРёСЂСѓР№С‚Рµ С‚СЂРёР°Р» РёР»Рё РєСѓРїРёС‚Рµ РїРѕРґРїРёСЃРєСѓ РІ Р±РѕС‚Рµ.</p>
+        <h3 class="text-lg font-semibold">VPN-подписка</h3>
+        <p class="text-sm opacity-80">У записи в боте ещё нет UUID панели Remnawave — активируйте триал или купите подписку в боте.</p>
       </div>
     </div>"""
 
@@ -7974,7 +7974,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     <div class="relative overflow-hidden rounded-2xl border border-base-content/10 bg-base-100 shadow-xl">
       <div class="pointer-events-none absolute -right-4 -top-8 h-40 w-60 rotate-12 rounded-3xl bg-gradient-to-br from-secondary/50 via-primary/45 to-accent/35 blur-sm" aria-hidden="true"></div>
       <div class="absolute right-4 top-4 z-10">
-        <span class="badge badge-secondary badge-lg font-semibold shadow-md">РђРґРјРёРЅ</span>
+        <span class="badge badge-secondary badge-lg font-semibold shadow-md">Админ</span>
       </div>
       <div class="card-body relative z-[1] gap-4 pt-8">
         <div class="flex flex-col items-center gap-3">
@@ -7985,11 +7985,11 @@ async def admin_profile(request: Request) -> HTMLResponse:
     </div>
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>РЎРµСЃСЃРёСЏ Рё РґРѕСЃС‚СѓРї</h3>
+        <h3 class="text-lg font-semibold border-b border-base-content/10 pb-2"><i class="fa-solid fa-key text-primary mr-2" aria-hidden="true"></i>Сессия и доступ</h3>
         <div class="space-y-2 text-sm">{ties}</div>
         <div class="flex flex-wrap gap-2 pt-1">
           <a class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5" href="{_esc(bot_profile_href)}">
-            <i class="fa-solid fa-user" aria-hidden="true"></i>РњРѕР№ РїСЂРѕС„РёР»СЊ РІ Р±РѕС‚Рµ
+            <i class="fa-solid fa-user" aria-hidden="true"></i>Мой профиль в боте
           </a>
           {account_link_button}
         </div>
@@ -8002,7 +8002,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
     </div>
     """
     return _layout(
-        "РњРѕР№ РїСЂРѕС„РёР»СЊ",
+        "Мой профиль",
         body,
         request=request,
         back_href="/admin/dashboard",
@@ -8018,13 +8018,13 @@ async def admin_profile_revoke_session(request: Request, session_id: int) -> Red
         return denied
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
-        return RedirectResponse("/admin/profile?err=" + quote_plus("РќРµС‚ РїСЂРѕС„РёР»СЏ Р±РѕС‚Р°"), status_code=303)
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Нет профиля бота"), status_code=303)
     async with await _session() as session:
         ok = await revoke_browser_session_by_id(
             session, user_id=linked.id, session_row_id=session_id
         )
     if not ok:
-        return RedirectResponse("/admin/profile?err=" + quote_plus("РЎРµСЃСЃРёСЏ РЅРµ РЅР°Р№РґРµРЅР°"), status_code=303)
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Сессия не найдена"), status_code=303)
     return RedirectResponse("/admin/profile?n=session_revoked", status_code=303)
 
 
@@ -8035,7 +8035,7 @@ async def admin_profile_revoke_all_sessions(request: Request) -> RedirectRespons
         return denied
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
-        return RedirectResponse("/admin/profile?err=" + quote_plus("РќРµС‚ РїСЂРѕС„РёР»СЏ Р±РѕС‚Р°"), status_code=303)
+        return RedirectResponse("/admin/profile?err=" + quote_plus("Нет профиля бота"), status_code=303)
     current = str(request.session.get("wauth_session_token") or "").strip()
     async with await _session() as session:
         n = await revoke_all_user_browser_sessions(
@@ -8052,22 +8052,22 @@ async def admin_profile_add_balance(request: Request, amount: str = Form(...)) -
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
         return RedirectResponse(
-            f"/admin/profile?err={quote_plus('РЎРІСЏР·Р°РЅРЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РѕС‚Р° РЅРµ РЅР°Р№РґРµРЅ')}",
+            f"/admin/profile?err={quote_plus('Связанный пользователь бота не найден')}",
             status_code=303,
         )
     raw = (amount or "").strip().replace(",", ".")
     try:
         amt = Decimal(raw)
     except (InvalidOperation, ValueError):
-        return RedirectResponse(f"/admin/profile?err={quote_plus('РќРµРІРµСЂРЅР°СЏ СЃСѓРјРјР°')}", status_code=303)
+        return RedirectResponse(f"/admin/profile?err={quote_plus('Неверная сумма')}", status_code=303)
     if amt <= 0:
-        return RedirectResponse(f"/admin/profile?err={quote_plus('РЎСѓРјРјР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ > 0')}", status_code=303)
+        return RedirectResponse(f"/admin/profile?err={quote_plus('Сумма должна быть > 0')}", status_code=303)
     wauth = request.session.get("wauth") or {}
     admin_tg = int(wauth.get("telegram_id") or 0)
     async with await _session() as session:
         u = await session.get(User, linked.id)
         if u is None:
-            return RedirectResponse(f"/admin/profile?err={quote_plus('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ')}", status_code=303)
+            return RedirectResponse(f"/admin/profile?err={quote_plus('Пользователь не найден')}", status_code=303)
         admin_db_id = None
         if admin_tg:
             au = (await session.execute(select(User).where(User.telegram_id == admin_tg))).scalar_one_or_none()
@@ -8082,7 +8082,7 @@ async def admin_profile_add_balance(request: Request, amount: str = Form(...)) -
             payment_provider="admin",
             payment_id=None,
             status="completed",
-            description=f"РђРґРјРёРЅ (web profile) РґРѕР±Р°РІРёР» Р±Р°Р»Р°РЅСЃ: +{amt} в‚Ѕ",
+            description=f"Админ (web profile) добавил баланс: +{amt} ₽",
             meta={"admin_id": admin_db_id, "source": "web_profile"},
         )
         session.add(txn_bal)
@@ -8110,7 +8110,7 @@ async def admin_profile_2fa_setup(request: Request) -> RedirectResponse:
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РЎРЅР°С‡Р°Р»Р° РЅСѓР¶РµРЅ СЃРІСЏР·Р°РЅРЅС‹Р№ Telegram-РїСЂРѕС„РёР»СЊ."),
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
             status_code=303,
         )
     request.session["admin_2fa_setup_secret"] = pyotp.random_base32()
@@ -8126,7 +8126,7 @@ async def admin_profile_2fa_enable(request: Request, code: str = Form("")) -> Re
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РЎРЅР°С‡Р°Р»Р° РЅСѓР¶РµРЅ СЃРІСЏР·Р°РЅРЅС‹Р№ Telegram-РїСЂРѕС„РёР»СЊ."),
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
             status_code=303,
         )
     secret = str(request.session.get("admin_2fa_setup_secret") or "").strip()
@@ -8137,20 +8137,20 @@ async def admin_profile_2fa_enable(request: Request, code: str = Form("")) -> Re
         setup_uid_i = 0
     if not secret or setup_uid_i != linked.id:
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РЎРЅР°С‡Р°Р»Р° СЃРѕР·РґР°Р№С‚Рµ QR РґР»СЏ РЅР°СЃС‚СЂРѕР№РєРё 2FA."),
+            "/admin/profile?err=" + quote_plus("Сначала создайте QR для настройки 2FA."),
             status_code=303,
         )
     otp = _totp_normalize_code(code)
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РќРµРІРµСЂРЅС‹Р№ РєРѕРґ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ 2FA."),
+            "/admin/profile?err=" + quote_plus("Неверный код подтверждения 2FA."),
             status_code=303,
         )
     async with await _session() as session:
         user = await session.get(User, linked.id)
         if user is None:
             return RedirectResponse(
-                "/admin/profile?err=" + quote_plus("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ."),
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
                 status_code=303,
             )
         user.web_admin_totp_secret = secret
@@ -8169,7 +8169,7 @@ async def admin_profile_2fa_disable(request: Request, code: str = Form("")) -> R
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РЎРЅР°С‡Р°Р»Р° РЅСѓР¶РµРЅ СЃРІСЏР·Р°РЅРЅС‹Р№ Telegram-РїСЂРѕС„РёР»СЊ."),
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
             status_code=303,
         )
     secret = (linked.web_admin_totp_secret or "").strip()
@@ -8178,14 +8178,14 @@ async def admin_profile_2fa_disable(request: Request, code: str = Form("")) -> R
     otp = _totp_normalize_code(code)
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РќРµРІРµСЂРЅС‹Р№ РєРѕРґ РґР»СЏ РѕС‚РєР»СЋС‡РµРЅРёСЏ 2FA."),
+            "/admin/profile?err=" + quote_plus("Неверный код для отключения 2FA."),
             status_code=303,
         )
     async with await _session() as session:
         user = await session.get(User, linked.id)
         if user is None:
             return RedirectResponse(
-                "/admin/profile?err=" + quote_plus("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ."),
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
                 status_code=303,
             )
         user.web_admin_totp_enabled = False
@@ -8204,14 +8204,14 @@ async def admin_profile_github_unlink(request: Request) -> RedirectResponse:
     linked = await _linked_bot_user_for_admin(request)
     if linked is None:
         return RedirectResponse(
-            "/admin/profile?err=" + quote_plus("РЎРЅР°С‡Р°Р»Р° РЅСѓР¶РµРЅ СЃРІСЏР·Р°РЅРЅС‹Р№ Telegram-РїСЂРѕС„РёР»СЊ."),
+            "/admin/profile?err=" + quote_plus("Сначала нужен связанный Telegram-профиль."),
             status_code=303,
         )
     async with await _session() as session:
         user = await session.get(User, linked.id)
         if user is None:
             return RedirectResponse(
-                "/admin/profile?err=" + quote_plus("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ."),
+                "/admin/profile?err=" + quote_plus("Пользователь не найден."),
                 status_code=303,
             )
         user.github_id = None
@@ -8245,7 +8245,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
             f"</label>"
         )
         for name in bg_assets
-    ) or "<p class='text-sm opacity-60'>Р’ РїР°РїРєРµ /assets РїРѕРєР° РЅРµС‚ РїРѕРґС…РѕРґСЏС‰РёС… РёР·РѕР±СЂР°Р¶РµРЅРёР№.</p>"
+    ) or "<p class='text-sm opacity-60'>В папке /assets пока нет подходящих изображений.</p>"
     tab_buttons: list[str] = []
     tab_panels: list[str] = []
     for idx, (sec_id, sec_title, fields) in enumerate(WEB_ADMIN_ENV_SECTIONS):
@@ -8313,12 +8313,12 @@ async def admin_settings(request: Request) -> HTMLResponse:
     saved_note = ""
     if request.query_params.get("env_saved") == "1":
         saved_note = (
-            "<div class='alert alert-success shadow-sm'><span>Р—РЅР°С‡РµРЅРёСЏ Р·Р°РїРёСЃР°РЅС‹ РІ С„Р°Р№Р» <code class=\"bg-base-300 px-1 rounded\">.env</code>. "
-            "Р§Р°СЃС‚СЊ РїР°СЂР°РјРµС‚СЂРѕРІ РїРѕРґС…РІР°С‚РёС‚СЃСЏ Р±РµР· РїРµСЂРµР·Р°РїСѓСЃРєР°; РґР»СЏ СЃРµРєСЂРµС‚РѕРІ Рё РїРѕРґРєР»СЋС‡РµРЅРёР№ РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚Рµ РєРѕРЅС‚РµР№РЅРµСЂС‹ API Рё Р±РѕС‚Р°.</span></div>"
+            "<div class='alert alert-success shadow-sm'><span>Значения записаны в файл <code class=\"bg-base-300 px-1 rounded\">.env</code>. "
+            "Часть параметров подхватится без перезапуска; для секретов и подключений перезапустите контейнеры API и бота.</span></div>"
         )
     backup_note = ""
     if request.query_params.get("backup_run") == "1":
-        backup_note = "<div class='alert alert-success shadow-sm'><span>РџСЂРѕР±РЅС‹Р№ Р±СЌРєР°Рї Р·Р°РїСѓС‰РµРЅ. Р РµР·СѓР»СЊС‚Р°С‚ РѕС‚РїСЂР°РІР»РµРЅ РІ С‚РµРјСѓ BACKUPS.</span></div>"
+        backup_note = "<div class='alert alert-success shadow-sm'><span>Пробный бэкап запущен. Результат отправлен в тему BACKUPS.</span></div>"
     backup_err = (request.query_params.get("backup_err") or "").strip()
     if backup_err:
         backup_note = (
@@ -8410,7 +8410,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
         if(v && img && empty){
           img.src=v; img.classList.remove('hidden'); empty.classList.add('hidden');
         }else if(img && empty){
-          img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='РЎРµР№С‡Р°СЃ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С„РёРѕР»РµС‚РѕРІС‹Р№ С„РѕРЅ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ.';
+          img.classList.add('hidden'); empty.classList.remove('hidden'); empty.textContent='Сейчас используется фиолетовый фон по умолчанию.';
         }
       }
       function syncMode(){
@@ -8513,7 +8513,7 @@ async def admin_settings(request: Request) -> HTMLResponse:
             transform: translate(42px, -50%);
           }}
         </style>
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>РќР°СЃС‚СЂРѕР№РєРё .env</h2>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
         {saved_note}
         {backup_note}
         <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
@@ -8524,53 +8524,53 @@ async def admin_settings(request: Request) -> HTMLResponse:
             <div class="flex flex-col gap-4">
               <div class="flex items-center gap-2">
                 <i class="fa-solid fa-image text-primary" aria-hidden="true"></i>
-                <h3 class="text-lg font-semibold">Р¤РѕРЅ Р°РґРјРёРЅРєРё</h3>
+                <h3 class="text-lg font-semibold">Фон админки</h3>
               </div>
               <div class="grid gap-3 md:grid-cols-3">
                 <label class="form-control">
-                  <span class="label-text text-xs opacity-70">Р РµР¶РёРј</span>
+                  <span class="label-text text-xs opacity-70">Режим</span>
                   <select id="bg-source" class="select select-bordered select-sm h-9 min-h-9" name="ADMIN_BACKGROUND_SOURCE">
-                    <option value="default" {'selected' if bg_source == 'default' else ''}>Р¤РёРѕР»РµС‚РѕРІС‹Р№ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ</option>
-                    <option value="url" {'selected' if bg_source == 'url' else ''}>РљР°СЂС‚РёРЅРєР° РїРѕ СЃСЃС‹Р»РєРµ</option>
-                    <option value="asset" {'selected' if bg_source == 'asset' else ''}>Р¤Р°Р№Р» РёР· /assets</option>
+                    <option value="default" {'selected' if bg_source == 'default' else ''}>Фиолетовый по умолчанию</option>
+                    <option value="url" {'selected' if bg_source == 'url' else ''}>Картинка по ссылке</option>
+                    <option value="asset" {'selected' if bg_source == 'asset' else ''}>Файл из /assets</option>
                   </select>
                 </label>
                 <label class="form-control md:col-span-2">
-                  <span class="label-text text-xs opacity-70">РЎСЃС‹Р»РєР° РЅР° РёР·РѕР±СЂР°Р¶РµРЅРёРµ</span>
+                  <span class="label-text text-xs opacity-70">Ссылка на изображение</span>
                   <div class="flex gap-2">
                     <input id="bg-url" class="input input-bordered input-sm h-9 min-h-9 w-full font-mono text-xs" name="ADMIN_BACKGROUND_URL" value="{_esc(bg_url)}" autocomplete="off" placeholder="https://..." />
-                    <button id="bg-preview-btn" type="button" class="btn btn-ghost btn-sm h-9 min-h-9">РџРѕРєР°Р·Р°С‚СЊ</button>
+                    <button id="bg-preview-btn" type="button" class="btn btn-ghost btn-sm h-9 min-h-9">Показать</button>
                   </div>
                 </label>
               </div>
               <input type="hidden" id="bg-asset-hidden" name="ADMIN_BACKGROUND_ASSET" value="{_esc(bg_asset)}" />
               <div id="bg-asset-picker" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{bg_asset_cards}</div>
               <div id="bg-preview-wrap" class="rounded-xl border border-base-content/10 bg-base-100/50 p-3">
-                <div class="text-xs opacity-70 mb-2">РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ</div>
+                <div class="text-xs opacity-70 mb-2">Предпросмотр</div>
                 <img id="bg-preview-img" src="{_esc(_admin_background_image_url(get_settings()) or '')}" alt="" class="{'h-40 w-full rounded-lg object-cover border border-base-content/10' if _admin_background_image_url(get_settings()) else 'hidden'}" />
-                <div id="bg-preview-empty" class="{'hidden' if _admin_background_image_url(get_settings()) else 'text-sm opacity-60'}">РЎРµР№С‡Р°СЃ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С„РёРѕР»РµС‚РѕРІС‹Р№ С„РѕРЅ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ.</div>
+                <div id="bg-preview-empty" class="{'hidden' if _admin_background_image_url(get_settings()) else 'text-sm opacity-60'}">Сейчас используется фиолетовый фон по умолчанию.</div>
               </div>
             </div>
           </div>
           {''.join(tab_panels)}
-          <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>РЎРѕС…СЂР°РЅРёС‚СЊ РІ .env</button>
+          <button class="btn btn-primary btn-sm h-9 min-h-9 w-fit gap-1.5" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить в .env</button>
         </form>
       </div>
     </div>
     <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <summary class="card-body cursor-pointer select-none">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-rotate text-warning mr-2" aria-hidden="true"></i>РљРѕРЅРІРµСЂС‚Р°С†РёСЏ legacy РІ PAYG</h2>
-        <p class="text-sm opacity-70">РЎРµРєС†РёСЏ СЃРєСЂС‹С‚Р°. РќР°Р¶РјРёС‚Рµ, С‡С‚РѕР±С‹ СЂР°СЃРєСЂС‹С‚СЊ.</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-rotate text-warning mr-2" aria-hidden="true"></i>Конвертация legacy в PAYG</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
       <div class="card-body gap-4 pt-0">
-        <p class="text-sm opacity-70 max-w-4xl">РњР°СЃСЃРѕРІРѕ РїРµСЂРµРІРѕРґРёС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ СЃРѕ СЃС‚Р°СЂС‹РјРё РїРѕРґРїРёСЃРєР°РјРё РЅР° PAYG: РЅР°С‡РёСЃР»СЏРµС‚ РєСЂРµРґРёС‚ РІ Р±Р°Р»Р°РЅСЃ РїРѕ РєР°Р»СЊРєСѓР»СЏС‚РѕСЂСѓ РїРµСЂРµС…РѕРґР° Рё РѕР±РЅРѕРІР»СЏРµС‚ СЃСЂРѕРє/РѕРіСЂР°РЅРёС‡РµРЅРёСЏ РїРѕРґРїРёСЃРєРё РїРѕРґ С‚РµРєСѓС‰СѓСЋ PAYG-РјРѕРґРµР»СЊ.</p>
+        <p class="text-sm opacity-70 max-w-4xl">Массово переводит пользователей со старыми подписками на PAYG: начисляет кредит в баланс по калькулятору перехода и обновляет срок/ограничения подписки под текущую PAYG-модель.</p>
         <div class="alert alert-warning shadow-sm">
           <i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>
-          <span>РћРїРµСЂР°С†РёСЏ РјР°СЃСЃРѕРІР°СЏ. РџРµСЂРµРґ Р·Р°РїСѓСЃРєРѕРј РїСЂРѕРІРµСЂСЊС‚Рµ РЅР°СЃС‚СЂРѕР№РєРё BILLING_TRANSITION_* Рё BILLING_PAYG_SUBSCRIPTION_DAYS.</span>
+          <span>Операция массовая. Перед запуском проверьте настройки BILLING_TRANSITION_* и BILLING_PAYG_SUBSCRIPTION_DAYS.</span>
         </div>
-        <form method="post" action="/admin/payg/mass-convert" data-remna-confirm-msg="Р—Р°РїСѓСЃС‚РёС‚СЊ РјР°СЃСЃРѕРІСѓСЋ РєРѕРЅРІРµСЂС‚Р°С†РёСЋ legacy РїРѕРґРїРёСЃРѕРє РІ PAYG?" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/payg/mass-convert" data-remna-confirm-msg="Запустить массовую конвертацию legacy подписок в PAYG?" class="flex flex-wrap items-end gap-2">
           <label class="form-control">
-            <span class="label-text text-xs opacity-70">РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ: РІРІРµРґРёС‚Рµ PAYG</span>
+            <span class="label-text text-xs opacity-70">Подтверждение: введите PAYG</span>
             <input
               type="text"
               name="confirm_word"
@@ -8581,36 +8581,36 @@ async def admin_settings(request: Request) -> HTMLResponse:
             />
           </label>
           <button type="submit" class="btn btn-warning btn-sm h-9 min-h-9 gap-1.5">
-            <i class="fa-solid fa-rotate" aria-hidden="true"></i>Р—Р°РїСѓСЃС‚РёС‚СЊ РєРѕРЅРІРµСЂС‚Р°С†РёСЋ
+            <i class="fa-solid fa-rotate" aria-hidden="true"></i>Запустить конвертацию
           </button>
         </form>
       </div>
     </details>
     <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <summary class="card-body cursor-pointer select-none">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Р‘СЌРєР°Рї</h2>
-        <p class="text-sm opacity-70">РЎРµРєС†РёСЏ СЃРєСЂС‹С‚Р°. РќР°Р¶РјРёС‚Рµ, С‡С‚РѕР±С‹ СЂР°СЃРєСЂС‹С‚СЊ.</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-database text-secondary mr-2" aria-hidden="true"></i>Бэкап</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
       <div class="card-body gap-4 pt-0">
-        <form method="post" action="/admin/settings/backup/run" data-remna-confirm-msg="Р—Р°РїСѓСЃС‚РёС‚СЊ РїСЂРѕР±РЅС‹Р№ Р±СЌРєР°Рї PostgreSQL СЃРµР№С‡Р°СЃ?" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/settings/backup/run" data-remna-confirm-msg="Запустить пробный бэкап PostgreSQL сейчас?" class="flex flex-wrap items-end gap-2">
           <button class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5" type="submit">
-            <i class="fa-solid fa-database" aria-hidden="true"></i>РџСЂРѕР±РЅС‹Р№ Р±СЌРєР°Рї СЃРµР№С‡Р°СЃ
+            <i class="fa-solid fa-database" aria-hidden="true"></i>Пробный бэкап сейчас
           </button>
         </form>
       </div>
     </details>
     <details role="tabpanel" class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <summary class="card-body cursor-pointer select-none">
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-triangle-exclamation text-error mr-2" aria-hidden="true"></i>РћРїР°СЃРЅР°СЏ Р·РѕРЅР°</h2>
-        <p class="text-sm opacity-70">РЎРµРєС†РёСЏ СЃРєСЂС‹С‚Р°. РќР°Р¶РјРёС‚Рµ, С‡С‚РѕР±С‹ СЂР°СЃРєСЂС‹С‚СЊ.</p>
+        <h2 class="card-title text-2xl"><i class="fa-solid fa-triangle-exclamation text-error mr-2" aria-hidden="true"></i>Опасная зона</h2>
+        <p class="text-sm opacity-70">Секция скрыта. Нажмите, чтобы раскрыть.</p>
       </summary>
       <div class="card-body gap-4 pt-0">
-        <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>РџРѕР»РЅС‹Р№ СЃР±СЂРѕСЃ СѓРґР°Р»РёС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№, РїРѕРґРїРёСЃРєРё, С‚СЂР°РЅР·Р°РєС†РёРё, РїСЂРѕРјРѕРєРѕРґС‹ Рё РїСЂРѕС‡РёРµ РґР°РЅРЅС‹Рµ.</span></div>
+        <div class="alert alert-warning shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i><span>Полный сброс удалит пользователей, подписки, транзакции, промокоды и прочие данные.</span></div>
         <form method="post" action="/admin/settings/factory-reset" class="flex flex-wrap items-end gap-2">
-          <input class="input input-bordered input-sm h-9 min-h-9 w-full max-w-md" name="confirm_text" placeholder="Р’РІРµРґРёС‚Рµ WIPE ALL" autocomplete="off" />
-          <button class="btn btn-error btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>РЎРґРµР»Р°С‚СЊ factory reset</button>
+          <input class="input input-bordered input-sm h-9 min-h-9 w-full max-w-md" name="confirm_text" placeholder="Введите WIPE ALL" autocomplete="off" />
+          <button class="btn btn-error btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-bomb" aria-hidden="true"></i>Сделать factory reset</button>
         </form>
-        <p class="text-sm opacity-60">РўРѕ Р¶Рµ, С‡С‚Рѕ СЃР±СЂРѕСЃ РёР· Telegram-Р°РґРјРёРЅРєРё, СЃ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµРј РІ Р±СЂР°СѓР·РµСЂРµ.</p>
+        <p class="text-sm opacity-60">То же, что сброс из Telegram-админки, с подтверждением в браузере.</p>
       </div>
     </details>
     {env_tabs_script}
@@ -8630,8 +8630,8 @@ async def admin_settings_env_post(request: Request):
         patch_dotenv(updates)
     except OSError as e:
         return _layout(
-            "РћС€РёР±РєР° .env",
-            f"<div class='alert alert-error'>РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїРёСЃР°С‚СЊ .env: {_esc(e)}</div>",
+            "Ошибка .env",
+            f"<div class='alert alert-error'>Не удалось записать .env: {_esc(e)}</div>",
             request=request,
         )
     return RedirectResponse("/admin/settings?env_saved=1", status_code=303)
@@ -8657,7 +8657,7 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
     if confirm_text.strip() != "WIPE ALL":
         return _layout(
             "Reset rejected",
-            "<div class='alert alert-info shadow-lg'><h2 class='font-bold'>РЎР±СЂРѕСЃ РѕС‚РјРµРЅРµРЅ</h2><p>РќРµРІРµСЂРЅР°СЏ С„СЂР°Р·Р° РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ.</p></div>",
+            "<div class='alert alert-info shadow-lg'><h2 class='font-bold'>Сброс отменен</h2><p>Неверная фраза подтверждения.</p></div>",
             request=request,
         )
     async with await _session() as session:
@@ -8665,16 +8665,16 @@ async def admin_factory_reset(request: Request, confirm_text: str = Form("")) ->
         await session.commit()
     return _layout(
         "Reset done",
-        "<div class='alert alert-success shadow-lg'><h2 class='font-bold'>Р‘Р°Р·Р° РѕС‡РёС‰РµРЅР°</h2><p>Factory reset РІС‹РїРѕР»РЅРµРЅ СѓСЃРїРµС€РЅРѕ.</p></div>",
+        "<div class='alert alert-success shadow-lg'><h2 class='font-bold'>База очищена</h2><p>Factory reset выполнен успешно.</p></div>",
         request=request,
     )
 
 
 @router.get("/api/users-search")
 async def admin_api_users_search(request: Request, q: str = "", limit: int = 20) -> JSONResponse:
-    """РџРѕРёСЃРє РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РґР»СЏ РІРёРґР¶РµС‚Р° chips: РїРѕ id, telegram_id, @username, РёРјРµРЅРё.
+    """Поиск пользователей для виджета chips: по id, telegram_id, @username, имени.
 
-    Р’РѕР·РІСЂР°С‰Р°РµС‚: {"users": [{"id", "telegram_id", "username", "label", "label_html"}, ...]}.
+    Возвращает: {"users": [{"id", "telegram_id", "username", "label", "label_html"}, ...]}.
     """
     denied = _require_login(request)
     if denied is not None:
@@ -8702,7 +8702,7 @@ async def admin_api_users_search(request: Request, q: str = "", limit: int = 20)
                     conds.extend([User.id == n, User.telegram_id == n])
                 except ValueError:
                     pass
-            from sqlalchemy import or_ as _or  # Р»РѕРєР°Р»СЊРЅС‹Р№ РёРјРїРѕСЂС‚ С‡С‚РѕР±С‹ РЅРµ РїСЂР°РІРёС‚СЊ С€Р°РїРєСѓ
+            from sqlalchemy import or_ as _or  # локальный импорт чтобы не править шапку
 
             stmt = (
                 select(User)
@@ -8720,8 +8720,8 @@ async def admin_api_users_search(request: Request, q: str = "", limit: int = 20)
         ln = (u.last_name or "").strip()
         name = (fn + (" " + ln if ln else "")).strip()
         label_main = f"@{un}" if un else (name or f"tg:{tg}")
-        label = f"{label_main} В· #{uid}"
-        # HTML-РІРµСЂСЃРёСЏ вЂ” РґР»СЏ РїРѕРґСЃРІРµС‚РєРё РёРєРѕРЅРєРё Рё РІС‚РѕСЂРѕСЃС‚РµРїРµРЅРЅРѕР№ СЃС‚СЂРѕРєРё
+        label = f"{label_main} · #{uid}"
+        # HTML-версия — для подсветки иконки и второстепенной строки
         sub_parts = []
         if name and un:
             sub_parts.append(_esc(name))
@@ -8730,7 +8730,7 @@ async def admin_api_users_search(request: Request, q: str = "", limit: int = 20)
         label_html = (
             "<div class='flex flex-col'>"
             f"<span class='font-medium'>{_esc(label_main)}</span>"
-            f"<span class='text-[11px] opacity-60'>{' В· '.join(sub_parts)}</span>"
+            f"<span class='text-[11px] opacity-60'>{' · '.join(sub_parts)}</span>"
             "</div>"
         )
         out.append(
@@ -8762,29 +8762,29 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
     rows = []
     for p in promos:
         is_expired = p.expires_at is not None and p.expires_at < now
-        status = "РёСЃС‚РµРє" if is_expired else ("Р°РєС‚РёРІРµРЅ" if p.is_active else "РЅРµР°РєС‚РёРІРµРЅ")
+        status = "истек" if is_expired else ("активен" if p.is_active else "неактивен")
         tw = "text-error font-medium" if is_expired else ("text-success font-medium" if p.is_active else "text-warning font-medium")
         rows.append(
-            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/promos/{p.id}' tabindex='0' role='link' aria-label='РћС‚РєСЂС‹С‚СЊ РїСЂРѕРјРѕРєРѕРґ'>"
+            f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/promos/{p.id}' tabindex='0' role='link' aria-label='Открыть промокод'>"
             f"<td><span class='link link-primary font-mono font-semibold'>{_esc(p.code)}</span></td>"
             f"<td><span class='badge badge-ghost badge-sm'>{_esc(_promo_type_ru(p.type))}</span></td><td>{_esc(_promo_reward_caption(p))}</td>"
-            f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else 'в€ћ')}</td>"
+            f"<td>{p.used_count}/{_esc(p.max_uses if p.max_uses is not None else '∞')}</td>"
             f"<td>{_esc(_fmt_expires(p.expires_at))}</td><td class='{tw}'>{status}</td></tr>"
         )
     create_modal = _modal_shell(
         modal_id="promo-create-modal",
-        title="РЎРѕР·РґР°РЅРёРµ РїСЂРѕРјРѕРєРѕРґР°",
+        title="Создание промокода",
         inner=_promo_form(action="/admin/promos/new"),
     )
     body = (
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
-        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>РџСЂРѕРјРѕРєРѕРґС‹</h2>"
-        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='promo-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>РЎРѕР·РґР°С‚СЊ РїСЂРѕРјРѕРєРѕРґ</button></div>"
+        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-ticket text-primary mr-2' aria-hidden='true'></i>Промокоды</h2>"
+        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='promo-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>Создать промокод</button></div>"
         "<form method='get' class='flex flex-wrap items-end gap-2'>"
-        f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md font-mono text-sm uppercase' name='q' value='{_esc(needle)}' placeholder='РџРѕРёСЃРє РїРѕ РєРѕРґСѓ'/>"
-        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>РСЃРєР°С‚СЊ</button></form>"
-        "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>РљРѕРґ</th><th>РўРёРї</th><th>РќР°РіСЂР°РґР°</th><th>РђРєС‚РёРІР°С†РёРё</th><th>РЎСЂРѕРє</th><th>РЎС‚Р°С‚СѓСЃ</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">РќРµС‚ РїСЂРѕРјРѕРєРѕРґРѕРІ</td></tr>'}</tbody></table></div></div></div>"
+        f"<input class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md font-mono text-sm uppercase' name='q' value='{_esc(needle)}' placeholder='Поиск по коду'/>"
+        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Искать</button></form>"
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'><thead><tr><th>Код</th><th>Тип</th><th>Награда</th><th>Активации</th><th>Срок</th><th>Статус</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"opacity-50\">Нет промокодов</td></tr>'}</tbody></table></div></div></div>"
         f"{create_modal}"
         "<script>(function(){document.querySelectorAll('[data-remna-modal-open]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-open');var m=document.getElementById(id);if(m)m.classList.remove('hidden');if(m)m.classList.add('flex');});});document.querySelectorAll('[data-remna-modal-close]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-close');var m=document.getElementById(id);if(m)m.classList.add('hidden');if(m)m.classList.remove('flex');});});document.querySelectorAll('[role=\"dialog\"]').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){m.classList.add('hidden');m.classList.remove('flex');}});});})();</script>"
     )
@@ -8792,7 +8792,7 @@ async def admin_promos(request: Request, q: str = "") -> HTMLResponse:
 
 
 def _user_chip_label(user_id: int, telegram_id: int, username: str | None, first_name: str | None, last_name: str | None) -> str:
-    """РљРѕСЂРѕС‚РєР°СЏ РїРѕРґРїРёСЃСЊ РґР»СЏ С‡РёРїР° РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ."""
+    """Короткая подпись для чипа выбранного пользователя."""
     name = (first_name or "").strip() or (last_name or "").strip() or ""
     if username:
         head = f"@{username}"
@@ -8800,7 +8800,7 @@ def _user_chip_label(user_id: int, telegram_id: int, username: str | None, first
         head = name
     else:
         head = f"tg:{telegram_id}"
-    return f"{head} В· #{user_id}"
+    return f"{head} · #{user_id}"
 
 
 def _promo_form(
@@ -8832,7 +8832,7 @@ def _promo_form(
         chips_html_parts.append(
             f"<span class='badge badge-primary gap-1 py-3 pl-3 pr-1' data-allowed-user-chip data-user-id='{uid}'>"
             f"<span class='text-xs'>{_esc(label)}</span>"
-            "<button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='РЈР±СЂР°С‚СЊ'>"
+            "<button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='Убрать'>"
             "<i class='fa-solid fa-xmark text-[10px]' aria-hidden='true'></i></button>"
             "</span>"
         )
@@ -8844,7 +8844,7 @@ def _promo_form(
         for k, v in _PROMO_TYPE_RU.items()
         if k in _PROMO_TYPES_SELECTABLE
     )
-    # РЈСЃС‚Р°СЂРµРІС€РёРµ С‚РёРїС‹ вЂ” С‚РѕР»СЊРєРѕ С‡С‚РѕР±С‹ select РѕСЃС‚Р°Р»СЃСЏ РІР°Р»РёРґРЅС‹Рј РїСЂРё СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРё
+    # Устаревшие типы — только чтобы select остался валидным при редактировании
     if p is not None and p.type not in _PROMO_TYPES_SELECTABLE:
         legacy_label = _promo_type_ru(p.type)
         type_options = (
@@ -8860,73 +8860,73 @@ def _promo_form(
     <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
     <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-2xl">
       <div class="card-body gap-4">
-        <h2 class="card-title text-xl"><i class="fa-solid fa-pen-to-square text-primary mr-2" aria-hidden="true"></i>{'Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ РїСЂРѕРјРѕРєРѕРґР°' if p else 'РЎРѕР·РґР°РЅРёРµ РїСЂРѕРјРѕРєРѕРґР°'}</h2>
+        <h2 class="card-title text-xl"><i class="fa-solid fa-pen-to-square text-primary mr-2" aria-hidden="true"></i>{'Редактирование промокода' if p else 'Создание промокода'}</h2>
         {e}
         <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
-          <label class="form-control w-full"><span class="label-text font-medium">РљРѕРґ</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Код</span>
             <div class="join w-full">
               <input id="promo-code-input" class="input input-bordered input-sm h-9 min-h-9 font-mono text-sm uppercase join-item w-full" name="code" value="{_esc(p.code if p else '')}" {ro} />
-              <button type="button" id="promo-code-dice" class="btn btn-primary btn-sm h-9 min-h-9 join-item gap-1.5" {'disabled' if p else ''} title="РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ СЃР»СѓС‡Р°Р№РЅС‹Р№ РєРѕРґ" aria-label="РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ СЃР»СѓС‡Р°Р№РЅС‹Р№ РєРѕРґ"><i class="fa-solid fa-dice" aria-hidden="true"></i>РЎР»СѓС‡Р°Р№РЅС‹Р№</button>
+              <button type="button" id="promo-code-dice" class="btn btn-primary btn-sm h-9 min-h-9 join-item gap-1.5" {'disabled' if p else ''} title="Сгенерировать случайный код" aria-label="Сгенерировать случайный код"><i class="fa-solid fa-dice" aria-hidden="true"></i>Случайный</button>
             </div>
           </label>
-          <label class="form-control w-full"><span class="label-text font-medium">РўРёРї</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Тип</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="promo_type">
             {type_options}
           </select></label>
-          <label class="form-control w-full"><span class="label-text font-medium">РќР°РіСЂР°РґР° (С‡РёСЃР»Рѕ)</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Награда (число)</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="value" value="{_esc(p.value if p else '')}" /></label>
-          <label class="form-control w-full"><span class="label-text font-medium">Р›РёРјРёС‚ Р°РєС‚РёРІР°С†РёР№ (С‡РёСЃР»Рѕ РёР»Рё '-')</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Лимит активаций (число или '-')</span>
             <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="max_uses" value="{_esc(p.max_uses if p and p.max_uses is not None else '-')}" />
-            <span class="label-text-alt text-xs opacity-70 mt-1">Р•СЃР»Рё РЅРёР¶Рµ РІС‹Р±СЂР°РЅС‹ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё вЂ” Р»РёРјРёС‚ РёРіРЅРѕСЂРёСЂСѓРµС‚СЃСЏ, РєР°Р¶РґС‹Р№ РёР· СЃРїРёСЃРєР° РјРѕР¶РµС‚ Р°РєС‚РёРІРёСЂРѕРІР°С‚СЊ 1 СЂР°Р·.</span>
+            <span class="label-text-alt text-xs opacity-70 mt-1">Если ниже выбраны пользователи — лимит игнорируется, каждый из списка может активировать 1 раз.</span>
           </label>
           <div class="form-control w-full rounded-lg border border-base-content/10 bg-base-200/30 p-4 gap-3">
-            <span class="label-text font-medium">РЈСЃР»РѕРІРёСЏ Р°РєС‚РёРІР°С†РёРё</span>
-            <span class="label-text-alt text-xs opacity-70">РџРѕРІС‚РѕСЂРЅР°СЏ Р°РєС‚РёРІР°С†РёСЏ РѕРґРЅРёРј РїРѕР»СЊР·РѕРІР°С‚РµР»РµРј РІСЃРµРіРґР° Р·Р°РїСЂРµС‰РµРЅР°.</span>
+            <span class="label-text font-medium">Условия активации</span>
+            <span class="label-text-alt text-xs opacity-70">Повторная активация одним пользователем всегда запрещена.</span>
             <label class="label cursor-pointer justify-start gap-3 py-1">
               <input type="checkbox" name="require_no_active_subscription" value="1" class="checkbox checkbox-sm" {'checked' if req_no_active else ''} />
-              <span class="label-text text-sm">РўРѕР»СЊРєРѕ Р±РµР· Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё (РІ С‚.С‡. С‚СЂРёР°Р»)</span>
+              <span class="label-text text-sm">Только без активной подписки (в т.ч. триал)</span>
             </label>
             <label class="form-control w-full max-w-xs">
-              <span class="label-text text-sm">РќРµ РїРѕРєСѓРїР°Р»Рё РїРѕРґРїРёСЃРєСѓ, РјРµСЃСЏС†РµРІ</span>
-              <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="require_no_paid_subscription_months" type="number" min="1" max="24" step="1" placeholder="РїСѓСЃС‚Рѕ = РЅРµ РїСЂРѕРІРµСЂСЏС‚СЊ" value="{_esc(req_months_val)}" />
-              <span class="label-text-alt text-xs opacity-70">РќР°РїСЂРёРјРµСЂ <code class="text-xs">2</code> РґР»СЏ TEST3.</span>
+              <span class="label-text text-sm">Не покупали подписку, месяцев</span>
+              <input class="input input-bordered input-sm h-9 min-h-9 text-sm" name="require_no_paid_subscription_months" type="number" min="1" max="24" step="1" placeholder="пусто = не проверять" value="{_esc(req_months_val)}" />
+              <span class="label-text-alt text-xs opacity-70">Например <code class="text-xs">2</code> для TEST3.</span>
             </label>
           </div>
           <div class="form-control w-full">
-            <span class="label-text font-medium">РЎСЂРѕРє РґРµР№СЃС‚РІРёСЏ</span>
-            <span class="label-text-alt text-xs opacity-70 mb-1">Р’С‹Р±РµСЂРёС‚Рµ РґР°С‚Сѓ РІ РєР°Р»РµРЅРґР°СЂРµ РёР»Рё РѕС‚РјРµС‚СЊС‚Рµ В«Р±РµР· СЃСЂРѕРєР°В». РџСѓСЃС‚Р°СЏ РґР°С‚Р° Р±РµР· РіР°Р»РѕС‡РєРё С‚РѕР¶Рµ РѕР·РЅР°С‡Р°РµС‚ Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёСЏ РїРѕ РІСЂРµРјРµРЅРё.</span>
+            <span class="label-text font-medium">Срок действия</span>
+            <span class="label-text-alt text-xs opacity-70 mb-1">Выберите дату в календаре или отметьте «без срока». Пустая дата без галочки тоже означает без ограничения по времени.</span>
             <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
               <input type="date" id="promo-expires-date" name="expires_at_date" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full max-w-[12rem]" value="{_esc(_promo_expires_date_input_value(p.expires_at if p else None))}" {'disabled' if (p is not None and p.expires_at is None) else ''} />
               <label class="label cursor-pointer justify-start gap-2 py-0 w-fit">
                 <input type="checkbox" name="expires_unlimited" value="1" class="checkbox checkbox-sm" {'checked' if (p is not None and p.expires_at is None) else ''} onchange="document.getElementById('promo-expires-date').disabled=this.checked;if(this.checked)document.getElementById('promo-expires-date').value=''" />
-                <span class="label-text text-sm">Р‘РµР· СЃСЂРѕРєР°</span>
+                <span class="label-text text-sm">Без срока</span>
               </label>
             </div>
           </div>
-          <label class="form-control w-full"><span class="label-text font-medium">РђРєС‚РёРІРµРЅ</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Активен</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_active">
-            <option value="true" {'selected' if (p is None or p.is_active) else ''}>РґР°</option>
-            <option value="false" {'selected' if p is not None and not p.is_active else ''}>РЅРµС‚</option>
+            <option value="true" {'selected' if (p is None or p.is_active) else ''}>да</option>
+            <option value="false" {'selected' if p is not None and not p.is_active else ''}>нет</option>
           </select></label>
 
           <div class="form-control w-full">
-            <span class="label-text font-medium">Р”РѕСЃС‚СѓРїРЅРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј (РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ)</span>
-            <span class="label-text-alt text-xs opacity-70 mb-1">Р•СЃР»Рё РїСѓСЃС‚Рѕ вЂ” РїСЂРѕРјРѕРєРѕРґ РґРѕСЃС‚СѓРїРµРЅ РІСЃРµРј. РќР°С‡РЅРёС‚Рµ РІРІРѕРґРёС‚СЊ @username, РёРјСЏ, telegram ID РёР»Рё ID РІ Р±РѕС‚Рµ.</span>
+            <span class="label-text font-medium">Доступно пользователям (опционально)</span>
+            <span class="label-text-alt text-xs opacity-70 mb-1">Если пусто — промокод доступен всем. Начните вводить @username, имя, telegram ID или ID в боте.</span>
             <div id="allowed-users-chips" class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]">{chips_initial_html}</div>
             <div class="relative">
-              <input id="allowed-users-search" type="text" autocomplete="off" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full" placeholder="РџРѕРёСЃРє РїРѕР»СЊР·РѕРІР°С‚РµР»СЏвЂ¦" />
+              <input id="allowed-users-search" type="text" autocomplete="off" class="input input-bordered input-sm h-9 min-h-9 text-sm w-full" placeholder="Поиск пользователя…" />
               <div id="allowed-users-dropdown" class="absolute left-0 right-0 top-full mt-1 z-[120] hidden max-h-72 overflow-auto rounded-lg border border-base-content/10 bg-base-100 shadow-xl"></div>
             </div>
             <input type="hidden" name="allowed_user_ids" id="allowed-user-ids" value="{_esc(selected_ids_csv)}" />
           </div>
 
-          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
         </form>
       </div>
     </div>
     </div>
     <script>(function(){{
-      // --- Р“РµРЅРµСЂР°С‚РѕСЂ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РєРѕРґР° (8 СЃРёРјРІРѕР»РѕРІ, A-Z Рё 0-9, Р±РµР· 0/O/1/I С‡С‚РѕР±С‹ РЅРµ РїСѓС‚Р°С‚СЊ) ---
+      // --- Генератор случайного кода (8 символов, A-Z и 0-9, без 0/O/1/I чтобы не путать) ---
       var ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       var dice = document.getElementById('promo-code-dice');
       var codeInput = document.getElementById('promo-code-input');
@@ -8943,7 +8943,7 @@ def _promo_form(
         }});
       }}
 
-      // --- Р’РёРґР¶РµС‚ РІС‹Р±РѕСЂР° РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ (chips + autocomplete) ---
+      // --- Виджет выбора пользователей (chips + autocomplete) ---
       var chipsBox = document.getElementById('allowed-users-chips');
       var searchInp = document.getElementById('allowed-users-search');
       var dropdown = document.getElementById('allowed-users-dropdown');
@@ -8982,7 +8982,7 @@ def _promo_form(
           span.className = 'badge badge-primary gap-1 py-3 pl-3 pr-1';
           span.setAttribute('data-allowed-user-chip', '');
           span.setAttribute('data-user-id', id);
-          span.innerHTML = "<span class='text-xs'></span><button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='РЈР±СЂР°С‚СЊ'><i class='fa-solid fa-xmark text-[10px]' aria-hidden='true'></i></button>";
+          span.innerHTML = "<span class='text-xs'></span><button type='button' class='btn btn-ghost btn-xs btn-circle' data-allowed-user-remove aria-label='Убрать'><i class='fa-solid fa-xmark text-[10px]' aria-hidden='true'></i></button>";
           span.firstElementChild.textContent = label;
           chipsBox.appendChild(span);
           selected.set(id, span);
@@ -8996,7 +8996,7 @@ def _promo_form(
         }}
         function renderResults(items) {{
           if (!items || !items.length) {{
-            dropdown.innerHTML = "<div class='px-3 py-2 text-xs opacity-60'>РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ</div>";
+            dropdown.innerHTML = "<div class='px-3 py-2 text-xs opacity-60'>Ничего не найдено</div>";
             dropdown.classList.remove('hidden');
             return;
           }}
@@ -9035,7 +9035,7 @@ def _promo_form(
             renderResults(d.users || []);
           }}).catch(function(){{
             if (myReq !== activeReq) return;
-            dropdown.innerHTML = "<div class='px-3 py-2 text-xs text-error'>РћС€РёР±РєР° РїРѕРёСЃРєР°</div>";
+            dropdown.innerHTML = "<div class='px-3 py-2 text-xs text-error'>Ошибка поиска</div>";
             dropdown.classList.remove('hidden');
           }});
         }}
@@ -9057,7 +9057,7 @@ def _promo_form(
           if (dropdown.contains(ev.target)) return;
           closeDropdown();
         }});
-        // РќРµ РѕС‚РїСЂР°РІР»СЏС‚СЊ С„РѕСЂРјСѓ, РµСЃР»Рё С„РѕРєСѓСЃ РІ РїРѕР»Рµ РїРѕРёСЃРєР° Рё РЅР°Р¶Р°С‚ Enter вЂ” СЌС‚Рѕ РїРѕРїС‹С‚РєР° РЅР°Р№С‚Рё, Р° РЅРµ СЃР°Р±РјРёС‚
+        // Не отправлять форму, если фокус в поле поиска и нажат Enter — это попытка найти, а не сабмит
         searchInp.addEventListener('keydown', function(ev){{
           if (ev.key === 'Enter') {{ ev.preventDefault(); }}
         }});
@@ -9070,7 +9070,7 @@ def _modal_shell(*, modal_id: str, title: str, inner: str) -> str:
     return f"""
     <div id="{_esc(modal_id)}" class="fixed inset-0 z-[140] hidden items-center justify-center bg-base-content/45 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="{_esc(modal_id)}-title">
       <div class="relative max-h-[90vh] w-full max-w-4xl overflow-auto rounded-2xl border border-base-content/10 bg-base-100 shadow-2xl">
-        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3 z-10" data-remna-modal-close="{_esc(modal_id)}" aria-label="Р—Р°РєСЂС‹С‚СЊ">
+        <button type="button" class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3 z-10" data-remna-modal-close="{_esc(modal_id)}" aria-label="Закрыть">
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
         </button>
         <div class="px-5 pt-5">
@@ -9093,7 +9093,7 @@ async def admin_promos_new(request: Request) -> HTMLResponse:
 
 
 def _parse_allowed_user_ids_csv(raw: str) -> list[int]:
-    """РџР°СЂСЃРёС‚ CSV id'РѕРІ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ (id РІ Р‘Р” Р±РѕС‚Р°) РІ СѓРЅРёРєР°Р»СЊРЅС‹Р№ РѕС‚СЃРѕСЂС‚РёСЂРѕРІР°РЅРЅС‹Р№ СЃРїРёСЃРѕРє."""
+    """Парсит CSV id'ов пользователей (id в БД бота) в уникальный отсортированный список."""
     if not raw:
         return []
     out: set[int] = set()
@@ -9113,7 +9113,7 @@ def _parse_allowed_user_ids_csv(raw: str) -> list[int]:
 async def _load_promo_allowed_users(
     session: AsyncSession, promo_id: int
 ) -> list[dict]:
-    """Р—Р°РіСЂСѓР¶Р°РµС‚ РІС‹Р±СЂР°РЅРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РїСЂРѕРјРѕРєРѕРґР° РІ РІРёРґРµ СЃР»РѕРІР°СЂРµР№ РґР»СЏ С€Р°Р±Р»РѕРЅР°."""
+    """Загружает выбранных пользователей промокода в виде словарей для шаблона."""
     rows = (
         await session.execute(
             select(User)
@@ -9137,7 +9137,7 @@ async def _load_promo_allowed_users(
 async def _sync_promo_allowed_users(
     session: AsyncSession, *, promo_id: int, user_ids: list[int]
 ) -> tuple[list[int], list[int]]:
-    """РџСЂРёРІРѕРґРёС‚ allow-list РїСЂРѕРјРѕРєРѕРґР° Рє СѓРєР°Р·Р°РЅРЅРѕРјСѓ СЃРїРёСЃРєСѓ, РІРѕР·РІСЂР°С‰Р°РµС‚ (added, removed)."""
+    """Приводит allow-list промокода к указанному списку, возвращает (added, removed)."""
     valid_ids: list[int] = []
     if user_ids:
         rows = (
@@ -9193,28 +9193,28 @@ async def admin_promos_new_post(
     try:
         c = code.strip().upper()
         if not c:
-            raise ValueError("РљРѕРґ РѕР±СЏР·Р°С‚РµР»РµРЅ")
+            raise ValueError("Код обязателен")
         if promo_type not in _PROMO_TYPES_SELECTABLE:
-            raise ValueError("РќРµРІРµСЂРЅС‹Р№ С‚РёРї")
+            raise ValueError("Неверный тип")
         val = Decimal(value.strip().replace(",", "."))
         if val <= 0:
-            raise ValueError("РќР°РіСЂР°РґР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ > 0")
+            raise ValueError("Награда должна быть > 0")
         if promo_type == "discount_percent" and (val <= 0 or val >= 100):
-            raise ValueError("discount_percent РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІ РґРёР°РїР°Р·РѕРЅРµ (0,100)")
+            raise ValueError("discount_percent должен быть в диапазоне (0,100)")
         if promo_type == "extra_days" and val != val.to_integral_value():
-            raise ValueError("Р”Р»СЏ РґРЅРµР№ РїРѕРґРїРёСЃРєРё РЅСѓР¶РЅРѕ С†РµР»РѕРµ С‡РёСЃР»Рѕ")
+            raise ValueError("Для дней подписки нужно целое число")
         if promo_type == "extra_days" and int(val) > 3650:
-            raise ValueError("РЎР»РёС€РєРѕРј РјРЅРѕРіРѕ РґРЅРµР№")
+            raise ValueError("Слишком много дней")
         req_no_active, req_months = _parse_promo_eligibility_form(
             require_no_active_subscription, require_no_paid_subscription_months
         )
         mu: int | None = None
         if max_uses.strip() != "-":
             if not max_uses.strip().isdigit():
-                raise ValueError("Р›РёРјРёС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј")
+                raise ValueError("Лимит должен быть целым числом")
             mu = int(max_uses.strip())
             if mu <= 0:
-                raise ValueError("Р›РёРјРёС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ > 0")
+                raise ValueError("Лимит должен быть > 0")
         exp = _promo_expires_from_form(expires_unlimited, expires_at_date)
         active = is_active == "true"
         allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
@@ -9262,16 +9262,16 @@ async def admin_promos_new_post(
         await session.commit()
         await notify_admin(
             get_settings(),
-            title="рџЋЃ РџСЂРѕРјРѕРєРѕРґ СЃРѕР·РґР°РЅ (web-admin)",
+            title="🎁 Промокод создан (web-admin)",
             lines=[
-                f"РљРѕРґ: {md_esc(promo.code)}",
-                f"РўРёРї: {md_esc(_promo_type_ru(promo.type))}",
-                f"РќР°РіСЂР°РґР°: {md_esc(_promo_reward_caption(promo))}",
-                f"РЎСЂРѕРє (РґРѕ): {md_esc(_fmt_expires(promo.expires_at))}",
-                f"Р›РёРјРёС‚: {md_esc('в€ћ' if promo.max_uses is None else str(promo.max_uses))}",
-                f"РђРєС‚РёРІРµРЅ: {md_esc('РґР°' if promo.is_active else 'РЅРµС‚')}",
-                f"РџСЂРёРІСЏР·Р°РЅ Рє: {md_esc(str(len(added)) if added else 'РІСЃРµ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё')}",
-                f"РЈСЃР»РѕРІРёСЏ: {md_esc(_promo_eligibility_summary(promo))}",
+                f"Код: {md_esc(promo.code)}",
+                f"Тип: {md_esc(_promo_type_ru(promo.type))}",
+                f"Награда: {md_esc(_promo_reward_caption(promo))}",
+                f"Срок (до): {md_esc(_fmt_expires(promo.expires_at))}",
+                f"Лимит: {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
+                f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
+                f"Привязан к: {md_esc(str(len(added)) if added else 'все пользователи')}",
+                f"Условия: {md_esc(_promo_eligibility_summary(promo))}",
                 web_admin_actor_notify_line(),
             ],
             event_type="promo_create_web",
@@ -9292,7 +9292,7 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         if promo is None:
             return _layout(
                 "Promo not found",
-                "<div class='alert alert-warning shadow-lg'>РџСЂРѕРјРѕРєРѕРґ РЅРµ РЅР°Р№РґРµРЅ</div>",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
                 request=request,
                 back_href="/admin/promos",
             )
@@ -9322,27 +9322,27 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
         )
         allowed_block = (
             "<div class='card bg-base-100 border border-base-content/10 shadow-lg mt-4'><div class='card-body gap-3'>"
-            f"<h3 class='text-lg font-semibold'>Р”РѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј ({len(allowed)})</h3>"
+            f"<h3 class='text-lg font-semibold'>Доступен только пользователям ({len(allowed)})</h3>"
             f"<div class='flex flex-wrap gap-1.5'>{chips}</div>"
             "</div></div>"
         )
-        scope_caption = f"С‚РѕР»СЊРєРѕ {len(allowed)} РїРѕР»СЊР·."
+        scope_caption = f"только {len(allowed)} польз."
     else:
         allowed_block = ""
-        scope_caption = "РІСЃРµ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё"
+        scope_caption = "все пользователи"
 
     body = f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-4">
-        <h2 class="card-title text-2xl font-mono">РџСЂРѕРјРѕРєРѕРґ <span class="text-primary">{_esc(promo.code)}</span></h2>
-        <p>РўРёРї: <span class="badge badge-ghost">{_esc(_promo_type_ru(promo.type))}</span> В· РќР°РіСЂР°РґР°: <b>{_esc(_promo_reward_caption(promo))}</b></p>
-        <p>РЎСЂРѕРє: <b>{_esc(_fmt_expires(promo.expires_at))}</b> В· Р›РёРјРёС‚: <b>{_esc(promo.max_uses if promo.max_uses is not None else 'в€ћ')}</b></p>
-        <p>РђРєС‚РёРІРµРЅ: <b>{'РґР°' if promo.is_active else 'РЅРµС‚'}</b> В· РСЃРїРѕР»СЊР·РѕРІР°РЅРёР№: <b>{promo.used_count}</b> В· Р”РѕСЃС‚СѓРїРµРЅ: <b>{_esc(scope_caption)}</b></p>
-        <p>РЈСЃР»РѕРІРёСЏ Р°РєС‚РёРІР°С†РёРё: <b>{_esc(_promo_eligibility_summary(promo))}</b></p>
+        <h2 class="card-title text-2xl font-mono">Промокод <span class="text-primary">{_esc(promo.code)}</span></h2>
+        <p>Тип: <span class="badge badge-ghost">{_esc(_promo_type_ru(promo.type))}</span> · Награда: <b>{_esc(_promo_reward_caption(promo))}</b></p>
+        <p>Срок: <b>{_esc(_fmt_expires(promo.expires_at))}</b> · Лимит: <b>{_esc(promo.max_uses if promo.max_uses is not None else '∞')}</b></p>
+        <p>Активен: <b>{'да' if promo.is_active else 'нет'}</b> · Использований: <b>{promo.used_count}</b> · Доступен: <b>{_esc(scope_caption)}</b></p>
+        <p>Условия активации: <b>{_esc(_promo_eligibility_summary(promo))}</b></p>
         <div class="flex flex-wrap gap-2">
-          <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ</a>
-          <form method="post" action="/admin/promos/{promo.id}/delete" data-remna-confirm-msg="РЈРґР°Р»РёС‚СЊ РїСЂРѕРјРѕРєРѕРґ?">
-            <button class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>РЈРґР°Р»РёС‚СЊ</button>
+          <a class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5" href="/admin/promos/{promo.id}/edit"><i class="fa-solid fa-pen" aria-hidden="true"></i>Редактировать</a>
+          <form method="post" action="/admin/promos/{promo.id}/delete" data-remna-confirm-msg="Удалить промокод?">
+            <button class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5" type="submit"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить</button>
           </form>
         </div>
       </div>
@@ -9350,9 +9350,9 @@ async def admin_promos_detail(request: Request, promo_id: int) -> HTMLResponse:
     {allowed_block}
     <div class="card bg-base-100 border border-base-content/10 shadow-lg mt-4">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold">РСЃС‚РѕСЂРёСЏ Р°РєС‚РёРІР°С†РёР№ ({len(usages)})</h3>
-        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID usage</th><th>User ID</th><th>Telegram ID</th><th>Р”Р°С‚Р°</th></tr></thead>
-        <tbody>{usage_rows or '<tr><td colspan="4" class="opacity-50">РќРµС‚ Р°РєС‚РёРІР°С†РёР№</td></tr>'}</tbody></table></div>
+        <h3 class="text-lg font-semibold">История активаций ({len(usages)})</h3>
+        <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID usage</th><th>User ID</th><th>Telegram ID</th><th>Дата</th></tr></thead>
+        <tbody>{usage_rows or '<tr><td colspan="4" class="opacity-50">Нет активаций</td></tr>'}</tbody></table></div>
       </div>
     </div>
     """
@@ -9369,7 +9369,7 @@ async def admin_promos_edit(request: Request, promo_id: int) -> HTMLResponse:
         if promo is None:
             return _layout(
                 "Promo not found",
-                "<div class='alert alert-warning shadow-lg'>РџСЂРѕРјРѕРєРѕРґ РЅРµ РЅР°Р№РґРµРЅ</div>",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
                 request=request,
                 back_href="/admin/promos",
             )
@@ -9409,33 +9409,33 @@ async def admin_promos_edit_post(
         if promo is None:
             return _layout(
                 "Promo not found",
-                "<div class='alert alert-warning shadow-lg'>РџСЂРѕРјРѕРєРѕРґ РЅРµ РЅР°Р№РґРµРЅ</div>",
+                "<div class='alert alert-warning shadow-lg'>Промокод не найден</div>",
                 request=request,
                 back_href="/admin/promos",
             )
         try:
             allowed_types = set(_PROMO_TYPES_SELECTABLE) | {promo.type, "bonus_rub"}
             if promo_type not in allowed_types:
-                raise ValueError("РќРµРІРµСЂРЅС‹Р№ С‚РёРї")
+                raise ValueError("Неверный тип")
             val = Decimal(value.strip().replace(",", "."))
             if val <= 0:
-                raise ValueError("РќР°РіСЂР°РґР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ > 0")
+                raise ValueError("Награда должна быть > 0")
             if promo_type == "discount_percent" and (val <= 0 or val >= 100):
-                raise ValueError("discount_percent РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІ РґРёР°РїР°Р·РѕРЅРµ (0,100)")
+                raise ValueError("discount_percent должен быть в диапазоне (0,100)")
             if promo_type == "extra_days" and val != val.to_integral_value():
-                raise ValueError("Р”Р»СЏ РґРЅРµР№ РїРѕРґРїРёСЃРєРё РЅСѓР¶РЅРѕ С†РµР»РѕРµ С‡РёСЃР»Рѕ")
+                raise ValueError("Для дней подписки нужно целое число")
             if promo_type == "extra_days" and int(val) > 3650:
-                raise ValueError("РЎР»РёС€РєРѕРј РјРЅРѕРіРѕ РґРЅРµР№")
+                raise ValueError("Слишком много дней")
             req_no_active, req_months = _parse_promo_eligibility_form(
                 require_no_active_subscription, require_no_paid_subscription_months
             )
             mu: int | None = None
             if max_uses.strip() != "-":
                 if not max_uses.strip().isdigit():
-                    raise ValueError("Р›РёРјРёС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј")
+                    raise ValueError("Лимит должен быть целым числом")
                 mu = int(max_uses.strip())
                 if mu <= 0:
-                    raise ValueError("Р›РёРјРёС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ > 0")
+                    raise ValueError("Лимит должен быть > 0")
             exp = _promo_expires_from_form(expires_unlimited, expires_at_date)
             active = is_active == "true"
             allow_ids = _parse_allowed_user_ids_csv(allowed_user_ids)
@@ -9483,16 +9483,16 @@ async def admin_promos_edit_post(
         after_allowed = before_allowed.union(added).difference(removed)
         await notify_admin(
             get_settings(),
-            title="вњЏпёЏ РџСЂРѕРјРѕРєРѕРґ РёР·РјРµРЅС‘РЅ (web-admin)",
+            title="✏️ Промокод изменён (web-admin)",
             lines=[
-                f"РљРѕРґ: {md_esc(promo.code)}",
-                f"РўРёРї: {md_esc(_promo_type_ru(before_type))} в†’ {md_esc(_promo_type_ru(promo.type))}",
-                f"РќР°РіСЂР°РґР°: {md_esc(str(before_value))} в†’ {md_esc(str(promo.value))}",
-                f"РЎСЂРѕРє: {md_esc(_fmt_expires(before_expires_at))} в†’ {md_esc(_fmt_expires(promo.expires_at))}",
-                f"Р›РёРјРёС‚: {md_esc('в€ћ' if before_max_uses is None else str(before_max_uses))} в†’ {md_esc('в€ћ' if promo.max_uses is None else str(promo.max_uses))}",
-                f"РђРєС‚РёРІРµРЅ: {md_esc('РґР°' if before_is_active else 'РЅРµС‚')} в†’ {md_esc('РґР°' if promo.is_active else 'РЅРµС‚')}",
-                f"РџСЂРёРІСЏР·Р°РЅ Рє: {md_esc(str(len(before_allowed)) if before_allowed else 'РІСЃРµ')} в†’ {md_esc(str(len(after_allowed)) if after_allowed else 'РІСЃРµ')}",
-                f"РЈСЃР»РѕРІРёСЏ: {md_esc(_promo_eligibility_summary(promo))}",
+                f"Код: {md_esc(promo.code)}",
+                f"Тип: {md_esc(_promo_type_ru(before_type))} → {md_esc(_promo_type_ru(promo.type))}",
+                f"Награда: {md_esc(str(before_value))} → {md_esc(str(promo.value))}",
+                f"Срок: {md_esc(_fmt_expires(before_expires_at))} → {md_esc(_fmt_expires(promo.expires_at))}",
+                f"Лимит: {md_esc('∞' if before_max_uses is None else str(before_max_uses))} → {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
+                f"Активен: {md_esc('да' if before_is_active else 'нет')} → {md_esc('да' if promo.is_active else 'нет')}",
+                f"Привязан к: {md_esc(str(len(before_allowed)) if before_allowed else 'все')} → {md_esc(str(len(after_allowed)) if after_allowed else 'все')}",
+                f"Условия: {md_esc(_promo_eligibility_summary(promo))}",
                 web_admin_actor_notify_line(),
             ],
             event_type="promo_edit_web",
@@ -9518,9 +9518,9 @@ async def admin_promos_delete(request: Request, promo_id: int):
             await session.commit()
             await notify_admin(
                 get_settings(),
-                title="рџ—‘ РџСЂРѕРјРѕРєРѕРґ СѓРґР°Р»С‘РЅ (web-admin)",
+                title="🗑 Промокод удалён (web-admin)",
                 lines=[
-                    f"РљРѕРґ: {md_esc(deleted_code)}",
+                    f"Код: {md_esc(deleted_code)}",
                     web_admin_actor_notify_line(),
                 ],
                 event_type="promo_delete_web",
@@ -9533,7 +9533,7 @@ async def admin_promos_delete(request: Request, promo_id: int):
 
 def _parse_plan_opt_int(raw: str) -> int | None:
     t = (raw or "").strip()
-    if not t or t in "-вЂ”":
+    if not t or t in "-—":
         return None
     return int(t)
 
@@ -9549,10 +9549,10 @@ def _admin_tariff_transition_card(settings: Settings, tdays: str, *, base_month:
             fee = settings.billing_transition_fee_percent
             tip = f"""
             <div class="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm">
-              <p><b>РћСЃС‚Р°С‚РѕРє СЃСЂРѕРєР°:</b> {_esc(d)}</p>
-              <p>Р‘Р°Р·Р° РјРµСЃСЏС†Р°: <b>{_esc(base_month)} в‚Ѕ</b> В· РєРѕРјРёСЃСЃРёСЏ: <b>{_esc(fee)}%</b></p>
-              <p class="text-lg font-semibold mt-2">Р РµРєРѕРјРµРЅРґСѓРµРјС‹Р№ РєСЂРµРґРёС‚ РЅР° Р±Р°Р»Р°РЅСЃ: <span class="text-primary">{_esc(cred)} в‚Ѕ</span></p>
-              <p class="text-xs opacity-70 mt-1">РўРѕР»СЊРєРѕ РґР»СЏ РѕСЂРёРµРЅС‚РёСЂР°, Р°РІС‚РѕРЅР°С‡РёСЃР»РµРЅРёСЏ РЅРµС‚.</p>
+              <p><b>Остаток срока:</b> {_esc(d)}</p>
+              <p>База месяца: <b>{_esc(base_month)} ₽</b> · комиссия: <b>{_esc(fee)}%</b></p>
+              <p class="text-lg font-semibold mt-2">Рекомендуемый кредит на баланс: <span class="text-primary">{_esc(cred)} ₽</span></p>
+              <p class="text-xs opacity-70 mt-1">Только для ориентира, автоначисления нет.</p>
             </div>
             """
     except ValueError:
@@ -9560,12 +9560,12 @@ def _admin_tariff_transition_card(settings: Settings, tdays: str, *, base_month:
     return f"""
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
       <div class="card-body gap-3">
-        <h3 class="text-lg font-semibold"><i class="fa-solid fa-calculator text-primary mr-2" aria-hidden="true"></i>РљР°Р»СЊРєСѓР»СЏС‚РѕСЂ РїРµСЂРµС…РѕРґР° СЃ legacy</h3>
-        <p class="text-sm opacity-80">РћСЃС‚Р°С‚РѕРє СЃС‚Р°СЂРѕР№ РїРѕРґРїРёСЃРєРё РїРѕ СЃСЂРѕРєСѓ в†’ СЃСѓРјРјР° РЅР° Р±Р°Р»Р°РЅСЃ РїРѕСЃР»Рµ РІС‹С‡РµС‚Р° РєРѕРјРёСЃСЃРёРё. Р‘Р°Р·Р° РјРµСЃСЏС†Р°: РјРёРЅРёРјР°Р»СЊРЅС‹Р№ Р°РєС‚РёРІРЅС‹Р№ С‚Р°СЂРёС„ ~30 РґРЅРµР№ РёР· Р‘Р”; РµСЃР»Рё РЅРµС‚ вЂ” <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>. РљРѕРјРёСЃСЃРёСЏ: <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>.</p>
+        <h3 class="text-lg font-semibold"><i class="fa-solid fa-calculator text-primary mr-2" aria-hidden="true"></i>Калькулятор перехода с legacy</h3>
+        <p class="text-sm opacity-80">Остаток старой подписки по сроку → сумма на баланс после вычета комиссии. База месяца: минимальный активный тариф ~30 дней из БД; если нет — <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_BASE_MONTH_RUB</code>. Комиссия: <code class="text-xs bg-base-300 px-1 rounded">BILLING_TRANSITION_FEE_PERCENT</code>.</p>
         <form method="get" class="flex flex-wrap items-end gap-2">
-          <label class="form-control w-full max-w-xs"><span class="label-text text-xs">РћСЃС‚Р°С‚РѕРє СЃСЂРѕРєР°</span>
+          <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Остаток срока</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="tdays" value="{_esc((tdays or '').strip())}" placeholder="30"/></label>
-          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">РџРѕСЃС‡РёС‚Р°С‚СЊ</button>
+          <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9">Посчитать</button>
         </form>
         {tip}
       </div>
@@ -9594,12 +9594,12 @@ def _admin_plan_form(
     pr = str(p.price_rub) if p else "179"
     dsc = str(p.discount_percent) if p else "0"
     price_field = (
-        f"""<label class="form-control w-full"><span class="label-text font-medium">Р¦РµРЅР° Р·Р° 1 РјРµСЃСЏС†, в‚Ѕ</span>
+        f"""<label class="form-control w-full"><span class="label-text font-medium">Цена за 1 месяц, ₽</span>
               <input class="input input-bordered input-sm h-9 min-h-9" name="price_rub" id="f_price_rub" value="{_esc(pr)}" /></label>
-          <p class="text-xs opacity-70 -mt-2">РўРѕР»СЊРєРѕ РґР»СЏ С‚Р°СЂРёС„Р° В«1 РјРµСЃСЏС†В». РћСЃС‚Р°Р»СЊРЅС‹Рµ РїР°РєРµС‚С‹ СЃС‡РёС‚Р°СЋС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.</p>"""
+          <p class="text-xs opacity-70 -mt-2">Только для тарифа «1 месяц». Остальные пакеты считаются автоматически.</p>"""
         if price_editable
         else """<input type="hidden" name="price_rub" value="0" />
-          <p class="text-sm opacity-80">Р¦РµРЅР° СЂР°СЃСЃС‡РёС‚С‹РІР°РµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РѕС‚ С‚Р°СЂРёС„Р° В«1 РјРµСЃСЏС†В» Рё СЃРєРёРґРєРё РЅРёР¶Рµ.</p>"""
+          <p class="text-sm opacity-80">Цена рассчитывается автоматически от тарифа «1 месяц» и скидки ниже.</p>"""
     )
     tgb = "" if p is None or p.traffic_limit_gb is None else str(p.traffic_limit_gb)
     dlim = "" if p is None or p.device_limit is None else str(p.device_limit)
@@ -9613,58 +9613,58 @@ def _admin_plan_form(
     delete_block = ""
     if plan_id is not None and p is not None and p.name not in _RESERVED_PLAN_NAMES:
         delete_block = f"""
-        <form method="post" action="/admin/tariffs/{plan_id}/delete" class="mt-2" data-remna-confirm-msg="{_esc_attr(f'РЈРґР°Р»РёС‚СЊ С‚Р°СЂРёС„ В«{p.name}В»? Р­С‚Рѕ РІРѕР·РјРѕР¶РЅРѕ С‚РѕР»СЊРєРѕ РµСЃР»Рё РЅРµС‚ Р·Р°РїРёСЃРµР№ РїРѕРґРїРёСЃРѕРє СЃ СЌС‚РёРј plan_id.')}">
-          <button type="submit" class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-trash" aria-hidden="true"></i>РЈРґР°Р»РёС‚СЊ С‚Р°СЂРёС„</button>
+        <form method="post" action="/admin/tariffs/{plan_id}/delete" class="mt-2" data-remna-confirm-msg="{_esc_attr(f'Удалить тариф «{p.name}»? Это возможно только если нет записей подписок с этим plan_id.')}">
+          <button type="submit" class="btn btn-error btn-outline btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-trash" aria-hidden="true"></i>Удалить тариф</button>
         </form>
         """
     return f"""
     <div class="flex w-full flex-col items-center justify-center py-6 min-h-[min(70vh,calc(100vh-10rem))]">
     <div class="card bg-base-100 border border-base-content/10 shadow-lg w-full max-w-2xl">
       <div class="card-body gap-4">
-        <h2 class="card-title text-xl"><i class="fa-solid fa-tags text-primary mr-2" aria-hidden="true"></i>{'Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ С‚Р°СЂРёС„Р°' if p else 'РќРѕРІС‹Р№ С‚Р°СЂРёС„'}</h2>
+        <h2 class="card-title text-xl"><i class="fa-solid fa-tags text-primary mr-2" aria-hidden="true"></i>{'Редактирование тарифа' if p else 'Новый тариф'}</h2>
         {e}
         <div id="tariff-ppu-config" class="hidden" data-daily="{_esc_attr(daily)}" data-gbstep="{_esc_attr(gbstep)}" data-mobile="{_esc_attr(mobx)}" data-basemonth="{_esc_attr(base_month_attr)}"></div>
         <form method="post" action="{_esc(action)}" class="flex flex-col gap-4">
-          <label class="form-control w-full"><span class="label-text font-medium">РќР°Р·РІР°РЅРёРµ</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Название</span>
             <input type="text" name="name" id="f_name" value="{_esc(nm)}" {name_extra} /></label>
-          <p class="text-xs opacity-70 -mt-2">РРјРµРЅР° В«{_esc(BASE_SUBSCRIPTION_PLAN_NAME)}В» Рё В«РўСЂРёР°Р»В» РЅРµР»СЊР·СЏ РїРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ (СЃРёСЃС‚РµРјРЅС‹Рµ).</p>
-          <label class="form-control w-full"><span class="label-text font-medium">РЎСЂРѕРє, РґРЅРµР№</span>
+          <p class="text-xs opacity-70 -mt-2">Имена «{_esc(BASE_SUBSCRIPTION_PLAN_NAME)}» и «Триал» нельзя переименовать (системные).</p>
+          <label class="form-control w-full"><span class="label-text font-medium">Срок, дней</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="duration_days" id="f_duration_days" type="number" min="1" value="{_esc(dd)}" /></label>
           {price_field}
-          <label class="form-control w-full"><span class="label-text font-medium">РЎРєРёРґРєР° РїР»Р°РЅР°, %</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Скидка плана, %</span>
             <input class="input input-bordered input-sm h-9 min-h-9" name="discount_percent" id="f_discount_percent" value="{_esc(dsc)}" /></label>
-          <p class="text-xs opacity-70 -mt-2">Р”Р»СЏ 2 Рё 3 РјРµСЃСЏС†РµРІ СѓРєР°Р¶РёС‚Рµ С‚РѕР»СЊРєРѕ СЃРєРёРґРєСѓ вЂ” С†РµРЅР° СЃС‡РёС‚Р°РµС‚СЃСЏ РѕС‚ С‚Р°СЂРёС„Р° В«1 РјРµСЃСЏС†В» Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.</p>
+          <p class="text-xs opacity-70 -mt-2">Для 2 и 3 месяцев укажите только скидку — цена считается от тарифа «1 месяц» автоматически.</p>
           <p id="f_discount_price_preview" class="text-sm font-mono opacity-80"></p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label class="form-control w-full"><span class="label-text font-medium">Р›РёРјРёС‚ С‚СЂР°С„РёРєР°, Р“Р‘ (РїСѓСЃС‚Рѕ = Р±РµР· Р»РёРјРёС‚Р° РІ Р·Р°РїРёСЃРё)</span>
-              <input class="input input-bordered input-sm h-9 min-h-9" name="traffic_limit_gb" id="f_traffic_gb" value="{_esc(tgb)}" placeholder="вЂ”" /></label>
-            <label class="form-control w-full"><span class="label-text font-medium">Р›РёРјРёС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ (РїСѓСЃС‚Рѕ = РЅРµ Р·Р°РґР°РЅРѕ)</span>
-              <input class="input input-bordered input-sm h-9 min-h-9" name="device_limit" id="f_device_limit" value="{_esc(dlim)}" placeholder="вЂ”" /></label>
+            <label class="form-control w-full"><span class="label-text font-medium">Лимит трафика, ГБ (пусто = без лимита в записи)</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="traffic_limit_gb" id="f_traffic_gb" value="{_esc(tgb)}" placeholder="—" /></label>
+            <label class="form-control w-full"><span class="label-text font-medium">Лимит устройств (пусто = не задано)</span>
+              <input class="input input-bordered input-sm h-9 min-h-9" name="device_limit" id="f_device_limit" value="{_esc(dlim)}" placeholder="—" /></label>
           </div>
-          <label class="form-control w-full"><span class="label-text font-medium">РџР°РєРµС‚РЅС‹Р№ РјРµСЃСЏС‡РЅС‹Р№ С‚Р°СЂРёС„</span>
+          <label class="form-control w-full"><span class="label-text font-medium">Пакетный месячный тариф</span>
             <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_package_monthly" id="f_is_pkg">
-              <option value="false" {'selected' if pkg_no else ''}>РЅРµС‚ (РєР»Р°СЃСЃРёС‡РµСЃРєРёР№)</option>
-              <option value="true" {'selected' if pkg_yes else ''}>РґР° (РІРєР»СЋС‡РµРЅС‹ Р»РёРјРёС‚С‹ РїР°РєРµС‚Р° РІ v2)</option>
+              <option value="false" {'selected' if pkg_no else ''}>нет (классический)</option>
+              <option value="true" {'selected' if pkg_yes else ''}>да (включены лимиты пакета в v2)</option>
             </select></label>
-          <label class="form-control w-full"><span class="label-text font-medium">Р“Р‘ РІ РїР°РєРµС‚Рµ / РјРµСЃСЏС† (РґР»СЏ РїР°РєРµС‚РЅРѕРіРѕ)</span>
-            <input class="input input-bordered input-sm h-9 min-h-9" name="monthly_gb_limit" id="f_monthly_gb" value="{_esc(mgbl)}" placeholder="вЂ”" /></label>
+          <label class="form-control w-full"><span class="label-text font-medium">ГБ в пакете / месяц (для пакетного)</span>
+            <input class="input input-bordered input-sm h-9 min-h-9" name="monthly_gb_limit" id="f_monthly_gb" value="{_esc(mgbl)}" placeholder="—" /></label>
           <div class="rounded-xl border border-base-content/10 bg-base-200/60 p-4 text-sm">
-            <p class="font-semibold mb-1">РЎСЂР°РІРЅРµРЅРёРµ СЃ pay-per-use Р·Р° РїРµСЂРёРѕРґ 30</p>
-            <p class="text-xs opacity-70 mb-2">РћС†РµРЅРєР° РїРѕ РїРѕР»СЏРј РІС‹С€Рµ: {daily} в‚Ѕ/РґРµРЅСЊ Р·Р° СѓСЃС‚СЂРѕР№СЃС‚РІРѕ, {gbstep} в‚Ѕ Р·Р° С€Р°Рі Р“Р‘, +{mobx} в‚Ѕ/Р“Р‘ В«РјРѕР±РёР»СЊРЅС‹Р№ РёРЅС‚РµСЂРЅРµС‚В» (РѕС†РµРЅРєР° РјРѕР±. С‚СЂР°С„РёРєР° вЂ” РІСЂСѓС‡РЅСѓСЋ).</p>
-            <label class="form-control w-full max-w-xs"><span class="label-text text-xs">РњРѕР±. РёРЅС‚РµСЂРЅРµС‚, Р“Р‘ (РѕС†РµРЅРєР°)</span>
+            <p class="font-semibold mb-1">Сравнение с pay-per-use за период 30</p>
+            <p class="text-xs opacity-70 mb-2">Оценка по полям выше: {daily} ₽/день за устройство, {gbstep} ₽ за шаг ГБ, +{mobx} ₽/ГБ «мобильный интернет» (оценка моб. трафика — вручную).</p>
+            <label class="form-control w-full max-w-xs"><span class="label-text text-xs">Моб. интернет, ГБ (оценка)</span>
               <input class="input input-bordered input-sm h-9 min-h-9" type="number" min="0" id="f_ppu_mobile_gb" value="0" /></label>
             <p id="f_ppu_result" class="mt-2 font-mono text-sm"></p>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label class="form-control w-full"><span class="label-text font-medium">РђРєС‚РёРІРµРЅ РІ РјР°РіР°Р·РёРЅРµ</span>
+            <label class="form-control w-full"><span class="label-text font-medium">Активен в магазине</span>
               <select class="select select-bordered select-sm h-9 min-h-9 text-sm" name="is_active" id="f_is_active">
-                <option value="true" {'selected' if act_yes else ''}>РґР°</option>
-                <option value="false" {'selected' if act_no else ''}>РЅРµС‚</option>
+                <option value="true" {'selected' if act_yes else ''}>да</option>
+                <option value="false" {'selected' if act_no else ''}>нет</option>
               </select></label>
-            <label class="form-control w-full"><span class="label-text font-medium">РџРѕСЂСЏРґРѕРє СЃРѕСЂС‚РёСЂРѕРІРєРё</span>
+            <label class="form-control w-full"><span class="label-text font-medium">Порядок сортировки</span>
               <input class="input input-bordered input-sm h-9 min-h-9" name="sort_order" id="f_sort_order" type="number" value="{_esc(so)}" /></label>
           </div>
-          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5 w-fit" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>Сохранить</button>
         </form>
         {delete_block}
         <script>
@@ -9687,7 +9687,7 @@ def _admin_plan_form(
             var tr=(GBSTEP*gb).toFixed(2);
             var mr=(MOB*mob).toFixed(2);
             var sum=(parseFloat(dr)+parseFloat(tr)+parseFloat(mr)).toFixed(2);
-            out.textContent='РЈСЃС‚СЂРѕР№СЃС‚РІР°: '+dev+' Г— 30 Г— '+DAILY+' = '+dr+' в‚Ѕ В· Р“Р‘: '+gb+' Г— '+GBSTEP+' = '+tr+' в‚Ѕ В· РњРѕР±.: '+mob+' Г— '+MOB+' = '+mr+' в‚Ѕ В· Р’СЃРµРіРѕ в‰€ '+sum+' в‚Ѕ';
+            out.textContent='Устройства: '+dev+' × 30 × '+DAILY+' = '+dr+' ₽ · ГБ: '+gb+' × '+GBSTEP+' = '+tr+' ₽ · Моб.: '+mob+' × '+MOB+' = '+mr+' ₽ · Всего ≈ '+sum+' ₽';
           }}
           ['f_device_limit','f_monthly_gb','f_traffic_gb','f_is_pkg','f_ppu_mobile_gb'].forEach(function(id){{
             var el=document.getElementById(id);
@@ -9708,7 +9708,7 @@ def _admin_plan_form(
             var months=days/30;
             var raw=BASE*months*(1-disc/100);
             var floored=Math.floor(raw);
-            out.textContent='Р Р°СЃС‡С‘С‚РЅР°СЏ С†РµРЅР° РїСЂРё СЃРѕС…СЂР°РЅРµРЅРёРё: '+floored+' в‚Ѕ (Р±Р°Р·Р° '+BASE+' в‚Ѕ/РјРµСЃ Г— '+months.toFixed(2)+' РјРµСЃ Г— '+(100-disc)+'%)';
+            out.textContent='Расчётная цена при сохранении: '+floored+' ₽ (база '+BASE+' ₽/мес × '+months.toFixed(2)+' мес × '+(100-disc)+'%)';
             if(priceEl && priceEl.type!=='hidden') priceEl.value=String(floored);
           }}
           ['f_discount_percent','f_duration_days'].forEach(function(id){{
@@ -9732,16 +9732,16 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
     settings = get_settings()
     shop_on = await tariff_purchases_enabled(settings)
     badge_cls = "badge-success" if shop_on else "badge-warning"
-    badge_txt = "РґР°" if shop_on else "РЅРµС‚"
+    badge_txt = "да" if shop_on else "нет"
     toggle_val = "0" if shop_on else "1"
-    toggle_btn = "Р’С‹РєР»СЋС‡РёС‚СЊ РїСЂРѕРґР°Р¶Сѓ С‚Р°СЂРёС„РѕРІ РІ Р±РѕС‚Рµ" if shop_on else "Р’РєР»СЋС‡РёС‚СЊ РїСЂРѕРґР°Р¶Сѓ С‚Р°СЂРёС„РѕРІ РІ Р±РѕС‚Рµ"
+    toggle_btn = "Выключить продажу тарифов в боте" if shop_on else "Включить продажу тарифов в боте"
     shop_toggle_card = (
         "<div class='card bg-base-100 border border-base-content/15 shadow-lg'>"
         "<div class='card-body gap-3'>"
-        "<h3 class='text-lg font-semibold'><i class='fa-solid fa-robot mr-2' aria-hidden='true'></i>РџСЂРѕРґР°Р¶Р° С‚Р°СЂРёС„РѕРІ РІ Telegram-Р±РѕС‚Рµ</h3>"
-        "<p class='text-sm opacity-80'>РџСЂРё РІС‹РєР»СЋС‡РµРЅРёРё РїРѕР»СЊР·РѕРІР°С‚РµР»Рё РЅРµ РІРёРґСЏС‚ РєРЅРѕРїРєРё В«РўР°СЂРёС„С‹В» Рё РЅРµ РјРѕРіСѓС‚ СЃРїРёСЃР°С‚СЊ Р±Р°Р»Р°РЅСЃ Р·Р° РїР°РєРµС‚. PAYG Р±РµР· РёР·РјРµРЅРµРЅРёР№.</p>"
-        f"<p class='text-sm'>РЎРµР№С‡Р°СЃ: <span class='badge badge-sm {badge_cls}'>{badge_txt}</span>"
-        " (СЃРѕРІРїР°РґР°РµС‚ СЃ <code class='text-xs bg-base-300 px-1 rounded'>BOT_TARIFF_PURCHASES_ENABLED</code> Рё Redis).</p>"
+        "<h3 class='text-lg font-semibold'><i class='fa-solid fa-robot mr-2' aria-hidden='true'></i>Продажа тарифов в Telegram-боте</h3>"
+        "<p class='text-sm opacity-80'>При выключении пользователи не видят кнопки «Тарифы» и не могут списать баланс за пакет. PAYG без изменений.</p>"
+        f"<p class='text-sm'>Сейчас: <span class='badge badge-sm {badge_cls}'>{badge_txt}</span>"
+        " (совпадает с <code class='text-xs bg-base-300 px-1 rounded'>BOT_TARIFF_PURCHASES_ENABLED</code> и Redis).</p>"
         '<form method="post" action="/admin/tariffs/toggle-shop" class="flex flex-wrap gap-2 mt-2">'
         f'<input type="hidden" name="enabled" value="{toggle_val}" />'
         f'<button type="submit" class="btn btn-sm btn-outline">{_esc(toggle_btn)}</button>'
@@ -9759,23 +9759,23 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
     for pl in plans:
         dev, gb = plan_fields_for_ppu_estimate(pl)
         est = estimate_pay_per_use_30d_rub(settings, device_count=dev, gb_per_month=gb, mobile_gb_per_month=0)
-        pkg = "РґР°" if pl.is_package_monthly else "РЅРµС‚"
-        act = "РґР°" if pl.is_active else "РЅРµС‚"
+        pkg = "да" if pl.is_package_monthly else "нет"
+        act = "да" if pl.is_active else "нет"
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/tariffs/{pl.id}/edit' tabindex='0' role='link'>"
             f"<td class='font-medium'>{_esc(pl.name)}</td>"
             f"<td>{pl.duration_days}</td><td>{_esc(plan_prices.get(pl.id, pl.price_rub))}</td>"
-            f"<td class='text-xs'>{_esc(pl.traffic_limit_gb if pl.traffic_limit_gb is not None else 'вЂ”')}</td>"
-            f"<td class='text-xs'>{_esc(pl.device_limit if pl.device_limit is not None else 'вЂ”')}</td>"
-            f"<td class='text-xs'>{_esc(pl.monthly_gb_limit if pl.monthly_gb_limit is not None else 'вЂ”')}</td>"
+            f"<td class='text-xs'>{_esc(pl.traffic_limit_gb if pl.traffic_limit_gb is not None else '—')}</td>"
+            f"<td class='text-xs'>{_esc(pl.device_limit if pl.device_limit is not None else '—')}</td>"
+            f"<td class='text-xs'>{_esc(pl.monthly_gb_limit if pl.monthly_gb_limit is not None else '—')}</td>"
             f"<td>{_esc(pkg)}</td><td>{_esc(act)}</td>"
-            f"<td class='whitespace-nowrap text-xs' title='СѓСЃС‚СЂРѕР№СЃС‚РІР° {dev}, Р“Р‘ {gb}'>{_esc(est['total_rub'])} в‚Ѕ</td>"
+            f"<td class='whitespace-nowrap text-xs' title='устройства {dev}, ГБ {gb}'>{_esc(est['total_rub'])} ₽</td>"
             f"<td>{pl.sort_order}</td></tr>"
         )
     trans = _admin_tariff_transition_card(settings, tdays, base_month=dyn_base)
     create_modal = _modal_shell(
         modal_id="tariff-create-modal",
-        title="РќРѕРІС‹Р№ С‚Р°СЂРёС„",
+        title="Новый тариф",
         inner=_admin_plan_form(
             action="/admin/tariffs/new",
             settings=settings,
@@ -9788,20 +9788,20 @@ async def admin_tariffs(request: Request, tdays: str = "") -> HTMLResponse:
         f"{shop_toggle_card}"
         f"{trans}"
         "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
-        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>РўР°СЂРёС„С‹</h2>"
-        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='tariff-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>РќРѕРІС‹Р№ С‚Р°СЂРёС„</button></div>"
+        "<div class='flex flex-wrap items-center justify-between gap-2'><h2 class='card-title text-2xl mb-0'><i class='fa-solid fa-tags text-primary mr-2' aria-hidden='true'></i>Тарифы</h2>"
+        "<button type='button' class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' data-remna-modal-open='tariff-create-modal'><i class='fa-solid fa-plus' aria-hidden='true'></i>Новый тариф</button></div>"
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'><table class='table table-zebra table-sm'>"
-        "<thead><tr><th>РќР°Р·РІР°РЅРёРµ</th><th>РЎСЂРѕРє</th><th>Р¦РµРЅР° в‚Ѕ</th><th>Р“Р‘ Р»РёРјРёС‚</th><th>РЈСЃС‚СЂ.</th><th>Р“Р‘/РјРµСЃ РїР°РєРµС‚</th><th>РџР°РєРµС‚</th><th>РђРєС‚РёРІРµРЅ</th>"
-        "<th title='Р­РєРІРёРІР°Р»РµРЅС‚ pay-per-use Р·Р° РїРµСЂРёРѕРґ 30'>в‰€ PPU 30</th><th>РЎРѕСЂС‚.</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"10\" class=\"opacity-50\">РќРµС‚ С‚Р°СЂРёС„РѕРІ</td></tr>'}</tbody></table></div>"
-        "<p class='text-xs opacity-60'>РЎС‚СЂРѕРєР° РІРµРґС‘С‚ РІ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ. В«Р‘Р°Р·РѕРІС‹Р№В» Рё В«РўСЂРёР°Р»В» РЅРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ Рё РїРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ. "
-        "РљРЅРѕРїРєРё С‚Р°СЂРёС„РѕРІ РІ Р±РѕС‚Рµ СЃС‚СЂРѕСЏС‚СЃСЏ РёР· Р‘Р” РїСЂРё РєР°Р¶РґРѕРј РѕС‚РєСЂС‹С‚РёРё СЃРїРёСЃРєР°; РїСЂРё СЃРЅСЏС‚РёРё СЃ РїСЂРѕРґР°Р¶Рё РёР»Рё СѓРґР°Р»РµРЅРёРё СѓСЃС‚Р°СЂРµРІС€РµРµ СЃРѕРѕР±С‰РµРЅРёРµ "
-        "РјРѕР¶РЅРѕ Р·Р°РєСЂС‹С‚СЊ Рё РѕС‚РєСЂС‹С‚СЊ В«РўР°СЂРёС„С‹В» СЃРЅРѕРІР°.</p>"
+        "<thead><tr><th>Название</th><th>Срок</th><th>Цена ₽</th><th>ГБ лимит</th><th>Устр.</th><th>ГБ/мес пакет</th><th>Пакет</th><th>Активен</th>"
+        "<th title='Эквивалент pay-per-use за период 30'>≈ PPU 30</th><th>Сорт.</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"10\" class=\"opacity-50\">Нет тарифов</td></tr>'}</tbody></table></div>"
+        "<p class='text-xs opacity-60'>Строка ведёт в редактирование. «Базовый» и «Триал» нельзя удалить и переименовать. "
+        "Кнопки тарифов в боте строятся из БД при каждом открытии списка; при снятии с продажи или удалении устаревшее сообщение "
+        "можно закрыть и открыть «Тарифы» снова.</p>"
         "</div></div></div>"
         f"{create_modal}"
         "<script>(function(){document.querySelectorAll('[data-remna-modal-open]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-open');var m=document.getElementById(id);if(m)m.classList.remove('hidden');if(m)m.classList.add('flex');});});document.querySelectorAll('[data-remna-modal-close]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-remna-modal-close');var m=document.getElementById(id);if(m)m.classList.add('hidden');if(m)m.classList.remove('flex');});});document.querySelectorAll('[role=\"dialog\"]').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){m.classList.add('hidden');m.classList.remove('flex');}});});})();</script>"
     )
-    return _layout("РўР°СЂРёС„С‹", body, request=request)
+    return _layout("Тарифы", body, request=request)
 
 
 @router.get("/tariffs/new")
@@ -9814,7 +9814,7 @@ async def admin_tariffs_new(request: Request) -> HTMLResponse:
         base_hint = await default_one_month_tariff_price_rub(session)
         ref_plan = await get_one_month_reference_plan(session)
     return _layout(
-        "РќРѕРІС‹Р№ С‚Р°СЂРёС„",
+        "Новый тариф",
         _admin_plan_form(
             action="/admin/tariffs/new",
             settings=settings,
@@ -9847,18 +9847,18 @@ async def admin_tariffs_new_post(
     try:
         nm = name.strip()
         if not nm:
-            raise ValueError("РќР°Р·РІР°РЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ")
+            raise ValueError("Название обязательно")
         if nm in _RESERVED_PLAN_NAMES:
-            raise ValueError("РЎРѕР·РґР°Р№С‚Рµ С‚Р°СЂРёС„ СЃ РґСЂСѓРіРёРј РёРјРµРЅРё; В«Р‘Р°Р·РѕРІС‹Р№В» Рё В«РўСЂРёР°Р»В» СѓР¶Рµ Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°РЅС‹")
+            raise ValueError("Создайте тариф с другим имени; «Базовый» и «Триал» уже зарезервированы")
         dd = int((duration_days or "").strip())
         if dd < 1:
-            raise ValueError("РЎСЂРѕРє РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ в‰Ґ 1 РґРЅСЏ")
+            raise ValueError("Срок должен быть ≥ 1 дня")
         pr = Decimal((price_rub or "0").strip().replace(",", "."))
         if pr < 0:
-            raise ValueError("Р¦РµРЅР° РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РѕС‚СЂРёС†Р°С‚РµР»СЊРЅРѕР№")
+            raise ValueError("Цена не может быть отрицательной")
         dsc = Decimal((discount_percent or "0").strip().replace(",", "."))
         if dsc < 0 or dsc >= 100:
-            raise ValueError("РЎРєРёРґРєР° РїР»Р°РЅР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ РІ [0, 100)")
+            raise ValueError("Скидка плана должна быть в [0, 100)")
         tgb = _parse_plan_opt_int(traffic_limit_gb)
         dlim = _parse_plan_opt_int(device_limit)
         mgbl = _parse_plan_opt_int(monthly_gb_limit)
@@ -9867,7 +9867,7 @@ async def admin_tariffs_new_post(
         so = int((sort_order or "0").strip())
     except (ValueError, InvalidOperation) as e:
         return _layout(
-            "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+            "Тариф — ошибка",
             _admin_plan_form(action="/admin/tariffs/new", settings=settings, error=str(e)),
             request=request,
             back_href="/admin/tariffs",
@@ -9878,11 +9878,11 @@ async def admin_tariffs_new_post(
         ).scalar_one_or_none()
         if dup is not None:
             return _layout(
-                "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+                "Тариф — ошибка",
                 _admin_plan_form(
                     action="/admin/tariffs/new",
                     settings=settings,
-                    error="РўР°СЂРёС„ СЃ С‚Р°РєРёРј РЅР°Р·РІР°РЅРёРµРј СѓР¶Рµ РµСЃС‚СЊ",
+                    error="Тариф с таким названием уже есть",
                 ),
                 request=request,
                 back_href="/admin/tariffs",
@@ -9891,11 +9891,11 @@ async def admin_tariffs_new_post(
         is_ref_target = ref_before is None and is_one_month_duration(dd)
         if is_ref_target and pr <= 0:
             return _layout(
-                "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+                "Тариф — ошибка",
                 _admin_plan_form(
                     action="/admin/tariffs/new",
                     settings=settings,
-                    error="РЈРєР°Р¶РёС‚Рµ С†РµРЅСѓ Р·Р° 1 РјРµСЃСЏС† (Р±РѕР»СЊС€Рµ 0 в‚Ѕ)",
+                    error="Укажите цену за 1 месяц (больше 0 ₽)",
                     base_month_rub_hint=await default_one_month_tariff_price_rub(session),
                     price_editable=True,
                 ),
@@ -9923,14 +9923,14 @@ async def admin_tariffs_new_post(
         )
         if is_ref:
             await refresh_all_derived_plan_prices(session)
-        plan_label = f"{new_plan.name} В· {new_plan.duration_days} РґРЅ. В· {new_plan.price_rub} в‚Ѕ"
+        plan_label = f"{new_plan.name} · {new_plan.duration_days} дн. · {new_plan.price_rub} ₽"
         await session.commit()
         await notify_admin(
             settings,
-            title="рџ“¦ " + bold("РўР°СЂРёС„ СЃРѕР·РґР°РЅ (web-admin)"),
+            title="📦 " + bold("Тариф создан (web-admin)"),
             lines=[
-                plain("РўР°СЂРёС„: ") + bold(plan_label),
-                plain("РђРєС‚РёРІРµРЅ: ") + bold("РґР°" if new_plan.is_active else "РЅРµС‚"),
+                plain("Тариф: ") + bold(plan_label),
+                plain("Активен: ") + bold("да" if new_plan.is_active else "нет"),
                 web_admin_actor_notify_line(),
             ],
             event_type="tariff_create_web",
@@ -9952,13 +9952,13 @@ async def admin_tariffs_edit(request: Request, plan_id: int) -> HTMLResponse:
         price_editable = ref_plan is None or (plan is not None and plan.id == ref_plan.id)
     if plan is None:
         return _layout(
-            "РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ",
-            "<div class='alert alert-warning shadow-lg'>РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ</div>",
+            "Тариф не найден",
+            "<div class='alert alert-warning shadow-lg'>Тариф не найден</div>",
             request=request,
             back_href="/admin/tariffs",
         )
     return _layout(
-        "Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ С‚Р°СЂРёС„Р°",
+        "Редактирование тарифа",
         _admin_plan_form(
             action=f"/admin/tariffs/{plan_id}/edit",
             settings=settings,
@@ -9995,26 +9995,26 @@ async def admin_tariffs_edit_post(
         plan = await session.get(Plan, plan_id)
         if plan is None:
             return _layout(
-                "РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ",
-                "<div class='alert alert-warning shadow-lg'>РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ</div>",
+                "Тариф не найден",
+                "<div class='alert alert-warning shadow-lg'>Тариф не найден</div>",
                 request=request,
                 back_href="/admin/tariffs",
             )
         try:
             nm = name.strip()
             if not nm:
-                raise ValueError("РќР°Р·РІР°РЅРёРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ")
+                raise ValueError("Название обязательно")
             if plan.name in _RESERVED_PLAN_NAMES and nm != plan.name:
-                raise ValueError("РЎРёСЃС‚РµРјРЅС‹Р№ С‚Р°СЂРёС„ РЅРµР»СЊР·СЏ РїРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ")
+                raise ValueError("Системный тариф нельзя переименовать")
             dd = int((duration_days or "").strip())
             if dd < 1:
-                raise ValueError("РЎСЂРѕРє РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ в‰Ґ 1 РґРЅСЏ")
+                raise ValueError("Срок должен быть ≥ 1 дня")
             pr = Decimal((price_rub or "0").strip().replace(",", "."))
             if pr < 0:
-                raise ValueError("Р¦РµРЅР° РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РѕС‚СЂРёС†Р°С‚РµР»СЊРЅРѕР№")
+                raise ValueError("Цена не может быть отрицательной")
             dsc = Decimal((discount_percent or "0").strip().replace(",", "."))
             if dsc < 0 or dsc >= 100:
-                raise ValueError("РЎРєРёРґРєР° РїР»Р°РЅР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ РІ [0, 100)")
+                raise ValueError("Скидка плана должна быть в [0, 100)")
             tgb = _parse_plan_opt_int(traffic_limit_gb)
             dlim = _parse_plan_opt_int(device_limit)
             mgbl = _parse_plan_opt_int(monthly_gb_limit)
@@ -10023,7 +10023,7 @@ async def admin_tariffs_edit_post(
             so = int((sort_order or "0").strip())
         except (ValueError, InvalidOperation) as e:
             return _layout(
-                "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+                "Тариф — ошибка",
                 _admin_plan_form(
                     action=f"/admin/tariffs/{plan_id}/edit",
                     settings=settings,
@@ -10040,13 +10040,13 @@ async def admin_tariffs_edit_post(
             ).scalar_one_or_none()
             if dup is not None:
                 return _layout(
-                    "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+                    "Тариф — ошибка",
                     _admin_plan_form(
                         action=f"/admin/tariffs/{plan_id}/edit",
                         settings=settings,
                         plan=plan,
                         plan_id=plan_id,
-                        error="РўР°СЂРёС„ СЃ С‚Р°РєРёРј РЅР°Р·РІР°РЅРёРµРј СѓР¶Рµ РµСЃС‚СЊ",
+                        error="Тариф с таким названием уже есть",
                     ),
                     request=request,
                     back_href="/admin/tariffs",
@@ -10055,13 +10055,13 @@ async def admin_tariffs_edit_post(
         is_ref = ref is not None and plan.id == ref.id
         if is_ref and pr <= 0:
             return _layout(
-                "РўР°СЂРёС„ вЂ” РѕС€РёР±РєР°",
+                "Тариф — ошибка",
                 _admin_plan_form(
                     action=f"/admin/tariffs/{plan_id}/edit",
                     settings=settings,
                     plan=plan,
                     plan_id=plan_id,
-                    error="РЈРєР°Р¶РёС‚Рµ С†РµРЅСѓ Р·Р° 1 РјРµСЃСЏС† (Р±РѕР»СЊС€Рµ 0 в‚Ѕ)",
+                    error="Укажите цену за 1 месяц (больше 0 ₽)",
                     base_month_rub_hint=await default_one_month_tariff_price_rub(session),
                     price_editable=True,
                 ),
@@ -10082,14 +10082,14 @@ async def admin_tariffs_edit_post(
         )
         if is_ref:
             await refresh_all_derived_plan_prices(session)
-        plan_label = f"{plan.name} В· {plan.duration_days} РґРЅ. В· {plan.price_rub} в‚Ѕ"
+        plan_label = f"{plan.name} · {plan.duration_days} дн. · {plan.price_rub} ₽"
         await session.commit()
         await notify_admin(
             settings,
-            title="вњЏпёЏ " + bold("РўР°СЂРёС„ РёР·РјРµРЅС‘РЅ (web-admin)"),
+            title="✏️ " + bold("Тариф изменён (web-admin)"),
             lines=[
-                plain("РўР°СЂРёС„: ") + bold(plan_label),
-                plain("РђРєС‚РёРІРµРЅ: ") + bold("РґР°" if plan.is_active else "РЅРµС‚"),
+                plain("Тариф: ") + bold(plan_label),
+                plain("Активен: ") + bold("да" if plan.is_active else "нет"),
                 web_admin_actor_notify_line(),
             ],
             event_type="tariff_edit_web",
@@ -10109,9 +10109,9 @@ async def admin_tariffs_delete(request: Request, plan_id: int):
             return RedirectResponse("/admin/tariffs", status_code=303)
         if plan.name in _RESERVED_PLAN_NAMES:
             return _layout(
-                "РўР°СЂРёС„",
-                f"<div class='alert alert-error shadow-lg'>РќРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ СЃРёСЃС‚РµРјРЅС‹Р№ С‚Р°СЂРёС„ В«{_esc(plan.name)}В».</div>"
-                "<p class='mt-2'><a class='link' href='/admin/tariffs'>Рљ СЃРїРёСЃРєСѓ</a></p>",
+                "Тариф",
+                f"<div class='alert alert-error shadow-lg'>Нельзя удалить системный тариф «{_esc(plan.name)}».</div>"
+                "<p class='mt-2'><a class='link' href='/admin/tariffs'>К списку</a></p>",
                 request=request,
                 back_href="/admin/tariffs",
             )
@@ -10122,9 +10122,9 @@ async def admin_tariffs_delete(request: Request, plan_id: int):
         ).scalar_one()
         if int(cnt or 0) > 0:
             return _layout(
-                "РўР°СЂРёС„",
-                "<div class='alert alert-error shadow-lg'>РЈ С‚Р°СЂРёС„Р° РµСЃС‚СЊ Р·Р°РїРёСЃРё РїРѕРґРїРёСЃРѕРє РІ РёСЃС‚РѕСЂРёРё вЂ” СѓРґР°Р»РµРЅРёРµ Р·Р°РїСЂРµС‰РµРЅРѕ. РћС‚РєР»СЋС‡РёС‚Рµ С‚Р°СЂРёС„ (РЅРµР°РєС‚РёРІРµРЅ) РёР»Рё Р·Р°РјРµРЅРёС‚Рµ РїР»Р°РЅ Сѓ РїРѕРґРїРёСЃРѕРє.</div>"
-                "<p class='mt-2'><a class='link' href='/admin/tariffs'>Рљ СЃРїРёСЃРєСѓ</a></p>",
+                "Тариф",
+                "<div class='alert alert-error shadow-lg'>У тарифа есть записи подписок в истории — удаление запрещено. Отключите тариф (неактивен) или замените план у подписок.</div>"
+                "<p class='mt-2'><a class='link' href='/admin/tariffs'>К списку</a></p>",
                 request=request,
                 back_href="/admin/tariffs",
             )
@@ -10134,14 +10134,13 @@ async def admin_tariffs_delete(request: Request, plan_id: int):
         await session.commit()
         await notify_admin(
             get_settings(),
-            title="рџ—‘ " + bold("РўР°СЂРёС„ СѓРґР°Р»С‘РЅ (web-admin)"),
+            title="🗑 " + bold("Тариф удалён (web-admin)"),
             lines=[
-                plain("РўР°СЂРёС„: ") + bold(f"{deleted_name} В· {deleted_days} РґРЅ."),
+                plain("Тариф: ") + bold(f"{deleted_name} · {deleted_days} дн."),
                 web_admin_actor_notify_line(),
             ],
             event_type="tariff_delete_web",
             topic=AdminLogTopic.SUBSCRIPTIONS,
         )
     return RedirectResponse("/admin/tariffs", status_code=303)
-
 
