@@ -976,6 +976,19 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
                     await bot.send_message(chat_id=uid, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
                 except Exception:
                     pass
+            # Уведомление пользователю при возобновлении
+            old_status = str(t.get("status") or "")
+            if old_status == "closed" and st in {"open", "in_progress"} and uid:
+                try:
+                    await bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            f"🔄 Администратор возобновил диалог по тикету #{ticket_id}.\n"
+                            "Вы можете продолжить общение — просто напишите сообщение."
+                        ),
+                    )
+                except Exception:
+                    pass
         finally:
             await bot.session.close()
     return {"ok": True}

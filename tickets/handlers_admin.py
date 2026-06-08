@@ -504,7 +504,8 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     )
     if message.from_user is not None and message.from_user.is_bot:
         return
-    if not is_anonymous_group_admin and not _is_admin(message.from_user.id if message.from_user else None):
+    tg_id = message.from_user.id if message.from_user else None
+    if not is_anonymous_group_admin and not await _can_manage_tickets(session, tg_id):
         return
     try:
         topic_id = int(message.message_thread_id or 0)

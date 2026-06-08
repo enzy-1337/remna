@@ -349,6 +349,21 @@ async def cb_user_close_ticket(cq: CallbackQuery, session: AsyncSession, state: 
     await set_ticket_status(session, ticket_id=active_id, status="closed", close_now=True)
     topic_id = int(t.get("topic_id") or 0)
     if topic_id:
+        from tickets.keyboards import closed_ticket_keyboard
+        disp = (cq.from_user.full_name or "Пользователь").strip()
+        try:
+            await cq.bot.send_message(
+                chat_id=config.support_group_id,
+                message_thread_id=topic_id,
+                text=(
+                    f"✅ Пользователь <b>{html.escape(disp)}</b> закрыл тикет #{active_id}.\n"
+                    "Вы можете возобновить диалог, нажав кнопку ниже."
+                ),
+                parse_mode="HTML",
+                reply_markup=closed_ticket_keyboard(active_id),
+            )
+        except Exception:
+            pass
         try:
             await cq.bot.close_forum_topic(chat_id=config.support_group_id, message_thread_id=topic_id)
         except Exception:
