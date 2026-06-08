@@ -573,8 +573,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
         ).mappings().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        if str(t["status"]) == "closed":
-            raise HTTPException(status_code=400, detail="Ticket is closed")
+        ticket_was_closed = str(t["status"]) == "closed"
         wauth = request.session.get("wauth") or {}
         admin_tg = int(wauth.get("telegram_id") or wauth.get("id") or 0)
         # sender_uid → users.id (для имени в диалоге)
@@ -606,7 +605,7 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
             text(
                 """
                 UPDATE tickets
-                SET status = CASE WHEN status='open' THEN 'in_progress' ELSE status END,
+                SET status = CASE WHEN status IN ('open','closed') THEN 'in_progress' ELSE status END,
                     operator_id = COALESCE(:aid, operator_id),
                     telegram_assigned_admin_id = COALESCE(:atg, telegram_assigned_admin_id),
                     updated_at=:now, last_activity=:now
@@ -622,6 +621,28 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
         bot = Bot(token=tickets_config.bot_token)
         try:
             uid = int(t["telegram_user_id"] or 0)
+            topic_id = int(t["topic_id"] or 0)
+            # Если тикет был закрыт — уведомляем пользователя о возобновлении и открываем топик
+            if ticket_was_closed:
+                if uid:
+                    try:
+                        await bot.send_message(
+                            chat_id=uid,
+                            text=(
+                                f"🔄 Администратор возобновил диалог по тикету #{ticket_id}.\n"
+                                "Вы можете продолжить общение — просто напишите сообщение."
+                            ),
+                        )
+                    except Exception:
+                        pass
+                if topic_id:
+                    try:
+                        await bot.reopen_forum_topic(
+                            chat_id=tickets_config.support_group_id,
+                            message_thread_id=topic_id,
+                        )
+                    except Exception:
+                        pass
             if uid:
                 await bot.send_message(
                     chat_id=uid,
@@ -629,7 +650,6 @@ async def api_ticket_reply(request: Request, ticket_id: int, body: TicketReplyIn
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
-            topic_id = int(t["topic_id"] or 0)
             if topic_id:
                 label = html.escape(str((request.session.get("wauth") or {}).get("label") or "Администратор"))
                 await bot.send_message(
@@ -675,8 +695,7 @@ async def api_ticket_reply_media(
         ).mappings().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        if str(t["status"]) == "closed":
-            raise HTTPException(status_code=400, detail="Ticket is closed")
+        media_ticket_was_closed = str(t["status"]) == "closed"
         wauth = request.session.get("wauth") or {}
         admin_tg = int(wauth.get("telegram_id") or wauth.get("id") or 0)
         sender_uid, operator_id = await _resolve_admin_ids(session, request)
@@ -828,7 +847,7 @@ async def api_ticket_reply_media(
             text(
                 """
                 UPDATE tickets
-                SET status = CASE WHEN status='open' THEN 'in_progress' ELSE status END,
+                SET status = CASE WHEN status IN ('open','closed') THEN 'in_progress' ELSE status END,
                     operator_id = COALESCE(:aid, operator_id),
                     telegram_assigned_admin_id = COALESCE(:atg, telegram_assigned_admin_id),
                     updated_at=:now, last_activity=:now
@@ -839,6 +858,33 @@ async def api_ticket_reply_media(
         )
         await session.commit()
     _invalidate_tickets_list_cache()
+    # Если тикет был закрыт — уведомляем пользователя о возобновлении и открываем топик
+    if media_ticket_was_closed and tickets_config.bot_token:
+        _bot = Bot(token=tickets_config.bot_token)
+        try:
+            _uid = int(t["telegram_user_id"] or 0)
+            _topic_id = int(t["topic_id"] or 0)
+            if _uid:
+                try:
+                    await _bot.send_message(
+                        chat_id=_uid,
+                        text=(
+                            f"🔄 Администратор возобновил диалог по тикету #{ticket_id}.\n"
+                            "Вы можете продолжить общение — просто напишите сообщение."
+                        ),
+                    )
+                except Exception:
+                    pass
+            if _topic_id:
+                try:
+                    await _bot.reopen_forum_topic(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=_topic_id,
+                    )
+                except Exception:
+                    pass
+        finally:
+            await _bot.session.close()
     return {"ok": True}
 
 
@@ -926,6 +972,7 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
         ).mappings().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        status_was_closed = str(t["status"]) == "closed"
         await session.execute(
             text(
                 """
@@ -946,6 +993,7 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
                 topic_id = int(t["topic_id"] or 0)
             except Exception:
                 topic_id = 0
+            uid = int(t["telegram_user_id"] or 0)
             # Всегда пишем в топик о смене статуса из веба.
             if topic_id:
                 status_ru = {"open": "Открыт", "in_progress": "В работе", "closed": "Закрыт"}.get(st, st)
@@ -969,13 +1017,24 @@ async def api_ticket_status(request: Request, ticket_id: int, body: TicketStatus
                         await bot.close_forum_topic(chat_id=tickets_config.support_group_id, message_thread_id=topic_id)
                     except Exception:
                         pass
-            if st == "closed":
-                uid = int(t["telegram_user_id"] or 0)
-                if uid:
-                    try:
-                        await bot.send_message(chat_id=uid, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
-                    except Exception:
-                        pass
+            # Уведомление пользователю при закрытии
+            if st == "closed" and uid:
+                try:
+                    await bot.send_message(chat_id=uid, text=f"Ваш тикет #{ticket_id} был закрыт администратором")
+                except Exception:
+                    pass
+            # Уведомление пользователю при переоткрытии из закрытого
+            if st in {"open", "in_progress"} and status_was_closed and uid:
+                try:
+                    await bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            f"🔄 Администратор возобновил диалог по тикету #{ticket_id}.\n"
+                            "Вы можете продолжить общение — просто напишите сообщение."
+                        ),
+                    )
+                except Exception:
+                    pass
         finally:
             await bot.session.close()
     return {"ok": True}
