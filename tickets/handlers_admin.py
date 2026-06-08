@@ -11,7 +11,7 @@ from sqlalchemy import select, text
 import html
 
 from tickets.config import config
-from tickets.keyboards import rating_keyboard
+from tickets.keyboards import closed_ticket_keyboard, rating_keyboard, topic_ticket_keyboard
 from tickets.states import TicketStates
 from tickets.services import (
     add_ticket_message,
@@ -255,10 +255,112 @@ async def cb_close_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
         )
 
     await cq.answer("Тикет закрыт")
-    if cq.message and cq.message.text:
-        base = cq.message.text.split("\n\nСтатус:")[0]
+    if cq.message:
+        src = cq.message.html_text or cq.message.text or ""
+        base = src.split("\n\nСтатус:")[0]
         try:
-            await cq.message.edit_text(base + "\n\nСтатус: ✅ Закрыт", reply_markup=None)
+            await cq.message.edit_text(
+                base + "\n\nСтатус: ✅ Закрыт",
+                reply_markup=closed_ticket_keyboard(ticket_id),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data.startswith("tickets:reopen:"))
+async def cb_reopen_ticket(cq: CallbackQuery, session: AsyncSession) -> None:
+    """Возобновление закрытого тикета администратором."""
+    if cq.from_user is None or not await _can_manage_tickets(session, cq.from_user.id):
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    data = (cq.data or "").split(":")
+    if len(data) < 3:
+        await cq.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        ticket_id = int(data[2])
+    except Exception:
+        await cq.answer("Некорректный ticket id.", show_alert=True)
+        return
+    t = await get_ticket_brief(session, ticket_id=ticket_id)
+    if not t:
+        await cq.answer("Тикет не найден.", show_alert=True)
+        return
+    if str(t.get("status") or "") != "closed":
+        await cq.answer("Тикет не закрыт.", show_alert=True)
+        return
+
+    # Возобновляем — ставим in_progress
+    await set_ticket_status(session, ticket_id=ticket_id, status="in_progress", close_now=False)
+
+    # Назначаем текущего администратора
+    db_admin = await ensure_db_user(session, cq.from_user)
+    from shared.services.admin_rbac_service import resolve_operator_id
+    operator_id = await resolve_operator_id(session, user_id=db_admin.id)
+    await assign_ticket_admin(
+        session,
+        ticket_id=ticket_id,
+        operator_id=operator_id,
+        admin_telegram_id=int(cq.from_user.id),
+    )
+
+    # Открываем топик обратно
+    try:
+        topic_id = int(t.get("topic_id") or 0)
+    except Exception:
+        topic_id = 0
+    if topic_id:
+        try:
+            await cq.bot.reopen_forum_topic(
+                chat_id=config.support_group_id, message_thread_id=topic_id
+            )
+        except Exception:
+            pass
+
+    # Уведомляем пользователя (без повторного запроса оценки)
+    try:
+        user_tg = int(t.get("telegram_user_id") or 0)
+    except Exception:
+        user_tg = 0
+    if user_tg:
+        try:
+            await cq.bot.send_message(
+                chat_id=user_tg,
+                text=(
+                    f"🔄 Администратор возобновил диалог по тикету #{ticket_id}.\n"
+                    "Вы можете продолжить общение — просто напишите сообщение."
+                ),
+            )
+        except Exception:
+            pass
+
+    await cq.answer("Диалог возобновлён ✅")
+
+    # Обновляем сообщение в топике — показываем полную клавиатуру управления
+    if cq.message and cq.bot:
+        try:
+            bot_me = await cq.bot.get_me()
+            bot_username = bot_me.username or ""
+        except Exception:
+            bot_username = ""
+        web_admin_url = ""
+        from tickets.config import config as _cfg
+        root = (_cfg.web_admin_url or "").strip().rstrip("/")
+        if root:
+            web_admin_url = f"{root}/admin/tickets/{ticket_id}"
+        src = cq.message.html_text or cq.message.text or ""
+        base = src.split("\n\nСтатус:")[0]
+        try:
+            await cq.message.edit_text(
+                base + "\n\nСтатус: 🔄 В работе",
+                reply_markup=topic_ticket_keyboard(
+                    bot_username=bot_username,
+                    ticket_id=ticket_id,
+                    web_admin_url=web_admin_url,
+                ),
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
@@ -413,8 +515,7 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     t = await get_ticket_by_topic(session, topic_id=topic_id)
     if not t:
         return
-    if str(t.get("status") or "") == "closed":
-        return
+    # Закрытый тикет автоматически переоткрывается когда админ пишет в топик
     txt = (message.text or message.caption or "").strip()
     photo_fid: str | None = message.photo[-1].file_id if message.photo else None
     video_fid: str | None = message.video.file_id if message.video else None
@@ -428,6 +529,30 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         return
     if not txt and not (photo_fid or video_fid):
         return
+
+    ticket_id_int = int(t["id"])
+    ticket_was_closed = str(t.get("status") or "") == "closed"
+
+    # Если тикет закрыт — автоматически возобновляем
+    if ticket_was_closed:
+        await set_ticket_status(session, ticket_id=ticket_id_int, status="in_progress", close_now=False)
+        # Уведомляем пользователя о возобновлении
+        try:
+            _user_tg_reopen = int(t.get("telegram_user_id") or 0)
+        except Exception:
+            _user_tg_reopen = 0
+        if _user_tg_reopen:
+            try:
+                await message.bot.send_message(
+                    chat_id=_user_tg_reopen,
+                    text=(
+                        f"🔄 Администратор возобновил диалог по тикету #{ticket_id_int}.\n"
+                        "Вы можете продолжить общение — просто напишите сообщение."
+                    ),
+                )
+            except Exception:
+                pass
+
     db_admin = None
     if message.from_user is not None:
         db_admin = await ensure_db_user(session, message.from_user)
@@ -436,13 +561,13 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         operator_id = await resolve_operator_id(session, user_id=db_admin.id)
         await assign_ticket_admin(
             session,
-            ticket_id=int(t["id"]),
+            ticket_id=ticket_id_int,
             operator_id=operator_id,
             admin_telegram_id=int(message.from_user.id),
         )
     await add_ticket_message(
         session,
-        ticket_id=int(t["id"]),
+        ticket_id=ticket_id_int,
         sender_id=(db_admin.id if db_admin is not None else None),
         sender_role="admin",
         sender_telegram_id=(int(message.from_user.id) if message.from_user is not None else None),
@@ -451,13 +576,13 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         photo_file_id=photo_fid,
         video_file_id=video_fid,
     )
-    await bump_ticket_activity(session, ticket_id=int(t["id"]), status_to_in_progress=True)
+    await bump_ticket_activity(session, ticket_id=ticket_id_int, status_to_in_progress=True)
     try:
         user_tg_id = int(t.get("telegram_user_id") or 0)
     except Exception:
         user_tg_id = 0
     if user_tg_id:
-        body = f"📨 Ответ от администратора | Тикет #{int(t['id'])}"
+        body = f"📨 Ответ от администратора | Тикет #{ticket_id_int}"
         if txt:
             body += f"\n\n{html.escape(txt)}"
         body += "\n\nС уважением, Flux Network"

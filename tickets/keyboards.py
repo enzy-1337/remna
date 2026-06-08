@@ -74,6 +74,18 @@ def active_ticket_keyboard(ticket_id: int, *, label: str | None = None) -> Inlin
     return b.as_markup()
 
 
+def closed_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура закрытого тикета в топике группы — с кнопкой возобновления."""
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(
+            text="🔄 Возобновить диалог",
+            callback_data=f"tickets:reopen:{ticket_id}",
+        )
+    )
+    return b.as_markup()
+
+
 def ticket_view_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📌 Статус", callback_data=f"tickets:view:{ticket_id}"))
