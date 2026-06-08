@@ -2313,6 +2313,36 @@ async def msg_admin_add_days(
     )
 
 
+def _admin_grant_quick_markup(user_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="1 мес.", callback_data=f"admin:gq:{user_id}:1"),
+        InlineKeyboardButton(text="3 мес.", callback_data=f"admin:gq:{user_id}:3"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="6 мес.", callback_data=f"admin:gq:{user_id}:6"),
+        InlineKeyboardButton(text="12 мес.", callback_data=f"admin:gq:{user_id}:12"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data=f"admin:gmanual:{user_id}"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:user:{user_id}"),
+    )
+    return kb.as_markup()
+
+
+def _grant_prompt_text() -> str:
+    return join_lines(
+        "🎁 " + bold("Выдача подписки"),
+        "",
+        plain("Выберите срок или введите количество дней вручную\\."),
+        "",
+        plain("Если у пользователя нет подписки — будет создана новая\\."),
+        plain("Если есть — будет продлена на указанный срок\\."),
+    )
+
+
 @router.callback_query(F.data.startswith("admin:grant:"))
 async def cb_admin_grant_start(
     cq: CallbackQuery,
@@ -2331,22 +2361,133 @@ async def cb_admin_grant_start(
     except (IndexError, ValueError):
         await cq.answer("Неверный id", show_alert=True)
         return
+    await state.clear()
+    await cq.answer()
+    if cq.message and cq.bot:
+        await _try_delete_message(cq.bot, cq.message.chat.id, cq.message.message_id)
+        await cq.bot.send_message(
+            chat_id=cq.message.chat.id,
+            text=_grant_prompt_text(),
+            reply_markup=_admin_grant_quick_markup(user_id),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+
+
+@router.callback_query(F.data.startswith("admin:gmanual:"))
+async def cb_admin_grant_manual(
+    cq: CallbackQuery,
+    state: FSMContext,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    """Переход в режим ручного ввода дней."""
+    if cq.from_user is None or not is_bot_admin:
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        user_id = int(cq.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cq.answer("Неверный id", show_alert=True)
+        return
     await state.set_state(AdminSubscriptionStates.waiting_grant_days)
     await state.update_data(admin_grant_user_id=user_id)
     await cq.answer()
-    if cq.message and cq.bot:
-        prompt = await cq.bot.send_message(
-            chat_id=cq.message.chat.id,
-            text=(
-                "🎁 Выдача подписки\n\n"
-                "Введите количество дней (1–3650).\n"
-                "Если у пользователя нет подписки — будет создана новая.\n"
-                "Если есть — будет продлена на указанный срок.\n\n"
-                "❌ /cancel — отмена"
+    if cq.message:
+        await cq.message.edit_text(
+            join_lines(
+                "🎁 " + bold("Выдача подписки"),
+                "",
+                plain("Введите количество дней \\(1–3650\\):"),
             ),
-            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:grant:{user_id}"),
+            ]]),
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
-        await state.update_data(admin_grant_prompt_mid=prompt.message_id)
+        await state.update_data(admin_grant_prompt_mid=cq.message.message_id)
+
+
+@router.callback_query(F.data.startswith("admin:gq:"))
+async def cb_admin_grant_quick(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+    is_bot_admin: bool = False,
+) -> None:
+    """Быстрая выдача подписки по кнопке (месяцы)."""
+    if cq.from_user is None or not is_bot_admin:
+        await cq.answer("Нет доступа.", show_alert=True)
+        return
+    parts = (cq.data or "").split(":")
+    if len(parts) < 4:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[2])
+        months = int(parts[3])
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    if months < 1 or months > 120:
+        await cq.answer("Допустимо от 1 до 120 мес.", show_alert=True)
+        return
+
+    days = months * 30
+    await _do_admin_grant(cq, session, state, user_id=user_id, days=days)
+
+
+async def _do_admin_grant(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    *,
+    user_id: int,
+    days: int,
+) -> None:
+    """Общая логика выдачи подписки (используется из quick-кнопок и ручного ввода)."""
+    from shared.services.subscription_service import grant_subscription_extra_days
+
+    target_user = await session.get(User, user_id)
+    if target_user is None:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+
+    settings = get_settings()
+    try:
+        had_active, new_expires = await grant_subscription_extra_days(
+            session,
+            user=target_user,
+            days=days,
+            settings=settings,
+            promo_code=f"admin_grant_{cq.from_user.id if cq.from_user else 0}",
+        )
+    except Exception as exc:
+        logger.warning("admin grant subscription failed user_id=%s: %s", user_id, exc)
+        await cq.answer(f"Ошибка: {exc}", show_alert=True)
+        return
+
+    await session.commit()
+    msk_exp = new_expires.astimezone(_MSK_TZ)
+    action_label = "продлена" if had_active else "выдана"
+    await cq.answer(f"✅ Подписка {action_label} на {days} дн.", show_alert=False)
+
+    viewer = cq.from_user.id if cq.from_user else None
+    built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
+    if built is None or cq.message is None:
+        return
+    cap, kb = built
+    await answer_callback_with_photo_screen(
+        cq,
+        caption=join_lines(
+            plain(f"✅ Подписка {action_label} на {days} дн\\."),
+            plain(f"\\(до {esc(msk_exp.strftime('%d.%m.%Y %H:%M'))} МСК\\)"),
+            "",
+            cap,
+        ),
+        reply_markup=kb,
+        settings=settings,
+    )
 
 
 @router.message(StateFilter(AdminSubscriptionStates.waiting_grant_days), F.text)
@@ -2378,22 +2519,15 @@ async def msg_admin_grant_days(
         return
 
     raw = (message.text or "").strip()
-    if raw.startswith("/cancel"):
-        await _del_input()
-        if message.bot and prompt_mid is not None:
-            await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
-        await state.clear()
-        return
-
     try:
         days = int(raw)
     except ValueError:
         await _del_input()
-        await message.answer("Нужно целое число от 1 до 3650.")
+        await message.answer("Нужно целое число от 1 до 3650.", parse_mode=None)
         return
     if days < 1 or days > 3650:
         await _del_input()
-        await message.answer("Допустимо от 1 до 3650 дней.")
+        await message.answer("Допустимо от 1 до 3650 дней.", parse_mode=None)
         return
 
     target_user = await session.get(User, user_id)
@@ -2402,7 +2536,7 @@ async def msg_admin_grant_days(
         if message.bot and prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
         await state.clear()
-        await message.answer("Пользователь не найден.")
+        await message.answer("Пользователь не найден.", parse_mode=None)
         return
 
     await _del_input()
@@ -2422,7 +2556,7 @@ async def msg_admin_grant_days(
         )
     except Exception as exc:
         logger.warning("admin grant subscription failed user_id=%s: %s", user_id, exc)
-        await message.answer(f"Ошибка: {exc}")
+        await message.answer(f"Ошибка: {exc}", parse_mode=None)
         return
 
     await session.commit()
@@ -2435,7 +2569,8 @@ async def msg_admin_grant_days(
     if built is None or message.bot is None:
         await message.answer(
             f"✅ Подписка {action_label} на {days} дн. "
-            f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"
+            f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)",
+            parse_mode=None,
         )
         return
     cap, kb = built
@@ -2443,10 +2578,8 @@ async def msg_admin_grant_days(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines(
-            plain(
-                f"✅ Подписка {action_label} на {days} дн. "
-                f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"
-            ),
+            plain(f"✅ Подписка {action_label} на {days} дн\\."),
+            plain(f"\\(до {esc(msk_exp.strftime('%d.%m.%Y %H:%M'))} МСК\\)"),
             "",
             cap,
         ),
