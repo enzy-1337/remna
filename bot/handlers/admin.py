@@ -2344,6 +2344,7 @@ async def cb_admin_grant_start(
                 "Если есть — будет продлена на указанный срок.\n\n"
                 "❌ /cancel — отмена"
             ),
+            parse_mode=None,
         )
         await state.update_data(admin_grant_prompt_mid=prompt.message_id)
 
