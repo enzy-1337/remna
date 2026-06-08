@@ -205,8 +205,18 @@ async def lifespan(app: FastAPI):
                 log.exception("Telegram delete_webhook")
 
 
+class Utf8HtmlCharsetMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        ct = response.headers.get("content-type", "")
+        if ct.startswith("text/html") and "charset" not in ct:
+            response.headers["content-type"] = "text/html; charset=utf-8"
+        return response
+
+
 app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
+app.add_middleware(Utf8HtmlCharsetMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(WebAdminSessionValidationMiddleware)
 app.add_middleware(WebAdminRbacMiddleware)
