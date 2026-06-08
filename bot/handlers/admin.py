@@ -39,6 +39,8 @@ from shared.models.user import User
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
+from shared.models.device_history import DeviceHistory
+from shared.services.connection_notify_service import _first_connected_at, _user_has_ever_connected
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
@@ -953,6 +955,24 @@ async def _build_user_card(
         else plain("Панель VPN: ") + italic("не привязана")
     )
     sep = plain("────────────────────────")
+
+    # Статус подключения
+    has_connected = await _user_has_ever_connected(session, u.id)
+    first_conn_at = await _first_connected_at(session, u.id) if has_connected else None
+    if has_connected and first_conn_at:
+        msk = first_conn_at.astimezone(ZoneInfo("Europe/Moscow"))
+        conn_status = bold("подключался ✅") + plain(f" ({msk.strftime('%d.%m.%Y %H:%M')} МСК)")
+    elif has_connected:
+        conn_status = bold("подключался ✅")
+    else:
+        conn_status = bold("никогда ❌")
+
+    if u.connection_notify_sent_at:
+        msk_n = u.connection_notify_sent_at.astimezone(ZoneInfo("Europe/Moscow"))
+        notify_status = plain(f"Уведомление отправлено: {msk_n.strftime('%d.%m.%Y %H:%M')} МСК")
+    else:
+        notify_status = plain("Уведомление не отправлялось")
+
     lines: list[str] = [
         "👤 " + bold(f"Карточка пользователя · #{u.id}"),
         sep,
@@ -965,6 +985,10 @@ async def _build_user_card(
         sep,
         "🖥 " + bold("Remnawave"),
         rw_line,
+        sep,
+        "📡 " + bold("Подключение устройств"),
+        plain("Статус: ") + conn_status,
+        notify_status,
         sep,
         "💳 " + bold("Баланс и рефералы"),
         plain("Баланс: ") + bold(bal) + plain(" ₽"),

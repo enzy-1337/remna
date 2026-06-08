@@ -46,6 +46,9 @@ class User(Base):
 
     referral_bonus_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     device_notify_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    connection_notify_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
     referred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

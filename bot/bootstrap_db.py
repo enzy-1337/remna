@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from shared.database import get_session_factory
 from shared.services.plan_seed import ensure_default_plans_if_needed
 from shared.services.schema_patches import (
+    ensure_connection_notify_column,
     ensure_promo_columns,
     ensure_subscription_expiry_notify_columns,
     ensure_user_bot_message_id_columns,
@@ -45,6 +46,7 @@ async def bootstrap_bot_database_schema() -> None:
                 await ensure_subscription_expiry_notify_columns(s)
                 await ensure_promo_columns(s)
                 await ensure_user_bot_message_id_columns(s)
+                await ensure_connection_notify_column(s)
                 await s.commit()
             if attempt > 1:
                 log.info("Подключение к БД восстановлено с попытки %s", attempt)

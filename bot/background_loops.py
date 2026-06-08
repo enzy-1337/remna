@@ -9,6 +9,7 @@ import logging
 from shared.config import Settings
 from shared.services.autorenew_service import subscription_autorenew_loop
 from shared.services.backup_loop import backup_loop
+from shared.services.connection_notify_loop import connection_notify_loop
 from shared.services.billing_v2.cleanup_loop import billing_cleanup_loop
 from shared.services.billing_v2.device_daily_midnight_loop import device_daily_midnight_loop
 from shared.services.billing_v2.traffic_meter_poll_loop import traffic_meter_poll_loop
@@ -32,6 +33,7 @@ def start_background_loops(settings: Settings, stop_event: asyncio.Event) -> lis
         tasks.append(asyncio.create_task(backup_loop(settings, stop_event)))
     tasks.append(asyncio.create_task(subscription_autorenew_loop(settings, stop_event)))
     tasks.append(asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event)))
+    tasks.append(asyncio.create_task(connection_notify_loop(settings, stop_event)))
     if settings.billing_v2_enabled:
         tasks.append(asyncio.create_task(billing_cleanup_loop(settings, stop_event)))
         tasks.append(asyncio.create_task(device_daily_midnight_loop(settings, stop_event)))

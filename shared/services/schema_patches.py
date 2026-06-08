@@ -55,6 +55,17 @@ async def ensure_user_bot_message_id_columns(session: AsyncSession) -> None:
     logger.info("schema_patches: проверены колонки referral_bonus_message_id / device_notify_message_id")
 
 
+async def ensure_connection_notify_column(session: AsyncSession) -> None:
+    """Колонка для отслеживания отправленного уведомления о неподключённом устройстве."""
+    bind = session.get_bind()
+    if bind is None or bind.dialect.name != "postgresql":
+        return
+    await session.execute(text(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS connection_notify_sent_at TIMESTAMP WITH TIME ZONE NULL"
+    ))
+    logger.info("schema_patches: проверена колонка connection_notify_sent_at")
+
+
 async def ensure_promo_columns(session: AsyncSession) -> None:
     """
     Колонки для расширенной логики промокодов:
