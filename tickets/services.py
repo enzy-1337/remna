@@ -15,8 +15,10 @@ from tickets.config import config
 from tickets.keyboards import topic_ticket_keyboard
 from shared.services.user_registration import get_user_by_telegram_id, register_user
 from shared.tickets_db_compat import (
+    ticket_messages_has_document_columns,
     ticket_messages_has_photo_file_id_column,
     ticket_messages_has_video_file_id_column,
+    ticket_messages_has_voice_columns,
 )
 
 
@@ -139,67 +141,47 @@ async def add_ticket_message(
     is_internal: bool,
     photo_file_id: str | None = None,
     video_file_id: str | None = None,
+    document_file_id: str | None = None,
+    document_file_name: str | None = None,
+    voice_file_id: str | None = None,
+    video_note_file_id: str | None = None,
+    audio_file_id: str | None = None,
+    audio_file_name: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
     has_photo = await ticket_messages_has_photo_file_id_column(session)
     has_video = await ticket_messages_has_video_file_id_column(session)
-    if has_photo and has_video:
-        await session.execute(
-            text(
-                """
-                INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal, photo_file_id, video_file_id)
-                VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal, :photo, :video)
-                """
-            ),
-            {
-                "tid": ticket_id,
-                "sid": sender_id,
-                "role": sender_role,
-                "stg": sender_telegram_id,
-                "txt": text_body,
-                "now": now,
-                "internal": bool(is_internal),
-                "photo": photo_file_id,
-                "video": video_file_id,
-            },
-        )
-    elif has_photo:
-        await session.execute(
-            text(
-                """
-                INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal, photo_file_id)
-                VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal, :photo)
-                """
-            ),
-            {
-                "tid": ticket_id,
-                "sid": sender_id,
-                "role": sender_role,
-                "stg": sender_telegram_id,
-                "txt": text_body,
-                "now": now,
-                "internal": bool(is_internal),
-                "photo": photo_file_id,
-            },
-        )
-    else:
-        await session.execute(
-            text(
-                """
-                INSERT INTO ticket_messages (ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal)
-                VALUES (:tid, :sid, :role, :stg, :txt, :now, :internal)
-                """
-            ),
-            {
-                "tid": ticket_id,
-                "sid": sender_id,
-                "role": sender_role,
-                "stg": sender_telegram_id,
-                "txt": text_body,
-                "now": now,
-                "internal": bool(is_internal),
-            },
-        )
+    has_doc = await ticket_messages_has_document_columns(session)
+    has_voice = await ticket_messages_has_voice_columns(session)
+
+    base_cols = "ticket_id, sender_id, sender_role, sender_telegram_id, text, created_at, is_internal"
+    base_vals = ":tid, :sid, :role, :stg, :txt, :now, :internal"
+    params: dict = {
+        "tid": ticket_id, "sid": sender_id, "role": sender_role,
+        "stg": sender_telegram_id, "txt": text_body,
+        "now": now, "internal": bool(is_internal),
+    }
+
+    extra_cols = []
+    if has_photo:
+        extra_cols.append("photo_file_id"); params["photo"] = photo_file_id; base_vals += ", :photo"
+    if has_video:
+        extra_cols.append("video_file_id"); params["video"] = video_file_id; base_vals += ", :video"
+    if has_doc:
+        extra_cols += ["document_file_id", "document_file_name"]
+        params["doc_fid"] = document_file_id; params["doc_name"] = document_file_name
+        base_vals += ", :doc_fid, :doc_name"
+    if has_voice:
+        extra_cols += ["voice_file_id", "video_note_file_id", "audio_file_id", "audio_file_name"]
+        params["voice"] = voice_file_id; params["vidnote"] = video_note_file_id
+        params["audio"] = audio_file_id; params["audio_name"] = audio_file_name
+        base_vals += ", :voice, :vidnote, :audio, :audio_name"
+
+    cols = base_cols + (", " + ", ".join(extra_cols) if extra_cols else "")
+    await session.execute(
+        text(f"INSERT INTO ticket_messages ({cols}) VALUES ({base_vals})"),
+        params,
+    )
 
 
 async def bump_ticket_activity(

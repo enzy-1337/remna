@@ -1449,7 +1449,7 @@ def _layout(
           var pf=remnaPendingForm;
           remnaPendingForm=null;
           pf.setAttribute('data-remna-confirmed','1');
-          pf.submit();
+          pf.requestSubmit();
           return;
         }
         if(remnaPendingResolve){var r=remnaPendingResolve;remnaPendingResolve=null;r(true);}
@@ -1608,6 +1608,7 @@ def _layout(
         }
       }catch(x){}
     }
+    window.remnaConsumeUrlNotify = remnaConsumeUrlNotify;
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',remnaConsumeUrlNotify);
     else remnaConsumeUrlNotify();
     (function(){
@@ -1639,6 +1640,73 @@ def _layout(
       dr.querySelectorAll('form[method="post"]').forEach(function(f){
         f.addEventListener('submit',function(){remnaMnavClose();});
       });
+    })();
+    (function(){
+      function extractAndRunScripts(root){
+        Array.prototype.slice.call(root.querySelectorAll('script')).forEach(function(s){
+          var ns=document.createElement('script');
+          if(s.src)ns.src=s.src; else ns.textContent=s.textContent;
+          s.parentNode.replaceChild(ns,s);
+        });
+      }
+      async function swapPage(url,init){
+        if(window.remnaShowLoading)window.remnaShowLoading();
+        try{
+          var resp=await fetch(url,Object.assign({credentials:'same-origin'},init||{}));
+          var finalUrl=resp.url||url;
+          if(finalUrl.indexOf('/admin/login')!==-1){window.location.href=finalUrl;return;}
+          var html=await resp.text();
+          var doc=new DOMParser().parseFromString(html,'text/html');
+          var newPage=doc.querySelector('.remna-page');
+          var curPage=document.querySelector('.remna-page');
+          if(!newPage||!curPage){window.location.href=finalUrl;return;}
+          var saved={};
+          curPage.querySelectorAll('textarea[id],input[id]').forEach(function(el){if(el.type!=='file')saved[el.id]=el.value;});
+          curPage.innerHTML=newPage.innerHTML;
+          curPage.querySelectorAll('textarea[id],input[id]').forEach(function(el){if(el.type!=='file'&&saved[el.id]!==undefined)el.value=saved[el.id];});
+          extractAndRunScripts(curPage);
+          document.title=doc.title||document.title;
+          if(finalUrl!==window.location.href)history.pushState({remnaSwap:1},document.title,finalUrl);
+          if(window.remnaConsumeUrlNotify)window.remnaConsumeUrlNotify();
+        }catch(x){
+          if(window.remnaHideLoading)window.remnaHideLoading();
+          window.location.href=url;return;
+        }
+        if(window.remnaHideLoading)window.remnaHideLoading();
+      }
+      window.remnaSwapPage=swapPage;
+      document.addEventListener('submit',function(e){
+        var f=e.target;
+        if(!(f instanceof HTMLFormElement))return;
+        if((f.getAttribute('method')||'').toLowerCase()==='dialog')return;
+        if(f.hasAttribute('data-no-ajax'))return;
+        var action=f.action||window.location.href;
+        if(/\/(login|logout)(\?|$)/.test(action))return;
+        e.preventDefault();
+        var method=(f.getAttribute('method')||'GET').toUpperCase();
+        var fd=new FormData(f);
+        var fetchUrl=action,fi={method:method};
+        if(method==='GET'){var qs=new URLSearchParams(fd).toString();fetchUrl=action.split('?')[0]+(qs?'?'+qs:'');}
+        else fi.body=fd;
+        swapPage(fetchUrl,fi);
+      });
+      document.addEventListener('click',function(e){
+        if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;
+        var a=e.target&&e.target.closest&&e.target.closest('a[href]');
+        if(!a||a.getAttribute('target')==='_blank'||a.hasAttribute('data-no-ajax'))return;
+        var href=(a.getAttribute('href')||'').trim();
+        if(!href||href[0]==='#'||href.indexOf('javascript:')===0)return;
+        try{
+          var u=new URL(href,window.location.href);
+          if(u.origin!==window.location.origin)return;
+          if(/\/(login|logout)(\?|$)/.test(u.pathname))return;
+          e.preventDefault();
+          var dr=document.getElementById('remna-mnav-drawer');
+          if(dr&&!dr.classList.contains('hidden')){dr.classList.add('hidden');dr.setAttribute('aria-hidden','true');document.body.style.overflow='';var op=document.getElementById('remna-mnav-open');if(op)op.setAttribute('aria-expanded','false');}
+          swapPage(u.href);
+        }catch(x){}
+      });
+      window.addEventListener('popstate',function(){swapPage(window.location.href);});
     })();
   })();
   </script>"""
@@ -3616,7 +3684,13 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             </div>
             <div id="bc-live-prev" class="rounded-xl border border-base-content/10 bg-base-200/50 p-3 text-sm">
               <div class="text-xs opacity-60 mb-2">Предпросмотр (переносы строк как при отправке)</div>
-              <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] px-3 py-2 text-white shadow text-left" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
+              <div class="rounded-2xl border border-base-content/20 block w-full max-w-full bg-[#2b5278] text-white shadow text-left overflow-hidden">
+                <div id="bc-live-media-row" class="hidden">
+                  <img id="bc-live-media-img" src="" alt="" class="hidden w-full max-h-48 object-cover" />
+                  <div id="bc-live-media-doc" class="hidden flex items-center gap-2 bg-white/10 px-3 py-2 text-xs"><i class="fa-solid fa-file-lines" aria-hidden="true"></i><span id="bc-live-media-doc-name" class="truncate"></span></div>
+                </div>
+                <div class="px-3 py-2" id="bc-live-prev-inner"><span class="opacity-70">Начните ввод…</span></div>
+              </div>
             </div>
             <div class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
               <span class="text-xs font-medium opacity-80">Куда отправить</span>
@@ -3643,7 +3717,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
                 <span id="bc-media-name" class="opacity-80 text-xs truncate max-w-xs"></span>
                 <span id="bc-media-type-label" class="badge badge-sm badge-outline opacity-60"></span>
               </div>
-              <div id="bc-media-uploading" class="hidden text-xs opacity-60">Загружаю в Telegram…</div>
+              <div id="bc-media-uploading" class="hidden text-xs opacity-60">Загрузка файла…</div>
               <div id="bc-media-err" class="hidden text-xs text-error"></div>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -3779,6 +3853,17 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           return JSON.parse(txt);
         }}catch(_e){{ return null; }}
       }}
+      function updateLiveMedia(type,filename,objUrl){{
+        var row=document.getElementById('bc-live-media-row');
+        var img=document.getElementById('bc-live-media-img');
+        var doc=document.getElementById('bc-live-media-doc');
+        var docName=document.getElementById('bc-live-media-doc-name');
+        if(!row)return;
+        if(!type){{row.classList.add('hidden');if(img){{img.src='';img.classList.add('hidden');}}if(doc)doc.classList.add('hidden');return;}}
+        row.classList.remove('hidden');
+        if(type==='photo'&&objUrl){{if(img){{img.src=objUrl;img.classList.remove('hidden');}}if(doc)doc.classList.add('hidden');}}
+        else{{if(img){{img.src='';img.classList.add('hidden');}}if(doc)doc.classList.remove('hidden');if(docName)docName.textContent=filename||'вложение';}}
+      }}
       async function renderLive(){{
         var v=(ta&&ta.value)||'';
         if(!live)return;
@@ -3899,11 +3984,13 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           if(imgPrev){{ imgPrev.src=''; imgPrev.classList.add('hidden'); }}
           if(previewBox) previewBox.classList.remove('hidden');
           if(clearBtn) clearBtn.classList.remove('hidden');
+          updateLiveMedia(o.media_type, o.media_file_id, null);
         }} else {{
           if(mtH) mtH.value='';
           if(fidH) fidH.value='';
           if(previewBox) previewBox.classList.add('hidden');
           if(clearBtn) clearBtn.classList.add('hidden');
+          updateLiveMedia(null);
         }}
       }}
       document.querySelectorAll('.bc-pend-use').forEach(function(btn){{
@@ -4035,7 +4122,19 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           if(typeLabel) typeLabel.textContent='';
           if(errDiv){{ errDiv.textContent=''; errDiv.classList.add('hidden'); }}
           if(fileInput) fileInput.value='';
+          updateLiveMedia(null);
         }}
+        // Restore visual state after AJAX swap (hidden inputs already have values)
+        (function(){{
+          var mt=mtH&&mtH.value;
+          var fid=fidH&&fidH.value;
+          if(!mt||!fid)return;
+          if(nameSpan) nameSpan.textContent='файл прикреплён';
+          if(typeLabel) typeLabel.textContent=mt==='photo'?'фото':'документ';
+          if(previewBox) previewBox.classList.remove('hidden');
+          if(clearBtn) clearBtn.classList.remove('hidden');
+          updateLiveMedia(mt, 'вложение', null);
+        }})();
         if(clearBtn) clearBtn.addEventListener('click', clearMedia);
         if(fileInput) fileInput.addEventListener('change', async function(){{
           var f=fileInput.files&&fileInput.files[0];
@@ -4057,10 +4156,13 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             if(typeLabel) typeLabel.textContent=j.media_type==='photo'?'фото':'документ';
             if(previewBox) previewBox.classList.remove('hidden');
             if(clearBtn) clearBtn.classList.remove('hidden');
+            var objUrl=null;
             if(j.media_type==='photo'&&imgPrev){{
-              imgPrev.src=URL.createObjectURL(f);
+              objUrl=URL.createObjectURL(f);
+              imgPrev.src=objUrl;
               imgPrev.classList.remove('hidden');
             }}
+            updateLiveMedia(j.media_type, j.filename, objUrl);
             if(window.remnaToast) window.remnaToast('success','Файл прикреплён: '+j.filename);
           }}catch(e){{
             if(uploadingDiv) uploadingDiv.classList.add('hidden');
@@ -5739,6 +5841,19 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             var dsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/document';
             var dname=esc(m.document_file_name||'document');
             mediaHtml+='<div class="mt-2"><a href="'+dsrc+'" class="btn btn-sm btn-ghost border border-base-content/15" download><i class="fa-solid fa-paperclip mr-2"></i>'+dname+'</a></div>';
+          }}
+          if(m.voice_file_id){{
+            var vsrc2='/api/tickets/'+ticketId+'/messages/'+m.id+'/voice';
+            mediaHtml+='<div class="mt-2 flex items-center gap-2"><i class="fa-solid fa-microphone text-primary opacity-70 text-sm"></i><audio controls preload="metadata" class="max-w-full h-8" style="min-width:180px"><source src="'+vsrc2+'" type="audio/ogg"></audio><a href="'+vsrc2+'" download class="btn btn-xs btn-circle btn-ghost" title="Скачать"><i class="fa-solid fa-download text-xs"></i></a></div>';
+          }}
+          if(m.video_note_file_id){{
+            var vnsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video-note';
+            mediaHtml+='<div class="mt-2 flex flex-col items-start gap-1"><div class="relative"><video src="'+vnsrc+'" class="w-32 h-32 rounded-full border-2 border-primary/40 object-cover bg-base-300/30" controls playsinline preload="metadata" style="aspect-ratio:1/1"></video><a href="'+vnsrc+'" download class="btn btn-xs btn-circle absolute top-1 right-1" title="Скачать"><i class="fa-solid fa-download"></i></a></div><span class="text-xs opacity-60">Видеосообщение</span></div>';
+          }}
+          if(m.audio_file_id){{
+            var asrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/audio';
+            var aname=esc(m.audio_file_name||'Аудио');
+            mediaHtml+='<div class="mt-2 flex flex-col gap-1"><div class="flex items-center gap-2"><i class="fa-solid fa-music text-primary opacity-70 text-sm"></i><audio controls preload="metadata" class="max-w-full h-8" style="min-width:200px"><source src="'+asrc+'" type="audio/mpeg"></audio><a href="'+asrc+'" download class="btn btn-xs btn-circle btn-ghost" title="Скачать"><i class="fa-solid fa-download text-xs"></i></a></div><span class="text-xs opacity-50">'+aname+'</span></div>';
           }}
           var textHtml=(m.text&&String(m.text).trim())?('<div class="whitespace-pre-wrap break-words text-sm">'+esc(m.text||'')+'</div>'):'';
           return ''

@@ -395,15 +395,34 @@ async def msg_admin_reply(
     txt = (message.text or message.caption or "").strip()
     photo_fid: str | None = message.photo[-1].file_id if message.photo else None
     video_fid: str | None = message.video.file_id if message.video else None
+    voice_fid: str | None = message.voice.file_id if message.voice else None
+    vidnote_fid: str | None = message.video_note.file_id if message.video_note else None
+    audio_fid: str | None = message.audio.file_id if message.audio else None
+    audio_fname: str | None = (message.audio.file_name if message.audio else None) or None
+    doc_fid: str | None = None
+    doc_fname: str | None = None
+    if message.document:
+        doc_fid = message.document.file_id
+        doc_fname = message.document.file_name or "file"
+
+    has_any_media = bool(photo_fid or video_fid or voice_fid or vidnote_fid or audio_fid or doc_fid)
     media_size = None
     if message.photo:
         media_size = int(message.photo[-1].file_size or 0)
     elif message.video:
         media_size = int(message.video.file_size or 0)
-    if (photo_fid or video_fid) and not _within_media_limit(media_size):
+    elif message.voice:
+        media_size = int(message.voice.file_size or 0)
+    elif message.video_note:
+        media_size = int(message.video_note.file_size or 0)
+    elif message.audio:
+        media_size = int(message.audio.file_size or 0)
+    elif message.document:
+        media_size = int(message.document.file_size or 0)
+    if has_any_media and not _within_media_limit(media_size):
         await message.answer(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
-    if not txt and not (message.photo or message.video):
+    if not txt and not has_any_media:
         return
     t = await get_ticket_brief(session, ticket_id=ticket_id)
     if not t:
@@ -436,6 +455,12 @@ async def msg_admin_reply(
         is_internal=False,
         photo_file_id=photo_fid,
         video_file_id=video_fid,
+        document_file_id=doc_fid,
+        document_file_name=doc_fname,
+        voice_file_id=voice_fid,
+        video_note_file_id=vidnote_fid,
+        audio_file_id=audio_fid,
+        audio_file_name=audio_fname,
     )
     await bump_ticket_activity(session, ticket_id=ticket_id, status_to_in_progress=True)
 
@@ -454,6 +479,16 @@ async def msg_admin_reply(
             await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)
         elif video_fid:
             await message.bot.send_video(chat_id=user_tg_id, video=video_fid, caption=body)
+        elif voice_fid:
+            await message.bot.send_voice(chat_id=user_tg_id, voice=voice_fid, caption=body)
+        elif vidnote_fid:
+            await message.bot.send_video_note(chat_id=user_tg_id, video_note=vidnote_fid)
+            if body:
+                await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
+        elif audio_fid:
+            await message.bot.send_audio(chat_id=user_tg_id, audio=audio_fid, caption=body)
+        elif doc_fid:
+            await message.bot.send_document(chat_id=user_tg_id, document=doc_fid, caption=body)
         else:
             await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
 
@@ -468,28 +503,19 @@ async def msg_admin_reply(
         if txt:
             cap += f"\n\n<blockquote>{html.escape(txt)}</blockquote>"
         if photo_fid:
-            await message.bot.send_photo(
-                chat_id=config.support_group_id,
-                message_thread_id=topic_id,
-                photo=photo_fid,
-                caption=cap[:1024],
-                parse_mode="HTML",
-            )
+            await message.bot.send_photo(chat_id=config.support_group_id, message_thread_id=topic_id, photo=photo_fid, caption=cap[:1024], parse_mode="HTML")
         elif video_fid:
-            await message.bot.send_video(
-                chat_id=config.support_group_id,
-                message_thread_id=topic_id,
-                video=video_fid,
-                caption=cap[:1024],
-                parse_mode="HTML",
-            )
+            await message.bot.send_video(chat_id=config.support_group_id, message_thread_id=topic_id, video=video_fid, caption=cap[:1024], parse_mode="HTML")
+        elif voice_fid:
+            await message.bot.send_voice(chat_id=config.support_group_id, message_thread_id=topic_id, voice=voice_fid, caption=cap[:1024], parse_mode="HTML")
+        elif vidnote_fid:
+            await message.bot.send_video_note(chat_id=config.support_group_id, message_thread_id=topic_id, video_note=vidnote_fid)
+        elif audio_fid:
+            await message.bot.send_audio(chat_id=config.support_group_id, message_thread_id=topic_id, audio=audio_fid, caption=cap[:1024], parse_mode="HTML")
+        elif doc_fid:
+            await message.bot.send_document(chat_id=config.support_group_id, message_thread_id=topic_id, document=doc_fid, caption=cap[:1024], parse_mode="HTML")
         else:
-            await message.bot.send_message(
-                chat_id=config.support_group_id,
-                message_thread_id=topic_id,
-                text=cap,
-                disable_web_page_preview=True,
-            )
+            await message.bot.send_message(chat_id=config.support_group_id, message_thread_id=topic_id, text=cap, disable_web_page_preview=True)
 
     await state.clear()
     await message.answer(f"✅ Ответ отправлен пользователю (тикет #{ticket_id}).")
@@ -520,15 +546,33 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
     txt = (message.text or message.caption or "").strip()
     photo_fid: str | None = message.photo[-1].file_id if message.photo else None
     video_fid: str | None = message.video.file_id if message.video else None
+    voice_fid: str | None = message.voice.file_id if message.voice else None
+    vidnote_fid: str | None = message.video_note.file_id if message.video_note else None
+    audio_fid: str | None = message.audio.file_id if message.audio else None
+    audio_fname: str | None = (message.audio.file_name if message.audio else None) or None
+    doc_fid: str | None = None
+    doc_fname: str | None = None
+    if message.document:
+        doc_fid = message.document.file_id
+        doc_fname = message.document.file_name or "file"
+    has_any_media = bool(photo_fid or video_fid or voice_fid or vidnote_fid or audio_fid or doc_fid)
     media_size = None
     if message.photo:
         media_size = int(message.photo[-1].file_size or 0)
     elif message.video:
         media_size = int(message.video.file_size or 0)
-    if (photo_fid or video_fid) and not _within_media_limit(media_size):
+    elif message.voice:
+        media_size = int(message.voice.file_size or 0)
+    elif message.video_note:
+        media_size = int(message.video_note.file_size or 0)
+    elif message.audio:
+        media_size = int(message.audio.file_size or 0)
+    elif message.document:
+        media_size = int(message.document.file_size or 0)
+    if has_any_media and not _within_media_limit(media_size):
         await message.reply(f"Файл слишком большой. Максимум: {config.media_max_mb} МБ.")
         return
-    if not txt and not (photo_fid or video_fid):
+    if not txt and not has_any_media:
         return
 
     ticket_id_int = int(t["id"])
@@ -576,6 +620,12 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
         is_internal=False,
         photo_file_id=photo_fid,
         video_file_id=video_fid,
+        document_file_id=doc_fid,
+        document_file_name=doc_fname,
+        voice_file_id=voice_fid,
+        video_note_file_id=vidnote_fid,
+        audio_file_id=audio_fid,
+        audio_file_name=audio_fname,
     )
     await bump_ticket_activity(session, ticket_id=ticket_id_int, status_to_in_progress=True)
     try:
@@ -592,6 +642,16 @@ async def msg_admin_in_topic_to_user(message: Message, session: AsyncSession) ->
                 await message.bot.send_photo(chat_id=user_tg_id, photo=photo_fid, caption=body)
             elif video_fid:
                 await message.bot.send_video(chat_id=user_tg_id, video=video_fid, caption=body)
+            elif voice_fid:
+                await message.bot.send_voice(chat_id=user_tg_id, voice=voice_fid, caption=body)
+            elif vidnote_fid:
+                await message.bot.send_video_note(chat_id=user_tg_id, video_note=vidnote_fid)
+                if body:
+                    await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
+            elif audio_fid:
+                await message.bot.send_audio(chat_id=user_tg_id, audio=audio_fid, caption=body)
+            elif doc_fid:
+                await message.bot.send_document(chat_id=user_tg_id, document=doc_fid, caption=body)
             else:
                 await message.bot.send_message(chat_id=user_tg_id, text=body, disable_web_page_preview=True)
         except Exception:

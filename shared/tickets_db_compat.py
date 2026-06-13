@@ -42,6 +42,24 @@ async def ticket_messages_has_video_file_id_column(session: AsyncSession) -> boo
     return bool(val)
 
 
+async def ticket_messages_has_voice_columns(session: AsyncSession) -> bool:
+    """True, если есть voice_file_id / video_note_file_id / audio_file_id (миграция 0036)."""
+    r = await session.execute(
+        text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'ticket_messages'
+                  AND column_name = 'voice_file_id'
+            )
+            """
+        )
+    )
+    val = r.scalar()
+    return bool(val)
+
+
 async def ticket_messages_has_document_columns(session: AsyncSession) -> bool:
     """True, если есть document_file_id/document_file_name (миграция 0022)."""
     r = await session.execute(

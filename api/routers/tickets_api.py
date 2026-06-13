@@ -25,6 +25,7 @@ from shared.tickets_db_compat import (
     ticket_messages_has_document_columns,
     ticket_messages_has_photo_file_id_column,
     ticket_messages_has_video_file_id_column,
+    ticket_messages_has_voice_columns,
 )
 from shared.models.plan import Plan
 from shared.models.subscription import Subscription
@@ -108,7 +109,7 @@ def _to_iso(dt: Any) -> str | None:
     return str(dt)
 
 
-def _ticket_message_json(m: Any, has_photo: bool, has_video: bool, has_document: bool) -> dict[str, Any]:
+def _ticket_message_json(m: Any, has_photo: bool, has_video: bool, has_document: bool, has_voice: bool = False) -> dict[str, Any]:
     d = {k: (_to_iso(v) if isinstance(v, datetime) else v) for k, v in dict(m).items()}
     if not has_photo:
         d["photo_file_id"] = None
@@ -117,6 +118,11 @@ def _ticket_message_json(m: Any, has_photo: bool, has_video: bool, has_document:
     if not has_document:
         d["document_file_id"] = None
         d["document_file_name"] = None
+    if not has_voice:
+        d["voice_file_id"] = None
+        d["video_note_file_id"] = None
+        d["audio_file_id"] = None
+        d["audio_file_name"] = None
     return d
 
 
@@ -330,18 +336,17 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         has_video = await ticket_messages_has_video_file_id_column(session)
         has_document = await ticket_messages_has_document_columns(session)
-        msg_cols = (
-            "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,"
-            "photo_file_id,video_file_id,document_file_id,document_file_name"
-            if (has_photo and has_video and has_document)
-            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id,video_file_id"
-            if (has_photo and has_video)
-            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,photo_file_id"
-            if has_photo
-            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal,video_file_id"
-            if has_video
-            else "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal"
-        )
+        has_voice = await ticket_messages_has_voice_columns(session)
+        base_cols = "id,ticket_id,sender_id,sender_role,sender_telegram_id,text,created_at,is_internal"
+        if has_photo:
+            base_cols += ",photo_file_id"
+        if has_video:
+            base_cols += ",video_file_id"
+        if has_document:
+            base_cols += ",document_file_id,document_file_name"
+        if has_voice:
+            base_cols += ",voice_file_id,video_note_file_id,audio_file_id,audio_file_name"
+        msg_cols = base_cols
         msgs = (
             await session.execute(
                 text(
@@ -433,7 +438,7 @@ async def api_ticket_detail(request: Request, ticket_id: int) -> dict:
             ).mappings().first()
     messages = []
     for m in msgs:
-        item = _ticket_message_json(m, has_photo, has_video, has_document)
+        item = _ticket_message_json(m, has_photo, has_video, has_document, has_voice)
         sid = item.get("sender_id")
         if sid is not None:
             try:
@@ -555,6 +560,76 @@ async def api_ticket_message_video(request: Request, ticket_id: int, msg_id: int
         r = await client.get(url)
         r.raise_for_status()
         return Response(content=r.content, media_type=_tg_media_mime(fp, is_video=True))
+
+
+async def _proxy_tg_file(tok: str, fid: str, media_type: str, filename: str | None = None, timeout: float = 120.0) -> Response:
+    async with Bot(token=tok) as bot:
+        f = await bot.get_file(fid)
+        fp = f.file_path
+        if not fp:
+            raise HTTPException(status_code=404, detail="File path unavailable")
+    url = f"https://api.telegram.org/file/bot{tok}/{fp}"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+    headers = {}
+    if filename:
+        headers["Content-Disposition"] = f'inline; filename="{filename}"'
+    return Response(content=r.content, media_type=media_type, headers=headers)
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/voice")
+async def api_ticket_message_voice(request: Request, ticket_id: int, msg_id: int) -> Response:
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        if not await ticket_messages_has_voice_columns(session):
+            raise HTTPException(status_code=404, detail="Voice not available")
+        row = (await session.execute(
+            text("SELECT voice_file_id FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+            {"mid": msg_id, "tid": ticket_id},
+        )).mappings().first()
+    if not row or not row.get("voice_file_id"):
+        raise HTTPException(status_code=404, detail="Voice not found")
+    return await _proxy_tg_file(tok, str(row["voice_file_id"]), "audio/ogg")
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/video-note")
+async def api_ticket_message_video_note(request: Request, ticket_id: int, msg_id: int) -> Response:
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        if not await ticket_messages_has_voice_columns(session):
+            raise HTTPException(status_code=404, detail="VideoNote not available")
+        row = (await session.execute(
+            text("SELECT video_note_file_id FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+            {"mid": msg_id, "tid": ticket_id},
+        )).mappings().first()
+    if not row or not row.get("video_note_file_id"):
+        raise HTTPException(status_code=404, detail="VideoNote not found")
+    return await _proxy_tg_file(tok, str(row["video_note_file_id"]), "video/mp4")
+
+
+@router.get("/tickets/{ticket_id}/messages/{msg_id}/audio")
+async def api_ticket_message_audio(request: Request, ticket_id: int, msg_id: int) -> Response:
+    _require_api_login(request)
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="Tickets bot not configured")
+    async with await _session() as session:
+        if not await ticket_messages_has_voice_columns(session):
+            raise HTTPException(status_code=404, detail="Audio not available")
+        row = (await session.execute(
+            text("SELECT audio_file_id, audio_file_name FROM ticket_messages WHERE id=:mid AND ticket_id=:tid"),
+            {"mid": msg_id, "tid": ticket_id},
+        )).mappings().first()
+    if not row or not row.get("audio_file_id"):
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return await _proxy_tg_file(tok, str(row["audio_file_id"]), "audio/mpeg", filename=row.get("audio_file_name"))
 
 
 @router.post("/tickets/{ticket_id}/reply")
