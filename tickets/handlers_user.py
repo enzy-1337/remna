@@ -440,7 +440,10 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
     if message.from_user is None:
         return
     txt = (message.text or message.caption or "").strip()
-    has_supported_media = bool(message.photo or message.video)
+    has_supported_media = bool(
+        message.photo or message.video or message.voice
+        or message.video_note or message.audio or message.document
+    )
     if not txt and not has_supported_media:
         return
     if txt.startswith("/"):
@@ -525,6 +528,7 @@ async def msg_user_to_active_ticket(message: Message, session: AsyncSession) -> 
             await message.bot.send_voice(chat_id=config.support_group_id, message_thread_id=topic_id, voice=voice_fid, caption=topic_text[:1024], parse_mode="HTML")
         elif vidnote_fid:
             await message.bot.send_video_note(chat_id=config.support_group_id, message_thread_id=topic_id, video_note=vidnote_fid)
+            await message.bot.send_message(chat_id=config.support_group_id, message_thread_id=topic_id, text=topic_text, parse_mode="HTML", disable_web_page_preview=True)
         elif audio_fid:
             await message.bot.send_audio(chat_id=config.support_group_id, message_thread_id=topic_id, audio=audio_fid, caption=topic_text[:1024], parse_mode="HTML")
         elif doc_fid:
