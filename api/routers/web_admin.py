@@ -3383,6 +3383,10 @@ async def _admin_broadcast_job(
                 media_type=media_type,
                 media_file_id=media_file_id,
             )
+        # Удаляем локальный файл после отправки
+        if media_file_id:
+            from shared.services.broadcast_service import delete_broadcast_media_file
+            delete_broadcast_media_file(media_file_id)
         log.info(
             "фоновая рассылка завершена: users ok=%s fail=%s channel_ok=%s",
             ok,
@@ -3630,7 +3634,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
               <div class="flex flex-wrap gap-2 items-center">
                 <label class="btn btn-ghost btn-sm gap-1.5 cursor-pointer">
                   <i class="fa-solid fa-paperclip" aria-hidden="true"></i>Прикрепить файл
-                  <input type="file" id="bc-media-file" class="hidden" accept="image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.zip,.json,.xml" />
+                  <input type="file" id="bc-media-file" class="hidden" accept="image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.json,.xml,.zip,.rar,.tar,.gz,.tgz,.bz2,.xz,.7z,.zst,.tar.gz,.tar.bz2,.tar.xz" />
                 </label>
                 <button type="button" id="bc-media-clear" class="btn btn-ghost btn-sm text-error hidden">✕ Убрать</button>
               </div>
@@ -4071,6 +4075,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
 
 
 _PHOTO_CONTENT_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
+_MAX_BROADCAST_MEDIA_BYTES = 50 * 1024 * 1024  # 50 МБ
 
 
 @router.post("/broadcast/upload-media")
@@ -4078,57 +4083,31 @@ async def admin_broadcast_upload_media(
     request: Request,
     file: UploadFile = File(...),
 ) -> JSONResponse:
-    """Загрузить файл в Telegram и получить file_id для рассылки."""
+    """Загрузить файл рассылки на сервер (без отправки в Telegram). file_id = local-ссылка."""
     denied = _require_login(request)
     if denied is not None:
         return JSONResponse({"error": "not_logged_in"}, status_code=401)
-    settings = get_settings()
-    tok = (settings.bot_token or "").strip()
-    if not tok:
-        return JSONResponse({"error": "no_bot_token"}, status_code=400)
-    auth = _auth_data(request)
-    raw_tid = auth.get("telegram_id") or auth.get("id")
-    try:
-        tid = int(raw_tid) if raw_tid is not None else 0
-    except (TypeError, ValueError):
-        tid = 0
-    if tid <= 0:
-        return JSONResponse({"error": "no_telegram_id"}, status_code=400)
 
     content_type = (file.content_type or "").lower()
     is_photo = content_type in _PHOTO_CONTENT_TYPES
     media_kind = "photo" if is_photo else "document"
-    filename = file.filename or "file"
+    filename = (file.filename or "file").strip() or "file"
 
     data = await file.read()
     if len(data) == 0:
         return JSONResponse({"error": "empty_file"}, status_code=400)
+    if len(data) > _MAX_BROADCAST_MEDIA_BYTES:
+        return JSONResponse({"error": "file_too_large"}, status_code=400)
 
-    from aiogram import Bot
-    from aiogram.types import BufferedInputFile
+    from shared.services.broadcast_service import save_broadcast_media_file
 
-    input_file = BufferedInputFile(data, filename=filename)
     try:
-        async with Bot(token=tok) as bot:
-            if is_photo:
-                msg = await bot.send_photo(tid, input_file, caption=f"[upload preview] {filename}")
-                file_id = msg.photo[-1].file_id if msg.photo else ""
-            else:
-                msg = await bot.send_document(tid, input_file, caption=f"[upload preview] {filename}")
-                file_id = msg.document.file_id if msg.document else ""
-            if msg:
-                try:
-                    await bot.delete_message(tid, msg.message_id)
-                except Exception:
-                    pass
+        local_ref = save_broadcast_media_file(data, filename)
     except Exception as e:
-        logging.getLogger("api.broadcast").warning("upload-media failed: %s", e)
+        logging.getLogger("api.broadcast").warning("upload-media save failed: %s", e)
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
-    if not file_id:
-        return JSONResponse({"error": "no_file_id"}, status_code=500)
-
-    return JSONResponse({"ok": True, "media_type": media_kind, "file_id": file_id, "filename": filename})
+    return JSONResponse({"ok": True, "media_type": media_kind, "file_id": local_ref, "filename": filename})
 
 
 @router.post("/broadcast/preview-html")
