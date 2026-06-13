@@ -5835,7 +5835,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           }}
           if(m.video_file_id){{
             var vsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video';
-            mediaHtml+='<div class="mt-2 relative"><video src="'+vsrc+'" class="max-h-64 max-w-full rounded-lg border border-base-content/10 bg-base-300/20" controls playsinline preload="metadata"></video><a href="'+vsrc+'" download class="btn btn-xs btn-circle absolute top-2 right-2" title="Скачать"><i class="fa-solid fa-download"></i></a></div>';
+            mediaHtml+='<div class="tk-vid-wrap mt-2 relative rounded-xl overflow-hidden bg-black cursor-pointer" style="max-width:300px"><video class="tk-vid-video block w-full" src="'+vsrc+'" preload="metadata" playsinline style="max-height:220px;object-fit:contain"></video><button type="button" class="tk-vid-playbtn absolute inset-0 flex items-center justify-center transition-opacity" style="background:rgba(0,0,0,.18)"><div class="w-11 h-11 rounded-full flex items-center justify-center" style="background:rgba(0,0,0,.6)"><i class="fa-solid fa-play text-white tk-vid-icon" style="font-size:16px;margin-left:2px"></i></div></button><div class="tk-vid-controls absolute bottom-0 left-0 right-0 flex items-center gap-2 px-3 py-2" style="background:linear-gradient(transparent,rgba(0,0,0,.75))"><span class="tk-vid-time text-white text-xs" style="min-width:38px;font-variant-numeric:tabular-nums">0:00</span><div class="tk-vid-track flex-1 relative rounded-full cursor-pointer" style="height:3px;background:rgba(255,255,255,.3)"><div class="tk-vid-fill h-full rounded-full" style="width:0%;background:rgba(255,255,255,.9)"></div></div><a href="'+vsrc+'" download class="text-white/70 hover:text-white ml-1" title="Скачать" onclick="event.stopPropagation()"><i class="fa-solid fa-download" style="font-size:11px"></i></a></div></div>';
           }}
           if(m.document_file_id){{
             var dsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/document';
@@ -5848,7 +5848,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           }}
           if(m.video_note_file_id){{
             var vnsrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/video-note';
-            mediaHtml+='<div class="mt-2 flex flex-col items-start gap-1"><div class="relative"><video src="'+vnsrc+'" class="w-32 h-32 rounded-full border-2 border-primary/40 object-cover bg-base-300/30" controls playsinline preload="metadata" style="aspect-ratio:1/1"></video><a href="'+vnsrc+'" download class="btn btn-xs btn-circle absolute top-1 right-1" title="Скачать"><i class="fa-solid fa-download"></i></a></div><span class="text-xs opacity-60">Видеосообщение</span></div>';
+            mediaHtml+='<div class="tk-vn-wrap mt-2 flex flex-col items-start" style="gap:4px"><div class="relative" style="width:112px;height:112px"><video class="tk-vn-video" src="'+vnsrc+'" preload="metadata" playsinline style="width:112px;height:112px;border-radius:50%;object-fit:cover;background:#000;display:block"></video><button type="button" class="tk-vn-playbtn" style="position:absolute;inset:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4);border:none;cursor:pointer;transition:background .15s"><i class="fa-solid fa-play text-white tk-vn-icon" style="font-size:22px;margin-left:3px"></i></button><a href="'+vnsrc+'" download style="position:absolute;bottom:2px;right:2px" class="btn btn-xs btn-circle bg-base-300/90 border border-base-content/20 shadow" title="Скачать" onclick="event.stopPropagation()"><i class="fa-solid fa-download" style="font-size:10px"></i></a></div><span class="text-xs opacity-60">Видеосообщение</span></div>';
           }}
           if(m.audio_file_id){{
             var asrc='/api/tickets/'+ticketId+'/messages/'+m.id+'/audio';
@@ -5865,6 +5865,87 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
             +'</div></div>';
         }}).join('');
         if(shouldStickBottom) chat.scrollTop=chat.scrollHeight;
+        setupCustomPlayers();
+      }}
+      function fmtVidTime(s){{
+        s=Math.floor(s||0);
+        return Math.floor(s/60)+':'+(s<0?'00':('0'+(s%60)).slice(-2));
+      }}
+      function setupCustomPlayers(){{
+        if(!chat)return;
+        // Video notes (circles)
+        chat.querySelectorAll('.tk-vn-wrap').forEach(function(wrap){{
+          if(wrap._tkReady)return; wrap._tkReady=true;
+          var video=wrap.querySelector('.tk-vn-video');
+          var btn=wrap.querySelector('.tk-vn-playbtn');
+          var icon=btn&&btn.querySelector('.tk-vn-icon');
+          if(!video)return;
+          btn&&btn.addEventListener('click',function(e){{
+            e.stopPropagation();
+            if(video.paused){{video.play();}}else{{video.pause();}}
+          }});
+          video.addEventListener('play',function(){{
+            if(icon)icon.className='fa-solid fa-pause text-white tk-vn-icon';
+            if(icon)icon.style.marginLeft='0';
+            if(btn)btn.style.background='rgba(0,0,0,.15)';
+          }});
+          video.addEventListener('pause',function(){{
+            if(icon)icon.className='fa-solid fa-play text-white tk-vn-icon';
+            if(icon)icon.style.marginLeft='3px';
+            if(btn)btn.style.background='rgba(0,0,0,.4)';
+          }});
+          video.addEventListener('ended',function(){{
+            video.currentTime=0;
+            if(icon)icon.className='fa-solid fa-play text-white tk-vn-icon';
+            if(icon)icon.style.marginLeft='3px';
+            if(btn)btn.style.background='rgba(0,0,0,.4)';
+          }});
+        }});
+        // Regular videos
+        chat.querySelectorAll('.tk-vid-wrap').forEach(function(wrap){{
+          if(wrap._tkReady)return; wrap._tkReady=true;
+          var video=wrap.querySelector('.tk-vid-video');
+          var btn=wrap.querySelector('.tk-vid-playbtn');
+          var icon=btn&&btn.querySelector('.tk-vid-icon');
+          var timeEl=wrap.querySelector('.tk-vid-time');
+          var fill=wrap.querySelector('.tk-vid-fill');
+          var track=wrap.querySelector('.tk-vid-track');
+          if(!video)return;
+          btn&&btn.addEventListener('click',function(e){{
+            e.stopPropagation();
+            if(video.paused){{video.play();}}else{{video.pause();}}
+          }});
+          video.addEventListener('play',function(){{
+            if(icon)icon.className='fa-solid fa-pause text-white tk-vid-icon';
+            if(icon)icon.style.marginLeft='0';
+            if(btn)btn.style.opacity='0';
+          }});
+          video.addEventListener('pause',function(){{
+            if(icon)icon.className='fa-solid fa-play text-white tk-vid-icon';
+            if(icon)icon.style.marginLeft='2px';
+            if(btn)btn.style.opacity='1';
+          }});
+          video.addEventListener('ended',function(){{
+            video.currentTime=0;
+            if(icon)icon.className='fa-solid fa-play text-white tk-vid-icon';
+            if(icon)icon.style.marginLeft='2px';
+            if(btn)btn.style.opacity='1';
+          }});
+          video.addEventListener('loadedmetadata',function(){{
+            if(timeEl&&video.duration)timeEl.textContent='0:00 / '+fmtVidTime(video.duration);
+          }});
+          video.addEventListener('timeupdate',function(){{
+            if(!video.duration)return;
+            var p=(video.currentTime/video.duration)*100;
+            if(fill)fill.style.width=p+'%';
+            if(timeEl)timeEl.textContent=fmtVidTime(video.currentTime)+' / '+fmtVidTime(video.duration);
+          }});
+          track&&track.addEventListener('click',function(e){{
+            e.stopPropagation();
+            var rect=track.getBoundingClientRect();
+            video.currentTime=((e.clientX-rect.left)/rect.width)*(video.duration||0);
+          }});
+        }});
       }}
       function closePhotoLb() {{
         if(!lb) return;
@@ -5935,7 +6016,7 @@ async def admin_ticket_detail_stub(request: Request, ticket_id: int) -> HTMLResp
           var sig=modelSig(nextModel);
           if(sig===lastSig) return;
           model=nextModel;
-          renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom); renderRating();
+          renderMeta(); renderUserPanel(); renderMgmt(); renderChat(wasNearBottom); renderRating(); setupCustomPlayers();
           if(chat&&!wasNearBottom){{
             var newHeight=chat.scrollHeight;
             chat.scrollTop=Math.max(0, prevTop + (newHeight - prevHeight));
