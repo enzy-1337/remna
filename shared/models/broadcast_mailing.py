@@ -33,6 +33,8 @@ class ScheduledBroadcast(Base):
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
     error_text: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    media_file_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -48,3 +50,5 @@ class BroadcastHistory(Base):
     recipients_ok: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     recipients_failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     source: Mapped[str] = mapped_column(String(32), default="mass", server_default="mass")
+    media_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    media_file_id: Mapped[str | None] = mapped_column(Text(), nullable=True)

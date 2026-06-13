@@ -30,7 +30,7 @@ import pyotp
 import re
 import redis.asyncio as redis_async
 import segno
-from fastapi import APIRouter, BackgroundTasks, Form, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import and_, desc, distinct, exists, func, or_, select, text
 from sqlalchemy import case
@@ -3329,6 +3329,8 @@ async def _admin_broadcast_job(
     send_users: bool = True,
     send_channel: bool = False,
     channel_id: int | None = None,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> None:
     import logging
 
@@ -3345,24 +3347,32 @@ async def _admin_broadcast_job(
     draft = (text or "").strip()
     try:
         log.info(
-            "фоновая рассылка из web-admin: длина текста=%s симв., users=%s channel=%s",
+            "фоновая рассылка из web-admin: длина текста=%s симв., users=%s channel=%s media=%s",
             len(draft),
             send_users,
             send_channel,
+            media_type,
         )
         ok = failed = 0
         ch_ok = False
         async with Bot(token=tok) as bot:
             if send_users:
-                ok, failed = await broadcast_to_users(bot, draft)
+                ok, failed = await broadcast_to_users(
+                    bot, draft, media_type=media_type, media_file_id=media_file_id
+                )
             if send_channel and channel_id:
-                ch_ok = await send_broadcast_to_channel(bot, draft, chat_id=int(channel_id))
+                ch_ok = await send_broadcast_to_channel(
+                    bot, draft, chat_id=int(channel_id),
+                    media_type=media_type, media_file_id=media_file_id,
+                )
         if send_users:
             await save_broadcast_history(
                 body_draft=draft,
                 recipients_ok=ok,
                 recipients_failed=failed,
                 source="mass",
+                media_type=media_type,
+                media_file_id=media_file_id,
             )
         if send_channel:
             await save_broadcast_history(
@@ -3370,6 +3380,8 @@ async def _admin_broadcast_job(
                 recipients_ok=1 if ch_ok else 0,
                 recipients_failed=0 if ch_ok else 1,
                 source="channel",
+                media_type=media_type,
+                media_file_id=media_file_id,
             )
         log.info(
             "фоновая рассылка завершена: users ok=%s fail=%s channel_ok=%s",
@@ -3398,6 +3410,8 @@ def _sched_meta_b64(row: ScheduledBroadcast) -> str:
             "scheduled_at_utc": iso,
             "send_to_users": bool(getattr(row, "send_to_users", True)),
             "send_to_channel": bool(getattr(row, "send_to_channel", False)),
+            "media_type": row.media_type or "",
+            "media_file_id": row.media_file_id or "",
         },
         ensure_ascii=False,
     )
@@ -3411,6 +3425,8 @@ def _history_meta_b64(row: BroadcastHistory) -> str:
             "body": row.body_text or "",
             "ok": int(row.recipients_ok),
             "fail": int(row.recipients_failed),
+            "media_type": row.media_type or "",
+            "media_file_id": row.media_file_id or "",
         },
         ensure_ascii=False,
     )
@@ -3512,6 +3528,10 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         if getattr(j, "send_to_channel", False):
             parts_tgt.append("канал")
         tgt_s = " + ".join(parts_tgt) if parts_tgt else "—"
+        j_media_badge = (
+            f'<span class="badge badge-sm badge-outline opacity-70">📎 {_esc(j.media_type or "")}</span>'
+            if j.media_type else ""
+        )
         pending_cards.append(
             f"""
       <div class="card bg-base-200/80 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
@@ -3519,7 +3539,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           <span class="text-xs opacity-80">{_esc(when_s)}</span>
           <span class="text-[10px] opacity-50">#{int(j.id)}</span>
         </div>
-        <div class="text-[10px] opacity-70">Куда: {_esc(tgt_s)}</div>
+        <div class="text-[10px] opacity-70 flex flex-wrap gap-2 items-center">Куда: {_esc(tgt_s)}{' ' + j_media_badge if j_media_badge else ''}</div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_p}</div>
         <div class="flex flex-wrap gap-1 pt-1">
           <button type="button" class="btn btn-primary btn-xs bc-pend-use" data-b64sched="{_esc(smeta)}">В поле ввода</button>
@@ -3535,11 +3555,15 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         prev_h = broadcast_html_preview_fragment(h.body_text or "")
         when_h = _fmt_dt_msk(h.sent_at)
         src_l = _esc((h.source or "mass")[:16])
+        h_media_badge = (
+            f'<span class="badge badge-sm badge-outline opacity-70">📎 {_esc(h.media_type or "")}</span>'
+            if h.media_type else ""
+        )
         hist_cards.append(
             f"""
       <div class="card bg-base-200/60 border border-base-content/10 rounded-2xl p-3 flex flex-col gap-2">
         <div class="flex items-start justify-between gap-2 text-xs opacity-80">
-          <span>{_esc(when_h)} · {src_l}</span>
+          <span>{_esc(when_h)} · {src_l}{' ' + h_media_badge if h_media_badge else ''}</span>
           <span class="opacity-70">✓{int(h.recipients_ok)} / ✗{int(h.recipients_failed)}</span>
         </div>
         <div class="rounded-2xl border border-white/10 bg-[#2b5278] px-3 py-2 text-sm text-white shadow max-w-[min(100%,280px)] break-words">{prev_h}</div>
@@ -3601,12 +3625,33 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
                 <span class="label-text text-sm">В главный канал (ID из конфига)</span>
               </label>
             </div>
+            <div class="flex flex-col gap-2 rounded-xl border border-base-content/10 bg-base-200/30 p-3">
+              <span class="text-xs font-medium opacity-80">Вложение (фото или документ)</span>
+              <div class="flex flex-wrap gap-2 items-center">
+                <label class="btn btn-ghost btn-sm gap-1.5 cursor-pointer">
+                  <i class="fa-solid fa-paperclip" aria-hidden="true"></i>Прикрепить файл
+                  <input type="file" id="bc-media-file" class="hidden" accept="image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.zip,.json,.xml" />
+                </label>
+                <button type="button" id="bc-media-clear" class="btn btn-ghost btn-sm text-error hidden">✕ Убрать</button>
+              </div>
+              <div id="bc-media-preview" class="hidden flex items-center gap-2 text-sm">
+                <img id="bc-media-img-prev" src="" alt="" class="hidden max-h-16 rounded-lg border border-base-content/20" />
+                <span id="bc-media-name" class="opacity-80 text-xs truncate max-w-xs"></span>
+                <span id="bc-media-type-label" class="badge badge-sm badge-outline opacity-60"></span>
+              </div>
+              <div id="bc-media-uploading" class="hidden text-xs opacity-60">Загружаю в Telegram…</div>
+              <div id="bc-media-err" class="hidden text-xs text-error"></div>
+            </div>
             <div class="flex flex-wrap gap-2">
               <form id="bc-send" method="post" action="/admin/broadcast" class="inline flex flex-wrap items-center gap-2">
+                <input type="hidden" name="media_type" id="bc-media-type-h" value="" />
+                <input type="hidden" name="media_file_id" id="bc-media-fid-h" value="" />
                 <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить (в фоне)</button>
               </form>
               <form method="post" action="/admin/broadcast/test" id="bc-test-f" class="inline">
                 <input type="hidden" name="text" id="bc-test-hidden" value="" />
+                <input type="hidden" name="media_type" id="bc-test-mt-h" value="" />
+                <input type="hidden" name="media_file_id" id="bc-test-fid-h" value="" />
                 <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-vial" aria-hidden="true"></i>Тест себе</button>
               </form>
             </div>
@@ -3615,6 +3660,8 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
               <input type="hidden" name="text" id="bc-sched-body" value="" />
               <input type="hidden" name="send_users" id="bc-sched-h-su" value="1" />
               <input type="hidden" name="send_channel" id="bc-sched-h-sc" value="" />
+              <input type="hidden" name="media_type" id="bc-sched-h-mt" value="" />
+              <input type="hidden" name="media_file_id" id="bc-sched-h-fid" value="" />
               <input type="hidden" name="scheduled_at_utc" id="bc-sched-utc" value="" />
               <input type="datetime-local" name="scheduled_at_local" id="bc-sched-local" class="input input-bordered input-sm w-full max-w-xs" required />
               <button type="submit" class="btn btn-outline btn-sm h-9 min-h-9 w-fit gap-1.5"><i class="fa-solid fa-clock" aria-hidden="true"></i>Запланировать</button>
@@ -3684,6 +3731,8 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         <h3 class="font-bold text-lg mb-2">Отложенная отправка</h3>
         <form method="post" id="bc-sched-edit-form" action="/admin/broadcast/schedule/0/edit" class="flex flex-col gap-2">
           <input type="hidden" name="scheduled_at_utc" id="bc-sched-edit-utc" value="" />
+          <input type="hidden" name="media_type" id="bc-sched-edit-mt" value="" />
+          <input type="hidden" name="media_file_id" id="bc-sched-edit-fid" value="" />
           <label class="form-control"><span class="label-text text-xs">Текст сообщения</span>
             <textarea name="tpl_body" id="bc-sched-edit-body" class="textarea textarea-bordered min-h-[160px] font-mono text-sm"></textarea></label>
           <label class="form-control"><span class="label-text text-xs">Когда отправить</span>
@@ -3696,6 +3745,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
             <input type="checkbox" name="send_channel" id="bc-sched-edit-sc" value="1" class="checkbox checkbox-sm" />
             <span class="label-text text-xs">В канал</span>
           </label>
+          <div id="bc-sched-edit-media-info" class="hidden text-xs opacity-70"></div>
           <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
         </form>
       </div>
@@ -3829,11 +3879,35 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       if(dtBtn) dtBtn.addEventListener('click',function(){{
         ins(new Date().toLocaleString('ru-RU',{{hour12:false}}));
       }});
+      function applyMediaFromObj(o){{
+        var mtH=document.getElementById('bc-media-type-h');
+        var fidH=document.getElementById('bc-media-fid-h');
+        var previewBox=document.getElementById('bc-media-preview');
+        var clearBtn=document.getElementById('bc-media-clear');
+        var imgPrev=document.getElementById('bc-media-img-prev');
+        var nameSpan=document.getElementById('bc-media-name');
+        var typeLabel=document.getElementById('bc-media-type-label');
+        if(o&&o.media_type&&o.media_file_id){{
+          if(mtH) mtH.value=o.media_type;
+          if(fidH) fidH.value=o.media_file_id;
+          if(nameSpan) nameSpan.textContent='file_id: '+o.media_file_id.slice(0,20)+'…';
+          if(typeLabel) typeLabel.textContent=o.media_type==='photo'?'фото':'документ';
+          if(imgPrev){{ imgPrev.src=''; imgPrev.classList.add('hidden'); }}
+          if(previewBox) previewBox.classList.remove('hidden');
+          if(clearBtn) clearBtn.classList.remove('hidden');
+        }} else {{
+          if(mtH) mtH.value='';
+          if(fidH) fidH.value='';
+          if(previewBox) previewBox.classList.add('hidden');
+          if(clearBtn) clearBtn.classList.add('hidden');
+        }}
+      }}
       document.querySelectorAll('.bc-pend-use').forEach(function(btn){{
         btn.addEventListener('click',function(){{
           var m=btn.getAttribute('data-b64sched'); if(!m||!ta)return;
           var o=jsonFromUtf8B64(m); if(!o)return;
           ta.value=o.body||''; ta.focus(); queueLive();
+          applyMediaFromObj(o);
           if(window.remnaToast)window.remnaToast('success','Текст из очереди подставлен');
         }});
       }});
@@ -3853,6 +3927,15 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           if(esu) esu.checked = (o.send_to_users !== false && o.send_to_users !== undefined) ? !!o.send_to_users : true;
           if(esc) esc.checked = !!o.send_to_channel;
           if(form) form.action='/admin/broadcast/schedule/'+encodeURIComponent(o.id)+'/edit';
+          var emt=document.getElementById('bc-sched-edit-mt');
+          var efid=document.getElementById('bc-sched-edit-fid');
+          var eminfo=document.getElementById('bc-sched-edit-media-info');
+          if(emt) emt.value=o.media_type||'';
+          if(efid) efid.value=o.media_file_id||'';
+          if(eminfo){{
+            if(o.media_type&&o.media_file_id){{eminfo.textContent='📎 Прикреплено: '+o.media_type; eminfo.classList.remove('hidden');}}
+            else {{eminfo.textContent=''; eminfo.classList.add('hidden');}}
+          }}
           document.getElementById('bc-sched-modal').showModal();
         }});
       }});
@@ -3870,6 +3953,7 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
           var m=btn.getAttribute('data-b64hist'); if(!m||!ta)return;
           var o=jsonFromUtf8B64(m); if(!o)return;
           ta.value=o.body||''; ta.focus(); queueLive();
+          applyMediaFromObj(o);
           if(window.remnaToast)window.remnaToast('success','Текст из истории подставлен — измените и отправьте');
         }});
       }});
@@ -3900,6 +3984,10 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
       if(tf) tf.addEventListener('submit',function(){{
         var h=document.getElementById('bc-test-hidden');
         if(h&&ta) h.value=ta.value||'';
+        var tmt=document.getElementById('bc-test-mt-h');
+        var tfid=document.getElementById('bc-test-fid-h');
+        if(tmt) tmt.value=document.getElementById('bc-media-type-h').value||'';
+        if(tfid) tfid.value=document.getElementById('bc-media-fid-h').value||'';
       }});
       var sf=document.getElementById('bc-sched-f');
       if(sf) sf.addEventListener('submit',function(){{
@@ -3917,11 +4005,130 @@ async def admin_broadcast_page(request: Request) -> HTMLResponse:
         var hsc=document.getElementById('bc-sched-h-sc');
         if(hsu) hsu.value = su&&su.checked ? '1' : '';
         if(hsc) hsc.value = sc&&sc.checked ? '1' : '';
+        var hmt=document.getElementById('bc-sched-h-mt');
+        var hfid=document.getElementById('bc-sched-h-fid');
+        if(hmt) hmt.value=document.getElementById('bc-media-type-h').value||'';
+        if(hfid) hfid.value=document.getElementById('bc-media-fid-h').value||'';
       }});
+      (function setupMediaUpload(){{
+        var fileInput=document.getElementById('bc-media-file');
+        var clearBtn=document.getElementById('bc-media-clear');
+        var previewBox=document.getElementById('bc-media-preview');
+        var imgPrev=document.getElementById('bc-media-img-prev');
+        var nameSpan=document.getElementById('bc-media-name');
+        var typeLabel=document.getElementById('bc-media-type-label');
+        var uploadingDiv=document.getElementById('bc-media-uploading');
+        var errDiv=document.getElementById('bc-media-err');
+        var mtH=document.getElementById('bc-media-type-h');
+        var fidH=document.getElementById('bc-media-fid-h');
+        function clearMedia(){{
+          if(mtH) mtH.value='';
+          if(fidH) fidH.value='';
+          if(previewBox) previewBox.classList.add('hidden');
+          if(clearBtn) clearBtn.classList.add('hidden');
+          if(imgPrev){{ imgPrev.src=''; imgPrev.classList.add('hidden'); }}
+          if(nameSpan) nameSpan.textContent='';
+          if(typeLabel) typeLabel.textContent='';
+          if(errDiv){{ errDiv.textContent=''; errDiv.classList.add('hidden'); }}
+          if(fileInput) fileInput.value='';
+        }}
+        if(clearBtn) clearBtn.addEventListener('click', clearMedia);
+        if(fileInput) fileInput.addEventListener('change', async function(){{
+          var f=fileInput.files&&fileInput.files[0];
+          if(!f) return;
+          clearMedia();
+          if(uploadingDiv) uploadingDiv.classList.remove('hidden');
+          var fd=new FormData(); fd.append('file', f);
+          try{{
+            var r=await fetch('/admin/broadcast/upload-media',{{method:'POST',body:fd,credentials:'same-origin'}});
+            var j=await r.json();
+            if(uploadingDiv) uploadingDiv.classList.add('hidden');
+            if(!j||!j.ok){{
+              if(errDiv){{ errDiv.textContent='Ошибка загрузки: '+(j&&j.error||'неизвестно'); errDiv.classList.remove('hidden'); }}
+              return;
+            }}
+            if(mtH) mtH.value=j.media_type||'';
+            if(fidH) fidH.value=j.file_id||'';
+            if(nameSpan) nameSpan.textContent=j.filename||f.name||'';
+            if(typeLabel) typeLabel.textContent=j.media_type==='photo'?'фото':'документ';
+            if(previewBox) previewBox.classList.remove('hidden');
+            if(clearBtn) clearBtn.classList.remove('hidden');
+            if(j.media_type==='photo'&&imgPrev){{
+              imgPrev.src=URL.createObjectURL(f);
+              imgPrev.classList.remove('hidden');
+            }}
+            if(window.remnaToast) window.remnaToast('success','Файл прикреплён: '+j.filename);
+          }}catch(e){{
+            if(uploadingDiv) uploadingDiv.classList.add('hidden');
+            if(errDiv){{ errDiv.textContent='Ошибка: '+String(e); errDiv.classList.remove('hidden'); }}
+          }}
+        }});
+      }})();
     }})();
     </script>
     """
     return _layout("Рассылка", body, request=request)
+
+
+_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
+
+
+@router.post("/broadcast/upload-media")
+async def admin_broadcast_upload_media(
+    request: Request,
+    file: UploadFile = File(...),
+) -> JSONResponse:
+    """Загрузить файл в Telegram и получить file_id для рассылки."""
+    denied = _require_login(request)
+    if denied is not None:
+        return JSONResponse({"error": "not_logged_in"}, status_code=401)
+    settings = get_settings()
+    tok = (settings.bot_token or "").strip()
+    if not tok:
+        return JSONResponse({"error": "no_bot_token"}, status_code=400)
+    auth = _auth_data(request)
+    raw_tid = auth.get("telegram_id") or auth.get("id")
+    try:
+        tid = int(raw_tid) if raw_tid is not None else 0
+    except (TypeError, ValueError):
+        tid = 0
+    if tid <= 0:
+        return JSONResponse({"error": "no_telegram_id"}, status_code=400)
+
+    content_type = (file.content_type or "").lower()
+    is_photo = content_type in _PHOTO_CONTENT_TYPES
+    media_kind = "photo" if is_photo else "document"
+    filename = file.filename or "file"
+
+    data = await file.read()
+    if len(data) == 0:
+        return JSONResponse({"error": "empty_file"}, status_code=400)
+
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+
+    input_file = BufferedInputFile(data, filename=filename)
+    try:
+        async with Bot(token=tok) as bot:
+            if is_photo:
+                msg = await bot.send_photo(tid, input_file, caption=f"[upload preview] {filename}")
+                file_id = msg.photo[-1].file_id if msg.photo else ""
+            else:
+                msg = await bot.send_document(tid, input_file, caption=f"[upload preview] {filename}")
+                file_id = msg.document.file_id if msg.document else ""
+            if msg:
+                try:
+                    await bot.delete_message(tid, msg.message_id)
+                except Exception:
+                    pass
+    except Exception as e:
+        logging.getLogger("api.broadcast").warning("upload-media failed: %s", e)
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+    if not file_id:
+        return JSONResponse({"error": "no_file_id"}, status_code=500)
+
+    return JSONResponse({"ok": True, "media_type": media_kind, "file_id": file_id, "filename": filename})
 
 
 @router.post("/broadcast/preview-html")
@@ -3934,12 +4141,19 @@ async def admin_broadcast_preview_html(request: Request, text: str = Form("")) -
 
 
 @router.post("/broadcast/test")
-async def admin_broadcast_test(request: Request, text: str = Form("")) -> RedirectResponse:
+async def admin_broadcast_test(
+    request: Request,
+    text: str = Form(""),
+    media_type: str = Form(""),
+    media_file_id: str = Form(""),
+) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     body = (text or "").strip()
-    if not body:
+    mt = (media_type or "").strip() or None
+    mfid = (media_file_id or "").strip() or None
+    if not body and not (mt and mfid):
         return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
     settings = get_settings()
     if not (settings.bot_token or "").strip():
@@ -3952,9 +4166,19 @@ async def admin_broadcast_test(request: Request, text: str = Form("")) -> Redire
         tid = 0
     if tid <= 0:
         return RedirectResponse("/admin/broadcast?err=test_no_tg", status_code=303)
-    md_body = draft_to_markdown_v2(body)
-    sent_mid = await send_telegram_message(tid, md_body, parse_mode="MarkdownV2", settings=settings)
-    if sent_mid is None:
+    from aiogram import Bot
+    from shared.services.broadcast_service import _send_one_message
+    tok = (settings.bot_token or "").strip()
+    md_body = draft_to_markdown_v2(body) if body else ""
+    try:
+        async with Bot(token=tok) as bot:
+            await _send_one_message(
+                bot, tid, md_body, body,
+                parse_mode="MarkdownV2",
+                media_type=mt,
+                media_file_id=mfid,
+            )
+    except Exception:
         return RedirectResponse("/admin/broadcast?err=test_fail", status_code=303)
     return RedirectResponse("/admin/broadcast?n=test_sent", status_code=303)
 
@@ -3966,12 +4190,16 @@ async def admin_broadcast_schedule(
     scheduled_at_utc: str = Form(""),
     send_users: str | None = Form(None),
     send_channel: str | None = Form(None),
+    media_type: str = Form(""),
+    media_file_id: str = Form(""),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     body = (text or "").strip()
-    if not body:
+    mt = (media_type or "").strip() or None
+    mfid = (media_file_id or "").strip() or None
+    if not body and not (mt and mfid):
         return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
     su = send_users == "1"
     sc = send_channel == "1"
@@ -4003,6 +4231,8 @@ async def admin_broadcast_schedule(
                 status="pending",
                 send_to_users=su,
                 send_to_channel=sc,
+                media_type=mt,
+                media_file_id=mfid,
             )
         )
         await session.commit()
@@ -4030,12 +4260,16 @@ async def admin_broadcast_schedule_edit(
     scheduled_at_utc: str = Form(""),
     send_users: str | None = Form(None),
     send_channel: str | None = Form(None),
+    media_type: str = Form(""),
+    media_file_id: str = Form(""),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     body = (tpl_body or "").strip()
-    if not body:
+    mt = (media_type or "").strip() or None
+    mfid = (media_file_id or "").strip() or None
+    if not body and not (mt and mfid):
         return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
     raw_iso = (scheduled_at_utc or "").strip().replace("Z", "+00:00")
     if not raw_iso:
@@ -4067,6 +4301,8 @@ async def admin_broadcast_schedule_edit(
         row.scheduled_at = scheduled_utc
         row.send_to_users = su
         row.send_to_channel = sc
+        row.media_type = mt
+        row.media_file_id = mfid
         await session.commit()
     return RedirectResponse("/admin/broadcast?n=sched_ok", status_code=303)
 
@@ -4129,12 +4365,16 @@ async def admin_broadcast_post(
     text: str = Form(""),
     send_users: str | None = Form(None),
     send_channel: str | None = Form(None),
+    media_type: str = Form(""),
+    media_file_id: str = Form(""),
 ) -> RedirectResponse:
     denied = _require_login(request)
     if denied is not None:
         return denied
     body = (text or "").strip()
-    if not body:
+    mt = (media_type or "").strip() or None
+    mfid = (media_file_id or "").strip() or None
+    if not body and not (mt and mfid):
         return RedirectResponse("/admin/broadcast?err=empty", status_code=303)
     settings = get_settings()
     if not (settings.bot_token or "").strip():
@@ -4149,7 +4389,11 @@ async def admin_broadcast_post(
         if cid is None or int(cid) == 0:
             return RedirectResponse("/admin/broadcast?err=no_channel", status_code=303)
         ch_id = int(cid)
-    background.add_task(_admin_broadcast_job, body, send_users=su, send_channel=sc, channel_id=ch_id)
+    background.add_task(
+        _admin_broadcast_job, body,
+        send_users=su, send_channel=sc, channel_id=ch_id,
+        media_type=mt, media_file_id=mfid,
+    )
     return RedirectResponse("/admin/broadcast?started=1", status_code=303)
 
 

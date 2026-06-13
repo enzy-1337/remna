@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 # ~25 сообщений/сек разным чатам — запас к лимитам Telegram
 DEFAULT_DELAY_SEC = 0.05
 MAX_MESSAGE_LEN = 4096
+MAX_CAPTION_LEN = 1024
+
 
 def apply_simple_formatting_for_broadcast(text: str) -> str:
     """Совместимость: черновик → MarkdownV2 (для старых вызовов)."""
@@ -50,6 +52,44 @@ async def collect_recipient_telegram_ids(
     return [int(row[0]) for row in r.all()]
 
 
+async def _send_one_message(
+    bot: Bot,
+    chat_id: int,
+    body_md: str,
+    draft: str,
+    *,
+    parse_mode: str | None,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
+) -> None:
+    """Отправить одно сообщение с опциональным медиа (фото/документ)."""
+    if media_type and media_file_id:
+        caption = body_md[:MAX_CAPTION_LEN] if body_md else None
+        pm = parse_mode if caption else None
+        try:
+            if media_type == "photo":
+                await bot.send_photo(chat_id, media_file_id, caption=caption, parse_mode=pm)
+            else:
+                await bot.send_document(chat_id, media_file_id, caption=caption, parse_mode=pm)
+        except TelegramBadRequest:
+            if pm and caption:
+                plain_cap = draft[:MAX_CAPTION_LEN] if draft else None
+                if media_type == "photo":
+                    await bot.send_photo(chat_id, media_file_id, caption=plain_cap, parse_mode=None)
+                else:
+                    await bot.send_document(chat_id, media_file_id, caption=plain_cap, parse_mode=None)
+            else:
+                raise
+    else:
+        try:
+            await bot.send_message(chat_id, body_md, parse_mode=parse_mode)
+        except TelegramBadRequest:
+            if parse_mode:
+                await bot.send_message(chat_id, draft[:MAX_MESSAGE_LEN], parse_mode=None)
+            else:
+                raise
+
+
 async def broadcast_to_users(
     bot: Bot,
     text: str,
@@ -57,47 +97,55 @@ async def broadcast_to_users(
     skip_blocked: bool = True,
     delay_sec: float = DEFAULT_DELAY_SEC,
     parse_mode: str | None = ParseMode.MARKDOWN_V2,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> tuple[int, int]:
     """
     Отправляет сообщение всем пользователям из БД.
     Черновик админки конвертируется в MarkdownV2 (см. shared.broadcast_md2_convert).
     parse_mode=None — только обычный текст без разметки.
+    media_type/media_file_id — опциональное фото или документ (caption = text).
     """
     draft = (text or "").strip()
-    if not draft:
+    has_media = bool(media_type and media_file_id)
+    if not draft and not has_media:
         return 0, 0
-    body = draft_to_markdown_v2(draft)
-    body = body[:MAX_MESSAGE_LEN]
+    body = draft_to_markdown_v2(draft) if draft else ""
+    if not has_media:
+        body = body[:MAX_MESSAGE_LEN]
+    else:
+        body = body[:MAX_CAPTION_LEN]
 
     factory = get_session_factory()
     async with factory() as session:
         ids = await collect_recipient_telegram_ids(session, skip_blocked=skip_blocked)
 
     n = len(ids)
-    logger.info("broadcast: старт, получателей=%s (skip_blocked=%s)", n, skip_blocked)
+    logger.info("broadcast: старт, получателей=%s (skip_blocked=%s, media=%s)", n, skip_blocked, media_type)
 
     ok = 0
     failed = 0
 
-    async def _send(chat_id: int) -> None:
-        try:
-            await bot.send_message(chat_id, body, parse_mode=parse_mode)
-        except TelegramBadRequest:
-            if parse_mode:
-                await bot.send_message(chat_id, draft[:MAX_MESSAGE_LEN], parse_mode=None)
-            else:
-                raise
-
     for tid in ids:
         try:
-            await _send(tid)
+            await _send_one_message(
+                bot, tid, body, draft,
+                parse_mode=parse_mode,
+                media_type=media_type,
+                media_file_id=media_file_id,
+            )
             ok += 1
         except TelegramRetryAfter as e:
             wait = float(getattr(e, "retry_after", None) or 1)
             logger.warning("broadcast flood wait %s s for chat=%s", wait, tid)
             await asyncio.sleep(wait + 0.5)
             try:
-                await _send(tid)
+                await _send_one_message(
+                    bot, tid, body, draft,
+                    parse_mode=parse_mode,
+                    media_type=media_type,
+                    media_file_id=media_file_id,
+                )
                 ok += 1
             except Exception:
                 logger.warning("broadcast retry failed chat=%s", tid, exc_info=True)
@@ -121,25 +169,27 @@ async def send_broadcast_to_channel(
     *,
     chat_id: int,
     parse_mode: str | None = ParseMode.MARKDOWN_V2,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> bool:
     """Одно сообщение в канал/супергруппу."""
     draft = (text or "").strip()
-    if not draft:
+    has_media = bool(media_type and media_file_id)
+    if not draft and not has_media:
         return False
-    body = draft_to_markdown_v2(draft)
-    body = body[:MAX_MESSAGE_LEN]
+    body = draft_to_markdown_v2(draft) if draft else ""
+    if not has_media:
+        body = body[:MAX_MESSAGE_LEN]
+    else:
+        body = body[:MAX_CAPTION_LEN]
     try:
-        await bot.send_message(chat_id, body, parse_mode=parse_mode)
+        await _send_one_message(
+            bot, chat_id, body, draft,
+            parse_mode=parse_mode,
+            media_type=media_type,
+            media_file_id=media_file_id,
+        )
         return True
-    except TelegramBadRequest:
-        if parse_mode:
-            try:
-                await bot.send_message(chat_id, draft[:MAX_MESSAGE_LEN], parse_mode=None)
-                return True
-            except Exception:
-                logger.warning("broadcast channel send failed chat=%s", chat_id, exc_info=True)
-                return False
-        return False
     except Exception:
         logger.warning("broadcast channel send failed chat=%s", chat_id, exc_info=True)
         return False
@@ -151,6 +201,8 @@ async def save_broadcast_history(
     recipients_ok: int,
     recipients_failed: int,
     source: str,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> None:
     src = (source or "mass")[:32]
     factory = get_session_factory()
@@ -161,6 +213,8 @@ async def save_broadcast_history(
                 recipients_ok=max(0, int(recipients_ok)),
                 recipients_failed=max(0, int(recipients_failed)),
                 source=src,
+                media_type=media_type or None,
+                media_file_id=media_file_id or None,
             )
         )
         await session.commit()
@@ -192,8 +246,11 @@ async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
         await session.commit()
         job_id = int(row.id)
         body = (row.body_text or "").strip()
+        media_type = row.media_type or None
+        media_file_id = row.media_file_id or None
 
-    if not body:
+    has_media = bool(media_type and media_file_id)
+    if not body and not has_media:
         async with factory() as session:
             r2 = await session.get(ScheduledBroadcast, job_id)
             if r2 is not None:
@@ -220,17 +277,24 @@ async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
         ch_sent = False
         async with Bot(token=tok) as bot:
             if send_u:
-                ok, failed = await broadcast_to_users(bot, body)
+                ok, failed = await broadcast_to_users(
+                    bot, body, media_type=media_type, media_file_id=media_file_id
+                )
             if send_ch:
                 cid = getattr(settings, "broadcast_main_channel_id", None)
                 if cid:
-                    ch_sent = await send_broadcast_to_channel(bot, body, chat_id=int(cid))
+                    ch_sent = await send_broadcast_to_channel(
+                        bot, body, chat_id=int(cid),
+                        media_type=media_type, media_file_id=media_file_id,
+                    )
         if send_u:
             await save_broadcast_history(
                 body_draft=body,
                 recipients_ok=ok,
                 recipients_failed=failed,
                 source="scheduled",
+                media_type=media_type,
+                media_file_id=media_file_id,
             )
         if send_ch:
             await save_broadcast_history(
@@ -238,6 +302,8 @@ async def tick_scheduled_broadcast_queue(settings: Settings) -> None:
                 recipients_ok=1 if ch_sent else 0,
                 recipients_failed=0 if ch_sent else 1,
                 source="channel",
+                media_type=media_type,
+                media_file_id=media_file_id,
             )
         async with factory() as session:
             r3 = await session.get(ScheduledBroadcast, job_id)
