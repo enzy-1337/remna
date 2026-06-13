@@ -1059,12 +1059,19 @@ async def _build_user_card(
         )
 
     now = datetime.now(timezone.utc)
+    has_active_sub = sub is not None and sub.status in ("active", "trial") and sub.expires_at > now
     if sub is not None:
         if sub.status in ("active", "trial") and sub.expires_at > now:
             b.row(
                 InlineKeyboardButton(
                     text="⏹ Отключить подписку",
                     callback_data=f"admin:sd:{u.id}:{sub.id}",
+                )
+            )
+            b.row(
+                InlineKeyboardButton(
+                    text="⏳ Продлить подписку",
+                    callback_data=f"admin:ad:{u.id}:{sub.id}",
                 )
             )
         elif sub.status == "cancelled":
@@ -1074,12 +1081,6 @@ async def _build_user_card(
                     callback_data=f"admin:se:{u.id}:{sub.id}",
                 )
             )
-        b.row(
-            InlineKeyboardButton(
-                text="⏳ Продлить подписку",
-                callback_data=f"admin:ad:{u.id}:{sub.id}",
-            )
-        )
         b.row(
             InlineKeyboardButton(
                 text="📆 Изменить срок",
@@ -1132,12 +1133,13 @@ async def _build_user_card(
     if clr_row:
         b.row(*clr_row)
 
-    b.row(
-        InlineKeyboardButton(
-            text="🎁 Выдать подписку",
-            callback_data=f"admin:grant:{u.id}",
+    if not has_active_sub:
+        b.row(
+            InlineKeyboardButton(
+                text="🎁 Выдать подписку",
+                callback_data=f"admin:grant:{u.id}",
+            )
         )
-    )
     b.row(
         InlineKeyboardButton(
             text="💳 Добавить баланс",
@@ -1200,6 +1202,7 @@ async def _render_user_card(
         caption=cap,
         reply_markup=kb,
         settings=settings,
+        photo_key=f"admin:u:{user_id}",
     )
 
 
