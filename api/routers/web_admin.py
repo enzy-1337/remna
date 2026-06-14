@@ -1262,7 +1262,10 @@ def _layout(
       remnaLoadOverlay.setAttribute('aria-hidden','true');
       if(remnaLoadTimer){clearInterval(remnaLoadTimer);remnaLoadTimer=null;}
     };
-    window.addEventListener('pageshow',window.remnaHideLoading);
+    window.addEventListener('pageshow',function(e){
+      window.remnaHideLoading();
+      if(e.persisted&&window.remnaCloseAllModals)window.remnaCloseAllModals();
+    });
     window.addEventListener('load',window.remnaHideLoading);
   })();
   document.addEventListener('click',function(e){
@@ -1556,6 +1559,7 @@ def _layout(
         var im=document.getElementById('remna-hwid-mode');
         if(im)im.value=m;
       }
+      remnaCloseHwid();
     },true);
     document.addEventListener('keydown',function(e){
       if(e.key!=='Escape')return;
@@ -7513,7 +7517,6 @@ async def admin_user_add_balance(
             settings,
             title="💰 " + bold("Баланс пополнен (web-admin)"),
             lines=[
-                web_admin_target_user_line(settings, u),
                 plain("Сумма: ") + bold(f"+{amt} ₽"),
                 web_admin_actor_notify_line(),
             ],
@@ -7574,7 +7577,6 @@ async def admin_user_reset_balance(request: Request, user_id: int) -> RedirectRe
             settings,
             title="💰 " + bold("Баланс обнулён (web-admin)"),
             lines=[
-                web_admin_target_user_line(settings, u),
                 plain("Было: ") + bold(f"{before} ₽") + plain(" → ") + bold("0 ₽"),
                 web_admin_actor_notify_line(),
             ],
