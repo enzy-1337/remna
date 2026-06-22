@@ -122,7 +122,7 @@ async def cb_family_bind(cq: CallbackQuery, state: FSMContext, db_user: User | N
         await delete_message_safe(cq.message)
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:bind:cancel"))
-        await cq.message.answer(FAMILY_ASK_TARGET, reply_markup=b.as_markup())
+        await cq.message.answer(plain(FAMILY_ASK_TARGET), reply_markup=b.as_markup())
 
 
 @router.message(FamilyStates.waiting_bind_target, F.text)
@@ -136,7 +136,7 @@ async def msg_family_bind_target(
         return
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(FAMILY_NOT_FOUND)
+        await message.answer(plain(FAMILY_NOT_FOUND))
         return
     ok, err = await family_bind_allowed(session, owner=db_user, member=target)
     if not ok:
@@ -182,13 +182,13 @@ async def cb_family_bind_confirm(
     try:
         await cq.bot.send_message(
             int(target.telegram_id),
-            FAMILY_BIND_OK_MEMBER.format(label=label),
+            plain(FAMILY_BIND_OK_MEMBER.format(label=label)),
         )
     except Exception:
         pass
     await cq.answer("Готово")
     if cq.message:
-        await cq.message.edit_text(FAMILY_BIND_OK_OWNER.format(label=user_card_label(target)))
+        await cq.message.edit_text(plain(FAMILY_BIND_OK_OWNER.format(label=user_card_label(target))))
 
 
 @router.callback_query(F.data == "family:bind:cancel")
@@ -237,7 +237,7 @@ async def cb_family_unbind(cq: CallbackQuery, state: FSMContext, db_user: User |
         await delete_message_safe(cq.message)
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:unbind:cancel"))
-        await cq.message.answer(FAMILY_ASK_UNBIND, reply_markup=b.as_markup())
+        await cq.message.answer(plain(FAMILY_ASK_UNBIND), reply_markup=b.as_markup())
 
 
 @router.callback_query(F.data == "family:unbind:cancel")
@@ -268,11 +268,11 @@ async def msg_family_unbind_target(
         return
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(FAMILY_NOT_FOUND)
+        await message.answer(plain(FAMILY_NOT_FOUND))
         return
     membership = await get_family_membership(session, user_id=target.id)
     if membership is None or membership.owner_user_id != db_user.id:
-        await message.answer("Этот пользователь не в вашей семье.")
+        await message.answer(plain("Этот пользователь не в вашей семье."))
         await state.clear()
         return
     settings = get_settings()
@@ -284,10 +284,10 @@ async def msg_family_unbind_target(
         await message.answer(plain(err or "Не удалось отвязать."))
         return
     try:
-        await message.bot.send_message(int(target.telegram_id), FAMILY_UNBIND_OK_MEMBER)
+        await message.bot.send_message(int(target.telegram_id), plain(FAMILY_UNBIND_OK_MEMBER))
     except Exception:
         pass
-    await message.answer(FAMILY_UNBIND_OK_OWNER.format(label=user_card_label(target)))
+    await message.answer(plain(FAMILY_UNBIND_OK_OWNER.format(label=user_card_label(target))))
 
 
 @router.callback_query(F.data == "family:leave")
@@ -312,13 +312,13 @@ async def cb_family_leave(
             try:
                 await cq.bot.send_message(
                     int(owner.telegram_id),
-                    f"Участник {user_card_label(db_user)} вышел из семейной подписки.",
+                    plain(f"Участник {user_card_label(db_user)} вышел из семейной подписки."),
                 )
             except Exception:
                 pass
     await cq.answer("Готово")
     if cq.message:
-        await cq.message.answer(FAMILY_LEAVE_OK)
+        await cq.message.answer(plain(FAMILY_LEAVE_OK))
 
 
 @router.callback_query(F.data == "sub:transfer")
@@ -344,7 +344,7 @@ async def cb_transfer_start(
         await delete_message_safe(cq.message)
         _back_kb = InlineKeyboardBuilder()
         _back_kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="sub:transfer:cancel"))
-        await cq.message.answer(TRANSFER_ASK_TARGET, reply_markup=_back_kb.as_markup())
+        await cq.message.answer(plain(TRANSFER_ASK_TARGET), reply_markup=_back_kb.as_markup())
 
 
 @router.callback_query(F.data == "sub:transfer:cancel")
@@ -358,7 +358,7 @@ async def cb_transfer_cancel(
         await delete_message_safe(cq.message)
         _b = InlineKeyboardBuilder()
         _b.row(InlineKeyboardButton(text="📋 К подписке", callback_data="menu:sub_main"))
-        await cq.message.answer("Передача отменена.", reply_markup=_b.as_markup())
+        await cq.message.answer(plain("Передача отменена."), reply_markup=_b.as_markup())
 
 
 @router.message(TransferStates.waiting_recipient, F.text)
@@ -373,26 +373,28 @@ async def msg_transfer_recipient(
     from shared.services.family_service import get_family_membership as _gm
 
     if await _gm(session, user_id=db_user.id) is not None:
-        await message.answer(TRANSFER_ONLY_OWNER)
+        await message.answer(plain(TRANSFER_ONLY_OWNER))
         await state.clear()
         return
     sub = await get_active_subscription(session, db_user.id, account_scope=False)
     if sub is None:
-        await message.answer("Нет активной подписки.")
+        await message.answer(plain("Нет активной подписки."))
         await state.clear()
         return
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(FAMILY_NOT_FOUND)
+        await message.answer(plain(FAMILY_NOT_FOUND))
         return
     if target.id == db_user.id:
-        await message.answer("Нельзя передать подписку самому себе.")
+        await message.answer(plain("Нельзя передать подписку самому себе."))
         return
     exp = sub.expires_at.strftime("%d.%m.%Y %H:%M UTC")
-    cap = TRANSFER_CONFIRM_HINT.format(
-        label=user_card_label(target),
-        expires=exp,
-        devices=str(sub.devices_count),
+    cap = plain(
+        TRANSFER_CONFIRM_HINT.format(
+            label=user_card_label(target),
+            expires=exp,
+            devices=str(sub.devices_count),
+        )
     )
     await state.update_data(transfer_target_id=target.id)
     await message.answer(cap, reply_markup=_confirm_kb("transfer", target.id).as_markup())
@@ -427,13 +429,13 @@ async def cb_transfer_confirm(
     try:
         await cq.bot.send_message(
             int(target.telegram_id),
-            TRANSFER_OK_RECIPIENT.format(details=msg),
+            plain(TRANSFER_OK_RECIPIENT.format(details=msg)),
         )
     except Exception:
         pass
     await cq.answer("Готово")
     if cq.message:
-        await cq.message.edit_text(TRANSFER_OK_SENDER.format(label=user_card_label(target)))
+        await cq.message.edit_text(plain(TRANSFER_OK_SENDER.format(label=user_card_label(target))))
 
 
 @router.callback_query(F.data == "transfer:cancel")
