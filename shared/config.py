@@ -166,6 +166,11 @@ class Settings(BaseSettings):
         validation_alias="ADMIN_LOG_TOPIC_CHANNEL",
         description="Тема форума для событий подписки/отписки канала",
     )
+    admin_log_topic_errors: int | None = Field(
+        default=None,
+        validation_alias="ADMIN_LOG_TOPIC_ERRORS",
+        description="Тема форума для технических ошибок (необработанные исключения)",
+    )
     admin_report_enabled: bool = Field(default=False, validation_alias="ADMIN_REPORT_ENABLED")
     admin_report_hour_utc: int = Field(
         default=8,
@@ -755,6 +760,7 @@ class Settings(BaseSettings):
         "admin_log_topic_reports",
         "admin_log_topic_boot",
         "admin_log_topic_channel",
+        "admin_log_topic_errors",
         mode="before",
     )
     @classmethod
@@ -840,6 +846,7 @@ class Settings(BaseSettings):
             AdminLogTopic.REPORTS: self.admin_log_topic_reports,
             AdminLogTopic.BOOT: self.admin_log_topic_boot,
             AdminLogTopic.CHANNEL: self.admin_log_topic_channel,
+            AdminLogTopic.ERRORS: self.admin_log_topic_errors,
         }
         tid = m.get(topic)
         if tid is not None:

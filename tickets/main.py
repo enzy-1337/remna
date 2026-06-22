@@ -14,6 +14,7 @@ from aiogram.types import BotCommand
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from shared.config import get_settings
+from shared.services.admin_error_log_handler import install_admin_error_log_handler
 from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online
 from tickets.config import config
 from tickets.router import tickets_router
@@ -25,6 +26,7 @@ async def _run() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    install_admin_error_log_handler()
     log = logging.getLogger("tickets")
     log.info(
         "Tickets config loaded: TICKETS_BOT_TOKEN=%s SUPPORT_GROUP_ID=%s REMINDER_HOURS=%s AUTO_CLOSE_DAYS=%s ADMIN_IDS=%s",

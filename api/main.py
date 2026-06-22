@@ -39,6 +39,7 @@ from shared.services.web_admin_session_service import (
     touch_browser_session,
     try_get_browser_session,
 )
+from shared.services.admin_error_log_handler import install_admin_error_log_handler
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.md2 import bold, plain
 from shared.services.admin_notify import notify_admin
@@ -48,6 +49,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+install_admin_error_log_handler()
 
 
 class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):

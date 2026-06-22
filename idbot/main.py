@@ -49,6 +49,7 @@ from idbot.group_id_prompt import (  # noqa: E402
 from idbot.id_card import cta_keyboard, format_user_telegram_card  # noqa: E402
 from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
 from shared.md2 import bold, join_lines, plain  # noqa: E402
+from shared.services.admin_error_log_handler import install_admin_error_log_handler  # noqa: E402
 from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online  # noqa: E402
 
 logger = logging.getLogger("idbot")
@@ -282,6 +283,7 @@ async def _run() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    install_admin_error_log_handler()
     token = (settings.idbot_bot_token or "").strip()
     if not token:
         raise RuntimeError("IDBOT_BOT_TOKEN is empty")

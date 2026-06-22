@@ -15,6 +15,7 @@ from bot.handlers.downloader import router as downloader_router
 from bot.middlewares.private_chat_only import PrivateChatOnlyMiddleware
 from downloader.config import get_downloader_settings
 from downloader.middlewares.db_session import DownloaderDbSessionMiddleware
+from shared.services.admin_error_log_handler import install_admin_error_log_handler
 from shared.telegram_connect import safe_set_bot_commands, wait_telegram_online
 
 
@@ -22,6 +23,7 @@ async def _run() -> None:
     settings = get_downloader_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    install_admin_error_log_handler()
     token = (settings.downloader_bot_token or "").strip()
     if not token:
         raise RuntimeError("DOWNLOADER_BOT_TOKEN is empty")

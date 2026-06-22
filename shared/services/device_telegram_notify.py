@@ -95,3 +95,40 @@ async def notify_admin_device_detached(
         subject_user=user,
         session=session,
     )
+
+
+async def notify_admin_device_slots_purchased(
+    settings: Settings,
+    *,
+    user: User,
+    quantity: int,
+    total_price,
+    unit_price,
+    discount_pct,
+    total_slots: int,
+    session: AsyncSession | None = None,
+) -> None:
+    """Сообщение в админ-чат (тема DEVICES) после докупки слотов устройств."""
+    lines: list[str] = [
+        plain("Докуплено слотов: ") + bold(str(quantity)),
+        plain("Списано: ") + bold(str(total_price)) + plain(" ₽"),
+        plain("Всего слотов в подписке: ") + bold(str(total_slots)),
+    ]
+    if discount_pct:
+        lines.append(
+            plain("Скидка: ")
+            + bold(str(discount_pct))
+            + plain("% (база ")
+            + bold(str(unit_price))
+            + plain(" ₽/слот)")
+        )
+
+    await notify_admin(
+        settings,
+        title="➕ " + bold("Докупка слотов устройств"),
+        lines=lines,
+        event_type="device_slots_purchased",
+        topic=AdminLogTopic.DEVICES,
+        subject_user=user,
+        session=session,
+    )

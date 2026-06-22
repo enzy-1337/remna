@@ -462,6 +462,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 lambda s: _env_opt_int(s.admin_log_topic_reports),
                 "",
             ),
+            (
+                "ADMIN_LOG_TOPIC_ERRORS",
+                "Тема: ошибки",
+                lambda s: _env_opt_int(s.admin_log_topic_errors),
+                "Технические ошибки (необработанные исключения) из бота, API, тикетов и других процессов.",
+            ),
         ],
     ),
     (

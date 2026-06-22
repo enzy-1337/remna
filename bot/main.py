@@ -23,6 +23,7 @@ from bot.background_loops import cancel_background_tasks, start_background_loops
 from bot.bootstrap_db import bootstrap_bot_database_schema
 from bot.factory import apply_ipv4_preferred_dns, create_bot_and_dispatcher
 from shared.config import get_settings
+from shared.services.admin_error_log_handler import install_admin_error_log_handler
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.md2 import bold, join_lines, plain
 from shared.services.admin_notify import notify_admin
@@ -39,6 +40,7 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     log = logging.getLogger(__name__)
+    install_admin_error_log_handler(settings)
 
     if settings.telegram_webhook_enabled:
         log.error(

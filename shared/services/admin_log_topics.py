@@ -22,3 +22,4 @@ class AdminLogTopic(str, Enum):
     REPORTS = "reports"
     BOOT = "boot"
     CHANNEL = "channel"
+    ERRORS = "errors"

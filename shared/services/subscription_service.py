@@ -1074,6 +1074,20 @@ async def add_paid_device_slots(
         from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 
         await sync_hybrid_balance_floor_panel_state(session, user, settings)
+
+    from shared.services.device_telegram_notify import notify_admin_device_slots_purchased
+
+    await notify_admin_device_slots_purchased(
+        settings,
+        user=user,
+        quantity=qty,
+        total_price=total_price,
+        unit_price=unit_price,
+        discount_pct=discount_pct,
+        total_slots=sub.devices_count,
+        session=session,
+    )
+
     msg = join_lines(
         plain("Добавлено слотов: ")
         + bold(str(qty))
