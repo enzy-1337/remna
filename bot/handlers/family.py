@@ -120,7 +120,9 @@ async def cb_family_bind(cq: CallbackQuery, state: FSMContext, db_user: User | N
     await cq.answer()
     if cq.message:
         await delete_message_safe(cq.message)
-        await cq.message.answer(FAMILY_ASK_TARGET)
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:bind:cancel"))
+        await cq.message.answer(FAMILY_ASK_TARGET, reply_markup=b.as_markup())
 
 
 @router.message(FamilyStates.waiting_bind_target, F.text)
@@ -190,9 +192,20 @@ async def cb_family_bind_confirm(
 
 
 @router.callback_query(F.data == "family:bind:cancel")
-async def cb_family_bind_cancel(cq: CallbackQuery, state: FSMContext) -> None:
+async def cb_family_bind_cancel(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
     await state.clear()
     await cq.answer("Отменено")
+    if await reject_if_no_user(cq, db_user):
+        return
+    assert db_user is not None
+    if cq.message:
+        await delete_message_safe(cq.message)
+    await _show_family_menu(cq, session, db_user, get_settings())
 
 
 @router.callback_query(F.data == "family:members")
@@ -221,7 +234,27 @@ async def cb_family_unbind(cq: CallbackQuery, state: FSMContext, db_user: User |
     await state.set_state(FamilyStates.waiting_unbind_target)
     await cq.answer()
     if cq.message:
-        await cq.message.answer(FAMILY_ASK_UNBIND)
+        await delete_message_safe(cq.message)
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:unbind:cancel"))
+        await cq.message.answer(FAMILY_ASK_UNBIND, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "family:unbind:cancel")
+async def cb_family_unbind_cancel(
+    cq: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    db_user: User | None,
+) -> None:
+    await state.clear()
+    await cq.answer("Отменено")
+    if await reject_if_no_user(cq, db_user):
+        return
+    assert db_user is not None
+    if cq.message:
+        await delete_message_safe(cq.message)
+    await _show_family_menu(cq, session, db_user, get_settings())
 
 
 @router.message(FamilyStates.waiting_unbind_target, F.text)

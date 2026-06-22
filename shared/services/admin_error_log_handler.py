@@ -2,20 +2,29 @@
 
 Подключается один раз на процесс (install_admin_error_log_handler) — ловит
 logger.error()/logger.exception() из любого модуля так же, как остальные
-уведомления уходят в notify_admin_plain.
+уведомления уходят в тему форума. Текст ошибки оборачивается в `код`,
+чтобы его можно было скопировать одним тапом; если он не помещается
+в одно сообщение — отправляется файлом error.log.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 import traceback
+from pathlib import Path
 
 from shared.config import Settings, get_settings
+from shared.md2 import bold, code
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
+from shared.services.admin_notify import _admin_chat_configured
+from shared.services.telegram_notify import send_telegram_document, send_telegram_message
 
 _INSTALLED = False
+
+# Сообщение целиком не должно превышать лимит Telegram (4096) — оставляем запас под обёртку.
+_MAX_INLINE_BODY = 3500
 
 # Модули, чьи ошибки нельзя пересылать — иначе при сбое самой отправки
 # получаем бесконечную рекурсию логов.
@@ -23,8 +32,6 @@ _SUPPRESSED_LOGGERS = {
     "shared.services.telegram_notify",
     "shared.services.admin_notify",
     "shared.services.admin_error_log_handler",
-    "httpx",
-    "httpcore",
 }
 
 
@@ -34,38 +41,62 @@ class AdminErrorTelegramHandler(logging.Handler):
         self._settings = settings
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.name in _SUPPRESSED_LOGGERS or record.name.startswith("httpx") or record.name.startswith("httpcore"):
+        if (
+            record.name in _SUPPRESSED_LOGGERS
+            or record.name.startswith("httpx")
+            or record.name.startswith("httpcore")
+        ):
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
         try:
-            text = self._format_plain(record)
+            header, body = self._format(record)
         except Exception:
             return
-        loop.create_task(self._send(text))
+        loop.create_task(self._send(header, body))
 
-    def _format_plain(self, record: logging.LogRecord) -> str:
+    def _format(self, record: logging.LogRecord) -> tuple[str, str]:
         message = record.getMessage()
-        lines = [
-            "🛑 Ошибка",
-            f"logger: {record.name}",
-            f"{message}",
-        ]
+        header = f"logger: {record.name}"
+        body = message
         if record.exc_info:
             tb = "".join(traceback.format_exception(*record.exc_info))
-            lines.append(tb[-3000:])
-        return "\n".join(lines)
+            body = f"{message}\n\n{tb}" if message else tb
+        return header, body
 
-    async def _send(self, text: str) -> None:
+    async def _send(self, header: str, body: str) -> None:
+        if not _admin_chat_configured(self._settings):
+            return
+        chat_id = self._settings.admin_log_chat_id
+        thread = self._settings.admin_log_thread_for(AdminLogTopic.ERRORS)
         try:
-            await notify_admin_plain(
-                self._settings,
-                text=text,
-                topic=AdminLogTopic.ERRORS,
-                event_type="error_log",
-            )
+            if len(body) <= _MAX_INLINE_BODY:
+                text = f"🛑 {bold('Ошибка')}\n{header}\n{code(body)}"
+                await send_telegram_message(
+                    chat_id,
+                    text,
+                    message_thread_id=thread,
+                    parse_mode="MarkdownV2",
+                    settings=self._settings,
+                )
+            else:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".log", prefix="error_", delete=False, encoding="utf-8"
+                ) as f:
+                    f.write(body)
+                    path = Path(f.name)
+                try:
+                    await send_telegram_document(
+                        chat_id,
+                        path,
+                        caption=f"🛑 Ошибка\n{header}",
+                        message_thread_id=thread,
+                        settings=self._settings,
+                    )
+                finally:
+                    path.unlink(missing_ok=True)
         except Exception:
             pass
 
