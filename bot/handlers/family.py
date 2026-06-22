@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,11 @@ from bot.messages import (
     TRANSFER_ONLY_OWNER,
 )
 from bot.states.family import FamilyStates, TransferStates
-from bot.utils.screen_photo import answer_callback_with_photo_screen, delete_message_safe
+from bot.utils.screen_photo import (
+    answer_callback_with_photo_screen,
+    delete_chat_message_safe,
+    delete_message_safe,
+)
 from shared.config import Settings, get_settings
 from shared.md2 import join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
@@ -51,16 +55,30 @@ from shared.services.user_lookup_service import find_user_by_tg_or_username, use
 router = Router(name="family")
 
 
-def _family_menu_kb(*, is_owner: bool, is_member: bool) -> InlineKeyboardBuilder:
+def _family_menu_kb(*, is_owner: bool, is_member: bool, member_count: int = 0) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     if is_owner:
         b.row(InlineKeyboardButton(text=FAMILY_BTN_BIND, callback_data="family:bind"))
         b.row(InlineKeyboardButton(text=FAMILY_BTN_MEMBERS, callback_data="family:members"))
-        b.row(InlineKeyboardButton(text=FAMILY_BTN_UNBIND, callback_data="family:unbind"))
+        if member_count > 0:
+            b.row(InlineKeyboardButton(text=FAMILY_BTN_UNBIND, callback_data="family:unbind"))
     if is_member:
         b.row(InlineKeyboardButton(text=FAMILY_BTN_LEAVE, callback_data="family:leave"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main", style="danger"))
     return b
+
+
+def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=callback_data))
+    return b.as_markup()
+
+
+async def _delete_ask_message(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ask_id = data.get("ask_msg_id")
+    if ask_id:
+        await delete_chat_message_safe(message.bot, message.chat.id, int(ask_id))
 
 
 def _confirm_kb(prefix: str, target_id: int) -> InlineKeyboardBuilder:
@@ -83,6 +101,7 @@ async def _show_family_menu(
     is_owner = membership is None and await get_active_subscription(session, db_user.id, account_scope=False) is not None
     sub = await get_active_subscription(session, db_user.id, account_scope=False) if is_owner else None
     extra = ""
+    used = 0
     if sub is not None:
         limit = max_family_extra_members(int(sub.devices_count))
         used = await count_family_members(session, owner_user_id=db_user.id)
@@ -95,7 +114,7 @@ async def _show_family_menu(
     await answer_callback_with_photo_screen(
         cq,
         caption=cap,
-        reply_markup=_family_menu_kb(is_owner=is_owner, is_member=is_member).as_markup(),
+        reply_markup=_family_menu_kb(is_owner=is_owner, is_member=is_member, member_count=used).as_markup(),
         settings=settings,
     )
 
@@ -120,9 +139,10 @@ async def cb_family_bind(cq: CallbackQuery, state: FSMContext, db_user: User | N
     await cq.answer()
     if cq.message:
         await delete_message_safe(cq.message)
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:bind:cancel"))
-        await cq.message.answer(plain(FAMILY_ASK_TARGET), reply_markup=b.as_markup())
+        sent = await cq.message.answer(
+            plain(FAMILY_ASK_TARGET), reply_markup=_back_kb("family:bind:cancel")
+        )
+        await state.update_data(ask_msg_id=sent.message_id)
 
 
 @router.message(FamilyStates.waiting_bind_target, F.text)
@@ -134,13 +154,14 @@ async def msg_family_bind_target(
 ) -> None:
     if db_user is None or message.from_user is None:
         return
+    await _delete_ask_message(message, state)
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(plain(FAMILY_NOT_FOUND))
+        await message.answer(plain(FAMILY_NOT_FOUND), reply_markup=_back_kb("family:bind"))
         return
     ok, err = await family_bind_allowed(session, owner=db_user, member=target)
     if not ok:
-        await message.answer(plain(err))
+        await message.answer(plain(err), reply_markup=_back_kb("family:bind"))
         await state.clear()
         return
     await state.update_data(family_target_id=target.id)
@@ -228,16 +249,24 @@ async def cb_family_members(cq: CallbackQuery, session: AsyncSession, db_user: U
 
 
 @router.callback_query(F.data == "family:unbind")
-async def cb_family_unbind(cq: CallbackQuery, state: FSMContext, db_user: User | None) -> None:
+async def cb_family_unbind(
+    cq: CallbackQuery, session: AsyncSession, state: FSMContext, db_user: User | None
+) -> None:
     if await reject_if_no_user(cq, db_user):
+        return
+    assert db_user is not None
+    used = await count_family_members(session, owner_user_id=db_user.id)
+    if used <= 0:
+        await cq.answer("Участников пока нет.", show_alert=True)
         return
     await state.set_state(FamilyStates.waiting_unbind_target)
     await cq.answer()
     if cq.message:
         await delete_message_safe(cq.message)
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="family:unbind:cancel"))
-        await cq.message.answer(plain(FAMILY_ASK_UNBIND), reply_markup=b.as_markup())
+        sent = await cq.message.answer(
+            plain(FAMILY_ASK_UNBIND), reply_markup=_back_kb("family:unbind:cancel")
+        )
+        await state.update_data(ask_msg_id=sent.message_id)
 
 
 @router.callback_query(F.data == "family:unbind:cancel")
@@ -266,13 +295,16 @@ async def msg_family_unbind_target(
 ) -> None:
     if db_user is None:
         return
+    await _delete_ask_message(message, state)
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(plain(FAMILY_NOT_FOUND))
+        await message.answer(plain(FAMILY_NOT_FOUND), reply_markup=_back_kb("family:unbind"))
         return
     membership = await get_family_membership(session, user_id=target.id)
     if membership is None or membership.owner_user_id != db_user.id:
-        await message.answer(plain("Этот пользователь не в вашей семье."))
+        await message.answer(
+            plain("Этот пользователь не в вашей семье."), reply_markup=_back_kb("family:unbind")
+        )
         await state.clear()
         return
     settings = get_settings()
@@ -342,9 +374,10 @@ async def cb_transfer_start(
     await cq.answer()
     if cq.message:
         await delete_message_safe(cq.message)
-        _back_kb = InlineKeyboardBuilder()
-        _back_kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="sub:transfer:cancel"))
-        await cq.message.answer(plain(TRANSFER_ASK_TARGET), reply_markup=_back_kb.as_markup())
+        sent = await cq.message.answer(
+            plain(TRANSFER_ASK_TARGET), reply_markup=_back_kb("sub:transfer:cancel")
+        )
+        await state.update_data(ask_msg_id=sent.message_id)
 
 
 @router.callback_query(F.data == "sub:transfer:cancel")
@@ -381,12 +414,15 @@ async def msg_transfer_recipient(
         await message.answer(plain("Нет активной подписки."))
         await state.clear()
         return
+    await _delete_ask_message(message, state)
     target = await find_user_by_tg_or_username(session, message.text or "")
     if target is None:
-        await message.answer(plain(FAMILY_NOT_FOUND))
+        await message.answer(plain(FAMILY_NOT_FOUND), reply_markup=_back_kb("sub:transfer"))
         return
     if target.id == db_user.id:
-        await message.answer(plain("Нельзя передать подписку самому себе."))
+        await message.answer(
+            plain("Нельзя передать подписку самому себе."), reply_markup=_back_kb("sub:transfer")
+        )
         return
     exp = sub.expires_at.strftime("%d.%m.%Y %H:%M UTC")
     cap = plain(
