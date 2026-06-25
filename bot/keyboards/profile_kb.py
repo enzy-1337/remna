@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from shared.config import get_settings
 
 
 def profile_main_keyboard(
@@ -14,6 +16,14 @@ def profile_main_keyboard(
     show_welcome_topup: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    site = (get_settings().public_site_url or "").strip().rstrip("/")
+    if site:
+        b.row(
+            InlineKeyboardButton(
+                text="🚀 Открыть приложение",
+                web_app=WebAppInfo(url=f"{site}/miniapp"),
+            )
+        )
     if show_welcome_topup:
         b.row(
             InlineKeyboardButton(
