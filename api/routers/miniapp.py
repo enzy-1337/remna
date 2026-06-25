@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -50,6 +51,21 @@ from shared.tickets_db_compat import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+_MD2_ESCAPED_CHAR_RE = re.compile(r"\\([_*\[\]()~`>#+\-=|{}.!\\])")
+_MD2_MARKER_RE = re.compile(r"[*_~`]")
+
+
+def _md2_to_plain(text_value: str | None) -> str | None:
+    """Сервисные функции возвращают сообщения, экранированные под Telegram MarkdownV2
+    (bold()/plain() из shared.md2). Для отображения в мини-аппе (обычный текст, не Telegram)
+    нужно снять экранирование и убрать маркеры разметки."""
+    if not text_value:
+        return text_value
+    s = _MD2_ESCAPED_CHAR_RE.sub(r"\1", text_value)
+    s = _MD2_MARKER_RE.sub("", s)
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +256,7 @@ async def api_context(
 
 class BuyPlanIn(BaseModel):
     plan_id: int
+    idempotency_key: str | None = None
 
 
 @router.post("/api/plan/buy")
@@ -259,9 +276,10 @@ async def api_plan_buy(
             plan_id=body.plan_id,
             telegram_id=auth.telegram_id,
             settings=settings,
+            idempotency_key=body.idempotency_key,
         )
         await session.commit()
-        return JSONResponse({"ok": ok, "message": message, "kind": kind})
+        return JSONResponse({"ok": ok, "message": _md2_to_plain(message), "kind": kind})
 
 
 class TopupIn(BaseModel):
@@ -429,11 +447,12 @@ async def api_devices_unbind(
             session, user=user, hwid=body.hwid, settings=settings, initiator="miniapp"
         )
         await session.commit()
-        return JSONResponse({"ok": ok, "message": message})
+        return JSONResponse({"ok": ok, "message": _md2_to_plain(message)})
 
 
 class BuySlotsIn(BaseModel):
     quantity: int = 1
+    idempotency_key: str | None = None
 
 
 @router.post("/api/devices/buy-slots")
@@ -448,10 +467,14 @@ async def api_devices_buy_slots(
     async with factory() as session:
         user = await _get_or_create_db_user(session, auth)
         ok, message = await add_paid_device_slots(
-            session, user=user, settings=settings, quantity=max(1, int(body.quantity))
+            session,
+            user=user,
+            settings=settings,
+            quantity=max(1, int(body.quantity)),
+            idempotency_key=body.idempotency_key,
         )
         await session.commit()
-        return JSONResponse({"ok": ok, "message": message})
+        return JSONResponse({"ok": ok, "message": _md2_to_plain(message)})
 
 
 @router.post("/api/trial/activate")
@@ -631,7 +654,7 @@ _SHELL_HTML = r"""<!DOCTYPE html>
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;-webkit-font-smoothing:antialiased;overscroll-behavior:none;}
 .mono{font-family:'JetBrains Mono',monospace;}
 #app{min-height:100vh;display:flex;flex-direction:column;}
-.header{background:var(--header);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:space-between;padding:14px 16px;position:sticky;top:0;z-index:10;}
+.header{background:var(--header);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;position:sticky;top:0;z-index:10;}
 .header .left{display:flex;align-items:center;gap:10px;}
 .back{width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--link);}
 .brandicon{width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -686,10 +709,30 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .payrow.selected{border:1.5px solid var(--accent);}
 .empty-illustration{width:100px;height:100px;margin:0 auto;border-radius:50%;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;}
 input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:13px;padding:14px 16px;color:#fff;font:700 16px Manrope;outline:none;margin-top:10px;}
+#tg-gate{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px;text-align:center;z-index:9999;}
+#tg-gate .brandicon{width:54px;height:54px;border-radius:16px;}
+#tg-gate h1{font:800 20px Manrope;margin:0;}
+#tg-gate p{font:500 14px Manrope;color:var(--muted);margin:0;max-width:280px;line-height:1.5;}
+#tg-gate a{display:inline-block;margin-top:6px;background:var(--accent);color:#fff;text-decoration:none;padding:13px 26px;border-radius:12px;font:700 14px Manrope;}
+#splash{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:9998;}
+#splash .brandicon{width:56px;height:56px;border-radius:18px;animation:pulse 1.6s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.7;transform:scale(.94);}}
+#splash .ring{width:28px;height:28px;border-radius:50%;border:3px solid rgba(123,92,255,.18);border-top-color:var(--accent);animation:spin 0.9s linear infinite;}
+.btn[data-busy="1"]{opacity:.55;pointer-events:none;}
 </style>
 </head>
 <body>
-<div id="app">
+<div id="tg-gate" style="display:none;">
+  <div class="brandicon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
+  <h1>Откройте в Telegram</h1>
+  <p>Это мини-приложение Flux Network работает только внутри Telegram. Откройте бота и нажмите «Открыть приложение».</p>
+  <a href="https://t.me">Открыть Telegram</a>
+</div>
+<div id="splash">
+  <div class="brandicon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
+  <div class="ring"></div>
+</div>
+<div id="app" style="display:none;">
   <div class="header">
     <div class="left">
       <div class="back" id="btn-back" style="display:none;" onclick="goHome()">
@@ -746,14 +789,14 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <input class="amount" id="custom-amount" placeholder="Введите сумму, ₽" style="display:none;" inputmode="numeric">
     <div class="sectiontitle">Способ оплаты</div>
     <div style="display:flex;flex-direction:column;gap:10px;" id="paymethods">
-      <div class="payrow selected" data-provider="cryptobot">
-        <div class="navitem .ic" style="width:36px;height:36px;border-radius:10px;background:rgba(247,147,26,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="#F7931A"><circle cx="12" cy="12" r="10"/></svg></div>
-        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Криптовалюта</div><div class="muted" style="font:500 12px Manrope;">CryptoBot · USDT, TON, BTC</div></div>
-        <div class="radio" style="border:6px solid var(--accent);background:#fff;"></div>
-      </div>
-      <div class="payrow" data-provider="platega">
+      <div class="payrow selected" data-provider="platega">
         <div style="width:36px;height:36px;border-radius:10px;background:rgba(106,179,243,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6AB3F3" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Банковская карта</div><div class="muted" style="font:500 12px Manrope;">Platega · Visa, MIR, СБП</div></div>
+        <div class="radio" style="border:6px solid var(--accent);background:#fff;"></div>
+      </div>
+      <div class="payrow" data-provider="cryptobot">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(247,147,26,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="#F7931A"><circle cx="12" cy="12" r="10"/></svg></div>
+        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Криптовалюта</div><div class="muted" style="font:500 12px Manrope;">CryptoBot · USDT, TON, BTC</div></div>
         <div class="radio"></div>
       </div>
     </div>
@@ -822,11 +865,31 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
 function initData() { return (tg && tg.initData) || ''; }
 
 let CTX = null;
 let currentView = 'home';
+
+function genKey() {
+  try { return crypto.randomUUID(); } catch (e) { return 'k' + Date.now() + Math.random().toString(36).slice(2); }
+}
+function withBusy(btn, fn) {
+  return async function() {
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
+    try { await fn(); } finally { btn.dataset.busy = '0'; }
+  };
+}
+
+const TG_OK = !!(tg && initData());
+if (!TG_OK) {
+  document.getElementById('splash').style.display = 'none';
+  document.getElementById('tg-gate').style.display = 'flex';
+} else {
+  tg.ready();
+  tg.expand();
+  try { tg.requestFullscreen && tg.requestFullscreen(); } catch (e) {}
+}
 
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -958,28 +1021,37 @@ function injectBuyBar() {
   if (!plan) { bar.style.display = 'none'; return; }
   bar.style.display = currentView === 'home' ? 'block' : 'none';
   const verb = CTX.subscription ? 'Продлить' : 'Купить';
-  bar.innerHTML = `<div class="btn btn-primary" onclick="buyPlan()">${verb} · ${plan.name} — ${Math.round(parseFloat(plan.price_rub))} ₽</div>`;
+  bar.innerHTML = `<div class="btn btn-primary" id="buy-plan-btn" onclick="buyPlan()">${verb} · ${plan.name} — ${Math.round(parseFloat(plan.price_rub))} ₽</div>`;
 }
+let _buyPlanInFlight = false;
 async function buyPlan() {
-  if (!selectedPlanId) return;
+  if (!selectedPlanId || _buyPlanInFlight) return;
+  _buyPlanInFlight = true;
+  const btn = document.getElementById('buy-plan-btn');
+  if (btn) btn.dataset.busy = '1';
   try {
-    const r = await api('/api/plan/buy', {method:'POST', body: JSON.stringify({plan_id: selectedPlanId})});
+    const r = await api('/api/plan/buy', {method:'POST', body: JSON.stringify({plan_id: selectedPlanId, idempotency_key: genKey()})});
     if (r.ok) { toast('Подписка оформлена ✅'); await loadContext(); }
     else toast(r.message || 'Недостаточно средств');
   } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _buyPlanInFlight = false; }
 }
 
+let _trialInFlight = false;
 async function activateTrial() {
+  if (_trialInFlight) return;
+  _trialInFlight = true;
   try {
     const r = await api('/api/trial/activate', {method:'POST', body:'{}'});
     if (r.ok) { toast('Триал активирован ✅'); await loadContext(); }
     else toast(r.message || 'Не удалось активировать');
   } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _trialInFlight = false; }
 }
 
 // --- Balance ---
 let selectedAmount = 300;
-let selectedProvider = 'cryptobot';
+let selectedProvider = 'platega';
 document.querySelectorAll('.preset').forEach(el => el.addEventListener('click', () => {
   document.querySelectorAll('.preset').forEach(x => x.classList.remove('selected'));
   el.classList.add('selected');
@@ -1009,8 +1081,11 @@ document.querySelector('.preset[data-amount="300"]').classList.add('selected');
 function updateTopupBtn() {
   document.getElementById('btn-topup').textContent = 'Пополнить на ' + (selectedAmount || 0) + ' ₽';
 }
+let _topupInFlight = false;
 async function doTopup() {
+  if (_topupInFlight) return;
   if (!selectedAmount || selectedAmount <= 0) { toast('Укажите сумму'); return; }
+  _topupInFlight = true;
   try {
     const r = await api('/api/topup', {method:'POST', body: JSON.stringify({amount_rub: String(selectedAmount), provider: selectedProvider})});
     if (tg && tg.openLink) tg.openLink(r.pay_url); else window.open(r.pay_url, '_blank');
@@ -1021,6 +1096,7 @@ async function doTopup() {
         <div class="btn btn-ghost" style="margin-top:12px;" onclick="checkTopup(${r.transaction_id})">Проверить платёж вручную</div>
       </div>`;
   } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _topupInFlight = false; }
 }
 async function checkTopup(id) {
   try {
@@ -1049,21 +1125,27 @@ async function loadDevices() {
     document.getElementById('buy-slots-price').textContent = d.extra_slot_price_rub + ' ₽';
   } catch (e) { toast('Ошибка загрузки устройств'); }
 }
+let _buySlotInFlight = false;
 async function buySlot() {
-  if (!confirm('Добавить 1 слот устройства?')) return;
+  if (_buySlotInFlight || !confirm('Добавить 1 слот устройства?')) return;
+  _buySlotInFlight = true;
   try {
-    const r = await api('/api/devices/buy-slots', {method:'POST', body: JSON.stringify({quantity:1})});
+    const r = await api('/api/devices/buy-slots', {method:'POST', body: JSON.stringify({quantity:1, idempotency_key: genKey()})});
     toast(r.message || (r.ok ? 'Слот добавлен' : 'Ошибка'));
     if (r.ok) await loadDevices();
   } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _buySlotInFlight = false; }
 }
+let _unbindInFlight = false;
 async function unbindDevice(hwid) {
-  if (!confirm('Отвязать устройство?')) return;
+  if (_unbindInFlight || !confirm('Отвязать устройство?')) return;
+  _unbindInFlight = true;
   try {
     const r = await api('/api/devices/unbind', {method:'POST', body: JSON.stringify({hwid})});
     toast(r.ok ? 'Устройство отвязано' : (r.message || 'Ошибка'));
     await loadDevices();
   } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _unbindInFlight = false; }
 }
 
 // --- History ---
@@ -1104,15 +1186,19 @@ async function loadSupport() {
     wrap.scrollTop = wrap.scrollHeight;
   } catch (e) { toast('Ошибка загрузки чата'); }
 }
+let _sendChatInFlight = false;
 async function sendChat() {
+  if (_sendChatInFlight) return;
   const input = document.getElementById('chat-input');
   const val = input.value.trim();
   if (!val) return;
   input.value = '';
+  _sendChatInFlight = true;
   try {
     await api('/api/support/send', {method:'POST', body: JSON.stringify({text: val})});
     await loadSupport();
   } catch (e) { toast('Ошибка отправки'); }
+  finally { _sendChatInFlight = false; }
 }
 
 async function loadContext() {
@@ -1121,7 +1207,18 @@ async function loadContext() {
   renderHome();
 }
 
-loadContext().catch(e => toast('Ошибка загрузки: ' + e.message));
+async function boot() {
+  if (!TG_OK) return;
+  try {
+    await loadContext();
+  } catch (e) {
+    toast('Ошибка загрузки: ' + e.message);
+  } finally {
+    document.getElementById('splash').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+  }
+}
+boot();
 </script>
 </body>
 </html>
