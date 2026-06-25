@@ -632,7 +632,13 @@ async def api_support_send(
 @router.get("")
 @router.get("/")
 async def miniapp_shell(request: Request) -> HTMLResponse:
-    return HTMLResponse(_SHELL_HTML)
+    settings = get_settings()
+    logo_url = (settings.admin_panel_logo_url or "").strip()
+    if not logo_url.startswith(("http://", "https://")):
+        logo_url = ""
+    safe_logo_url = logo_url.replace("\\", "\\\\").replace('"', '\\"')
+    html = _SHELL_HTML.replace("__FLUX_LOGO_URL__", safe_logo_url)
+    return HTMLResponse(html)
 
 
 _SHELL_HTML = r"""<!DOCTYPE html>
@@ -640,7 +646,7 @@ _SHELL_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>Flux Network</title>
+<title>Flux VPN</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -678,6 +684,17 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .skel{background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;border-radius:12px;}
 @keyframes shimmer{0%{background-position:-300px 0;}100%{background-position:300px 0;}}
 @keyframes spin{to{transform:rotate(360deg);}}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+#app.revealed .header{animation:fadeInUp .3s ease both;}
+#app.revealed .navitem,#app.revealed .card,#app.revealed .plan,#app.revealed .history-item,#app.revealed .preset,#app.revealed .payrow,#app.revealed .bottombar .btn,#app.revealed .empty-illustration{animation:fadeInUp .4s ease both;}
+#app.revealed .navitem:nth-of-type(1){animation-delay:.03s;}
+#app.revealed .navitem:nth-of-type(2){animation-delay:.07s;}
+#app.revealed .navitem:nth-of-type(3){animation-delay:.11s;}
+#app.revealed .navitem:nth-of-type(4){animation-delay:.15s;}
+#app.revealed .plan:nth-of-type(1){animation-delay:.05s;}
+#app.revealed .plan:nth-of-type(2){animation-delay:.1s;}
+#app.revealed .plan:nth-of-type(3){animation-delay:.15s;}
+#app.revealed .bottombar{animation:fadeInUp .35s ease .1s both;}
 .spin{animation:spin 1.1s linear infinite;}
 .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#232E3C;color:#fff;padding:11px 18px;border-radius:12px;font:600 13px Manrope;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:999;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;}
 .toast.show{opacity:1;}
@@ -725,11 +742,12 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 <div id="tg-gate" style="display:none;">
   <div class="brandicon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
   <h1>Откройте в Telegram</h1>
-  <p>Это мини-приложение Flux Network работает только внутри Telegram. Откройте бота и нажмите «Открыть приложение».</p>
+  <p>Это мини-приложение Flux VPN работает только внутри Telegram. Откройте бота и нажмите «Открыть приложение».</p>
   <a href="https://t.me">Открыть Telegram</a>
 </div>
 <div id="splash">
   <div class="brandicon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
+  <div style="font:800 16px Manrope;color:#fff;letter-spacing:-.01em;">Flux VPN</div>
   <div class="ring"></div>
 </div>
 <div id="app" style="display:none;">
@@ -742,7 +760,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
       </div>
       <div>
-        <div class="title" id="view-title">Flux Network</div>
+        <div class="title" id="view-title">Flux VPN</div>
         <div class="subtitle" id="view-subtitle">мини-приложение</div>
       </div>
     </div>
@@ -802,7 +820,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div id="payment-waiting" style="display:none;margin-top:14px;"></div>
   </div>
-  <div class="bottombar" id="balance-bar">
+  <div class="bottombar" id="balance-bar" style="display:none;">
     <div class="btn btn-primary" id="btn-topup" onclick="doTopup()">Пополнить на 300 ₽</div>
   </div>
 
@@ -864,6 +882,21 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 <div class="toast" id="toast"></div>
 
 <script>
+const FLUX_LOGO_URL = "__FLUX_LOGO_URL__";
+if (FLUX_LOGO_URL) {
+  document.querySelectorAll('.brandicon').forEach(el => {
+    el.innerHTML = '';
+    el.style.background = 'none';
+    el.style.overflow = 'hidden';
+    const img = document.createElement('img');
+    img.src = FLUX_LOGO_URL;
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    img.style.borderRadius = 'inherit';
+    el.appendChild(img);
+  });
+}
 const tg = window.Telegram && window.Telegram.WebApp;
 function initData() { return (tg && tg.initData) || ''; }
 
@@ -911,12 +944,12 @@ async function api(path, opts) {
 }
 
 const VIEW_TITLES = {
-  home: ['Flux Network', 'мини-приложение'],
+  home: ['Flux VPN', 'мини-приложение'],
   balance: ['Баланс', ''],
   devices: ['Устройства', ''],
   history: ['История операций', ''],
   support: ['Поддержка Flux', 'отвечает быстро'],
-  empty: ['Flux Network', 'мини-приложение'],
+  empty: ['Flux VPN', 'мини-приложение'],
 };
 
 function showView(name) {
@@ -928,7 +961,7 @@ function showView(name) {
   if (name === 'support') { document.getElementById('support-bar').style.display = 'flex'; loadSupport(); }
   if (name === 'devices') loadDevices();
   if (name === 'history') loadHistory();
-  const t = VIEW_TITLES[name] || ['Flux Network', ''];
+  const t = VIEW_TITLES[name] || ['Flux VPN', ''];
   document.getElementById('view-title').textContent = t[0];
   document.getElementById('view-subtitle').textContent = t[1];
   document.getElementById('btn-back').style.display = name === 'home' ? 'none' : 'flex';
@@ -1215,7 +1248,9 @@ async function boot() {
     toast('Ошибка загрузки: ' + e.message);
   } finally {
     document.getElementById('splash').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
+    const appEl = document.getElementById('app');
+    appEl.style.display = 'flex';
+    requestAnimationFrame(() => appEl.classList.add('revealed'));
   }
 }
 boot();
