@@ -142,6 +142,78 @@ def _format_rub(balance: Decimal | int | float | None) -> str:
     return f"{b} ₽"
 
 
+# Единая тема для публичных страниц /sub/{token} — в стиле Telegram Mini App (Flux VPN).
+# Имена классов совпадают со старой вёрсткой страниц, поэтому HTML почти не меняется,
+# а внешний вид приводится к мини-аппу. Внутри — обычные одинарные {} (не f-string).
+_FLUX_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+:root{
+  color-scheme: dark;
+  --bg:#0E1621; --header:#17212B; --card:#232E3C; --card2:#1b2430; --line:rgba(255,255,255,.06);
+  --text:#ffffff; --muted:#708499; --accent:#7B5CFF; --accent2:#5436C9; --link:#6AB3F3;
+  --danger:#FF6B6B; --warn:#F5B544; --green:#7B5CFF;
+  --blue:#7B5CFF; --blue2:#5436C9;
+}
+*{box-sizing:border-box;}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);
+  font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;}
+.mono{font-family:'JetBrains Mono',monospace;}
+.wrap{max-width:430px;margin:0 auto;padding:18px 14px 96px;}
+.brand{display:flex;align-items:center;gap:10px;font:800 22px Manrope;margin:2px 0 16px;letter-spacing:-.01em;}
+.brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(140deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.brand span{margin:0;color:inherit;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px;}
+.card.accent{background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border-color:rgba(123,92,255,.22);}
+.badge{display:inline-block;background:rgba(123,92,255,.14);color:var(--accent);border:1px solid rgba(123,92,255,.25);
+  padding:5px 11px;border-radius:999px;font:700 13px Manrope;margin-bottom:10px;}
+.days{font:800 42px Manrope;line-height:1;letter-spacing:-.02em;margin:4px 0 6px;}
+.subid{color:var(--muted);font:500 15px Manrope;}
+.title{color:var(--muted);font:700 12px Manrope;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;}
+.row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line);font:600 15px Manrope;}
+.row:first-of-type{border-top:0;}
+.label{color:var(--muted);font-weight:500;}
+.value{text-align:right;font-weight:700;}
+.muted{color:var(--muted);font:500 14px Manrope;line-height:1.45;}
+.actions{display:grid;gap:10px;margin-top:14px;margin-bottom:20px;}
+.btn{display:flex;justify-content:center;align-items:center;min-height:50px;border-radius:12px;text-decoration:none;
+  font:700 15px Manrope;border:1px solid var(--line);cursor:pointer;}
+.btn-primary{background:var(--accent);color:#fff;border:0;}
+.btn-primary:active{opacity:.85;}
+.btn-outline{background:var(--card);color:#fff;}
+.btn-back{display:flex;justify-content:center;align-items:center;min-height:48px;margin-top:14px;border-radius:12px;
+  text-decoration:none;color:var(--link);border:1px solid var(--line);font:700 15px Manrope;background:transparent;}
+.tariffs{display:grid;gap:10px;margin-top:14px;}
+.btn-tariff{width:100%;min-height:54px;border-radius:14px;border:1px solid var(--line);background:var(--card2);
+  color:#fff;font:700 16px Manrope;cursor:pointer;}
+.btn-tariff:active{border-color:var(--accent);}
+.btn-tariff-disabled{opacity:.45;cursor:not-allowed;color:var(--muted);}
+.error-box{background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.3);color:#ffd2d2;
+  padding:11px 13px;border-radius:12px;margin-bottom:12px;font:600 13px Manrope;}
+.ok-box{background:rgba(123,92,255,.12);border:1px solid rgba(123,92,255,.3);color:var(--accent);
+  padding:11px 13px;border-radius:12px;margin-bottom:12px;font:600 13px Manrope;}
+.hotbar{position:fixed;left:0;right:0;bottom:0;border-top:1px solid var(--line);
+  background:rgba(23,33,43,.95);backdrop-filter:blur(12px);padding:10px 14px calc(12px + env(safe-area-inset-bottom));}
+.hotbar-inner{max-width:430px;margin:0 auto;display:grid;gap:8px;}
+.hotbar-inner.cols3{grid-template-columns:1fr 1fr 1fr;}
+.hotbar-inner.cols2{grid-template-columns:1fr 1fr;}
+.hotbtn{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:12px;min-height:46px;
+  display:flex;align-items:center;justify-content:center;font:600 13px Manrope;background:rgba(255,255,255,.02);}
+.hotbtn.active{color:#fff;border-color:rgba(123,92,255,.45);background:rgba(123,92,255,.18);}
+"""
+
+
+def _flux_brand(title: str = "Flux VPN") -> str:
+    """Шапка с логотипом-плиткой как в мини-аппе."""
+    return (
+        '<h1 class="brand"><span class="logo">'
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>'
+        f'</span><span>{_esc(title)}</span></h1>'
+    )
+
+
 def _subscription_page(
     *,
     token: str,
@@ -179,149 +251,13 @@ def _subscription_page(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>Flux Network — подписка</title>
-  <style>
-    :root {{
-      color-scheme: dark;
-      --bg: #060a1b;
-      --card: #0b1328;
-      --card2: #0f1a34;
-      --line: rgba(148, 163, 184, 0.15);
-      --text: #e8edf6;
-      --muted: #95a3bf;
-      --blue: #2b78ff;
-      --blue2: #1f68e8;
-      --green: #22c55e;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
-      color: var(--text);
-      min-height: 100vh;
-    }}
-    .wrap {{
-      max-width: 430px;
-      margin: 0 auto;
-      padding: 20px 14px 24px;
-    }}
-    .brand {{
-      font-size: 30px;
-      font-weight: 700;
-      margin: 4px 0 14px;
-      letter-spacing: 0.2px;
-    }}
-    .brand span {{ color: #f4cc44; margin-right: 6px; }}
-    .card {{
-      background: linear-gradient(180deg, var(--card), #091021);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }}
-    .badge {{
-      display: inline-block;
-      background: rgba(34, 197, 94, 0.17);
-      color: #7ff0a8;
-      border: 1px solid rgba(34, 197, 94, 0.3);
-      padding: 6px 11px;
-      border-radius: 999px;
-      font-size: 14px;
-      margin-bottom: 10px;
-    }}
-    .days {{
-      font-size: 44px;
-      line-height: 1;
-      font-weight: 700;
-      margin: 4px 0 6px;
-    }}
-    .subid {{ color: var(--muted); font-size: 16px; }}
-    .title {{
-      color: var(--muted);
-      font-size: 14px;
-      letter-spacing: 0.9px;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }}
-    .row {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px 0;
-      border-top: 1px solid var(--line);
-      font-size: 20px;
-    }}
-    .row:first-of-type {{ border-top: 0; }}
-    .label {{ color: var(--muted); }}
-    .value {{ text-align: right; font-weight: 600; }}
-    .actions {{
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-      margin-bottom: 90px;
-    }}
-    .btn {{
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 52px;
-      border-radius: 12px;
-      text-decoration: none;
-      font-size: 22px;
-      font-weight: 600;
-      border: 1px solid rgba(255,255,255,0.12);
-    }}
-    .btn-primary {{
-      background: linear-gradient(180deg, var(--blue), var(--blue2));
-      color: #fff;
-      border: 0;
-    }}
-    .btn-outline {{
-      background: transparent;
-      color: #d8e3fa;
-    }}
-    .hotbar {{
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      border-top: 1px solid var(--line);
-      background: rgba(7, 12, 28, 0.95);
-      backdrop-filter: blur(8px);
-      padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-    }}
-    .hotbar-inner {{
-      max-width: 430px;
-      margin: 0 auto;
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 6px;
-    }}
-    .hotbtn {{
-      text-decoration: none;
-      color: #c8d5ef;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      min-height: 46px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 600;
-      background: rgba(15, 26, 52, 0.55);
-    }}
-    .hotbtn.active {{
-      color: #fff;
-      border-color: rgba(86, 135, 255, 0.45);
-      background: rgba(39, 101, 224, 0.35);
-    }}
-  </style>
+  <title>Flux VPN — подписка</title>
+  <style>{_FLUX_CSS}</style>
 </head>
 <body>
   <main class="wrap">
-    <h1 class="brand"><span>⚡</span>Flux Network</h1>
-    <section class="card">
+    {_flux_brand()}
+    <section class="card accent">
       <div class="badge">{_esc(active_badge)}</div>
       <div class="days">{_esc(headline_value)}</div>
       {hint_html}
@@ -340,7 +276,7 @@ def _subscription_page(
     </section>
   </main>
   <nav class="hotbar">
-    <div class="hotbar-inner">
+    <div class="hotbar-inner cols3">
       <a class="hotbtn active" href="/sub/{_esc(token)}">Подписка</a>
       <a class="hotbtn" href="{devices_href}">Устройства</a>
       <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>

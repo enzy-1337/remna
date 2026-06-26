@@ -33,12 +33,16 @@ from shared.services.hwid_devices_service import (
 )
 from shared.services.subscription_service import (
     add_paid_device_slots,
+    get_one_month_reference_plan,
     list_paid_plans,
     purchase_plan_with_balance,
     remove_hwid_device_from_panel,
     resolve_user_plan_price_rub,
     set_subscription_auto_renew,
+    tariff_duration_months,
+    user_custom_month_price_rub,
 )
+from shared.services.promo_service import get_pending_purchase_discount_info
 from shared.services.topup_service import create_topup_payment
 from shared.services.trial_service import activate_trial, has_active_subscription, trial_eligible
 from shared.services.user_registration import get_user_by_telegram_id
@@ -179,6 +183,26 @@ async def _get_active_subscription(session: AsyncSession, user_id: int) -> Subsc
     return r.scalar_one_or_none()
 
 
+async def _pending_topup_bonus_percent(session: AsyncSession, user_id: int) -> Decimal:
+    """Активный (ещё не применённый) промокод типа topup_bonus_percent — % бонуса к будущему пополнению."""
+    from shared.models.promo import PromoCode, PromoUsage
+
+    row = (
+        await session.execute(
+            select(PromoCode.value)
+            .join(PromoUsage, PromoUsage.promo_id == PromoCode.id)
+            .where(
+                PromoUsage.user_id == user_id,
+                PromoCode.type == "topup_bonus_percent",
+                PromoUsage.topup_bonus_applied_at.is_(None),
+            )
+            .order_by(PromoUsage.id.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return Decimal(str(row)) if row is not None else Decimal("0")
+
+
 # ---------------------------------------------------------------------------
 # JSON API
 # ---------------------------------------------------------------------------
@@ -198,23 +222,47 @@ async def api_context(
         has_active = sub is not None
         trial_ok = trial_eligible(user, has_active)
 
+        # Базовая месячная цена для расчёта «цены без скидки» (зачёркнутой).
+        ref_plan = await get_one_month_reference_plan(session)
+        custom_month = user_custom_month_price_rub(user)
+        base_month = custom_month if custom_month is not None else (ref_plan.price_rub if ref_plan else Decimal("0"))
+        # Промокод-скидка на тариф (если активирован, ещё не использован) — складывается поверх скидки тарифа.
+        _promo_code, promo_discount_pct = await get_pending_purchase_discount_info(session, user_id=user.id)
+
         plans = await list_paid_plans(session)
         plans_out = []
         for p in plans:
-            price = await resolve_user_plan_price_rub(session, user, p)
+            # Цена с учётом скидки тарифа + персональной скидки (как при покупке).
+            price_after_plan = await resolve_user_plan_price_rub(session, user, p)
+            # Промокод на тариф применяется поверх — итог к оплате.
+            final_price = price_after_plan
+            if promo_discount_pct > 0:
+                final_price = (price_after_plan * (Decimal("100") - promo_discount_pct) / Decimal("100")).quantize(Decimal("1"))
+            # «Цена без скидки» = базовый месяц × число месяцев.
+            months = tariff_duration_months(p.duration_days)
+            original_price = (base_month * months).quantize(Decimal("1")) if base_month > 0 else final_price
+            if original_price < final_price:
+                original_price = final_price
+            eff_discount = 0
+            if original_price > 0 and final_price < original_price:
+                eff_discount = int(round(float((original_price - final_price) / original_price * 100)))
             plans_out.append(
                 {
                     "id": p.id,
                     "name": p.name,
                     "duration_days": p.duration_days,
-                    "price_rub": str(price),
-                    "catalog_price_rub": str(p.price_rub),
-                    "discount_percent": str(p.discount_percent or 0),
+                    "price_rub": str(final_price),
+                    "original_price_rub": str(original_price),
+                    "discount_percent": str(eff_discount),
                     "traffic_limit_gb": p.traffic_limit_gb,
                     "device_limit": p.device_limit,
                     "monthly_gb_limit": p.monthly_gb_limit,
                 }
             )
+
+        pending_topup_bonus_pct = await _pending_topup_bonus_percent(session, user.id)
+        referrals_count = await count_invited_users(session, user.id)
+        referrals_earned = await sum_referrer_bonus_rub(session, user.id)
 
         devices_used = 0
         devices_total = sub.devices_count if sub else 0
@@ -269,6 +317,9 @@ async def api_context(
                 "trial_duration_days": settings.trial_duration_days,
                 "trial_traffic_gb": settings.trial_traffic_gb,
                 "included_device_slots": settings.subscription_included_device_slots,
+                "pending_topup_bonus_percent": str(pending_topup_bonus_pct),
+                "referrals_count": referrals_count,
+                "referrals_earned_rub": str(referrals_earned),
                 "plans": plans_out,
             }
         )
@@ -985,7 +1036,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 #app{min-height:100vh;display:flex;flex-direction:column;}
 .header{background:var(--header);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;position:sticky;top:0;z-index:10;}
 .header .left{display:flex;align-items:center;gap:10px;}
-.brandicon{width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.brandicon{width:38px;height:38px;border-radius:11px;background:linear-gradient(140deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .title{font:700 16px Manrope;color:#fff;}
 .subtitle{font:500 11px Manrope;color:var(--muted);margin-top:1px;}
 .view{display:none;padding:14px 14px 28px;flex:1;}
@@ -1052,6 +1103,8 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .bubble.op{align-self:flex-start;background:var(--card);border-radius:16px 16px 16px 4px;}
 .bubble.me{align-self:flex-end;background:var(--accent);color:#fff;border-radius:16px 16px 4px 16px;}
 .bubbletime{font:500 10px Manrope;opacity:.6;text-align:right;margin-top:4px;}
+.bubble-text{white-space:pre-wrap;word-break:break-word;}
+.chat-media-wrap+.bubble-text,.bubble audio.chat-media-audio+.bubble-text,.bubble video.chat-media-vidnote+.bubble-text{margin-top:6px;}
 .inputbar{display:flex;align-items:center;gap:10px;background:var(--header);padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid rgba(255,255,255,.05);position:sticky;bottom:0;}
 .inputbar input{flex:1;background:var(--bg);border:none;border-radius:20px;padding:11px 16px;color:#fff;font:500 14px Manrope;outline:none;}
 .sendbtn{color:var(--accent);cursor:pointer;flex-shrink:0;}
@@ -1068,6 +1121,21 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .bubble img.chat-media-img:not(.media-loaded),.bubble video.chat-media-video:not(.media-loaded),.bubble video.chat-media-vidnote:not(.media-loaded){background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;}
 .media-loaded{opacity:1 !important;}
 .bubble audio.chat-media-audio{width:220px;margin-top:6px;}
+.va-player{margin-top:6px;min-width:210px;max-width:270px;}
+.va-name{font:600 12px Manrope;opacity:.85;margin-bottom:5px;word-break:break-word;}
+.va-row{display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.18);border-radius:14px;padding:8px 11px;}
+.bubble.me .va-row{background:rgba(255,255,255,.16);}
+.va-audio{display:none;}
+.va-play{width:34px;height:34px;border-radius:50%;border:none;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;padding:0;}
+.bubble.me .va-play{background:#fff;color:var(--accent);}
+.va-play svg{width:16px;height:16px;display:block;}
+.va-track{flex:1;height:4px;border-radius:3px;background:rgba(255,255,255,.28);position:relative;cursor:pointer;}
+.bubble.op .va-track{background:rgba(255,255,255,.18);}
+.va-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:#fff;width:0%;}
+.bubble.op .va-fill{background:var(--accent);}
+.va-time{font-size:11px;opacity:.85;min-width:34px;text-align:right;}
+.va-dl{width:22px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:.7;flex-shrink:0;}
+.va-dl img{width:13px;height:13px;}
 .bubble .chat-media-doc{display:flex;align-items:center;gap:8px;margin-top:6px;background:rgba(0,0,0,.15);border-radius:10px;padding:8px 12px;text-decoration:none;color:inherit;}
 .chat-media-wrap{position:relative;display:inline-block;margin-top:6px;}
 .chat-media-dl{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;cursor:pointer;}
@@ -1135,12 +1203,12 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Быстрый доступ</div>
     <div class="navgrid">
       <div class="navitem" onclick="showView('referrals')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11a4 4 0 1 0-8 0M3 20a6 6 0 0 1 18 0"/><circle cx="18" cy="7" r="3"/></svg></div>
+        <div class="ic"><img src="/assets/miniapp_icons/user-account-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div><div class="lbl">Рефералы</div><div class="sub" id="home-ref-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('support')">
         <div class="ic"><img src="/assets/miniapp_icons/chat-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
-        <div><div class="lbl">Поддержка</div><div class="sub">онлайн</div></div>
+        <div><div class="lbl">Поддержка</div><div class="sub">напишите нам</div></div>
       </div>
       <div class="navitem" onclick="showView('devices')">
         <div class="ic"><img src="/assets/miniapp_icons/monitor-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
@@ -1160,16 +1228,17 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle" id="plans-title" style="display:none;">Выберите тариф</div>
     <div id="plans-list"></div>
     <div class="card" style="margin-top:16px;padding:6px 4px;">
-      <div class="row" style="padding:11px 14px;">
+      <div class="row" id="autorenew-row" style="padding:11px 14px;">
         <span style="font:600 14px Manrope;color:#fff;">Автопродление</span>
         <div class="spacer"></div>
         <div class="toggle off" id="autorenew-toggle" onclick="toggleAutoRenew()"><div class="knob"></div></div>
       </div>
-      <div style="height:1px;background:rgba(255,255,255,.05);margin:0 14px;"></div>
+      <div id="autorenew-divider" style="height:1px;background:rgba(255,255,255,.05);margin:0 14px;"></div>
       <div class="promo-row">
         <input class="promo-input" id="promo-input" placeholder="Промокод">
         <div class="copybtn" onclick="applyPromo()">Применить</div>
       </div>
+      <div id="promo-active-note" style="display:none;padding:0 14px 10px;font:600 12px Manrope;color:var(--accent);"></div>
     </div>
   </div>
 
@@ -1210,6 +1279,10 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
       <div class="preset" data-amount="custom">Своя</div>
     </div>
     <input class="amount" id="custom-amount" placeholder="Введите сумму, ₽" style="display:none;" inputmode="numeric">
+    <div id="topup-bonus-note" style="display:none;margin-top:10px;background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.25);border-radius:13px;padding:11px 14px;align-items:center;gap:9px;">
+      <img src="/assets/miniapp_icons/gift-100.png" style="width:18px;height:18px;object-fit:contain;" alt="">
+      <span id="topup-bonus-text" style="font:600 12px Manrope;color:var(--accent);"></span>
+    </div>
     <div class="sectiontitle">Способ оплаты</div>
     <div style="display:flex;flex-direction:column;gap:10px;" id="paymethods">
       <div class="payrow selected" data-provider="platega">
@@ -1271,24 +1344,16 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 
   <!-- EMPTY (no subscription) -->
   <div class="view" id="view-empty">
-    <div style="text-align:center;padding:30px 10px 0;">
+    <div style="text-align:center;padding:48px 10px 0;">
       <div class="empty-illustration">
         <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#4a5d70" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
       </div>
       <div style="font:800 22px Manrope;color:#fff;margin-top:22px;">Подписки пока нет</div>
-      <div class="muted" style="font:500 14px Manrope;margin-top:8px;padding:0 16px;line-height:1.45;">Активируйте бесплатный триал или оформите подписку</div>
-    </div>
-    <div class="card" id="trial-card" style="margin-top:26px;background:linear-gradient(130deg, rgba(123,92,255,.18), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.3);">
-      <div class="row">
-        <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.18);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/gift-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
-        <div><div style="font:800 16px Manrope;color:#fff;">Бесплатный триал</div><div style="font:600 12px Manrope;color:var(--accent);">разовое предложение</div></div>
-      </div>
-      <div class="row" style="margin-top:14px;gap:10px;" id="trial-stats"></div>
+      <div class="muted" style="font:500 14px Manrope;margin-top:8px;padding:0 16px;line-height:1.45;">Оформите подписку, чтобы начать пользоваться VPN</div>
     </div>
   </div>
   <div class="bottombar" id="empty-bar" style="display:none;flex-direction:column;gap:10px;">
-    <div class="btn btn-primary" id="btn-activate-trial" onclick="activateTrial()">Активировать триал</div>
-    <div style="text-align:center;font:700 14px Manrope;color:var(--link);padding:4px;" onclick="showView('renewal')">Купить подписку</div>
+    <div class="btn btn-primary" onclick="showView('renewal')">Купить подписку</div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -1406,7 +1471,7 @@ const VIEW_TITLES = {
   balance: ['Баланс', ''],
   devices: ['Устройства', ''],
   history: ['История операций', ''],
-  support: ['Поддержка Flux', 'отвечает быстро'],
+  support: ['Поддержка Flux', 'Ответ 30 мин – 6 часов'],
   empty: ['Flux VPN', 'мини-приложение'],
 };
 
@@ -1420,7 +1485,7 @@ function showView(name) {
     const b = document.getElementById(id);
     if (b) b.style.display = 'none';
   });
-  if (name === 'balance') document.getElementById('balance-bar').style.display = 'block';
+  if (name === 'balance') { document.getElementById('balance-bar').style.display = 'block'; updateTopupBtn(); }
   if (name === 'empty') document.getElementById('empty-bar').style.display = 'flex';
   if (name === 'support') { document.getElementById('support-bar').style.display = 'flex'; loadSupport(); }
   if (name === 'devices') loadDevices();
@@ -1494,16 +1559,12 @@ function renderHome() {
   document.getElementById('home-greet-name').textContent = u.username ? `${u.first_name} · @${u.username}` : u.first_name;
   document.getElementById('home-balance').innerHTML = Math.round(parseFloat(u.balance_rub)) + ' <span style="font-size:15px;color:var(--muted);">₽</span>';
   document.getElementById('home-dev-sub').textContent = (CTX.devices_used || 0) + ' из ' + (CTX.devices_total || 0);
-  if (!sub) {
-    showView('empty');
-    const ts = document.getElementById('trial-stats');
-    ts.innerHTML = `
-      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_duration_days}</div><div class="muted" style="font:500 11px Manrope;">дня</div></div>
-      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_traffic_gb}</div><div class="muted" style="font:500 11px Manrope;">ГБ трафика</div></div>
-    `;
-    document.getElementById('btn-activate-trial').style.display = CTX.trial_available ? 'block' : 'none';
-    return;
-  }
+  const refCount = CTX.referrals_count || 0;
+  document.getElementById('home-ref-sub').textContent = refCount > 0
+    ? (refCount + ' · +' + Math.round(parseFloat(CTX.referrals_earned_rub || '0')) + ' ₽')
+    : 'Пусто :(';
+  renderRenewal(sub);
+  if (!sub) { showView('empty'); return; }
   document.getElementById('home-sub-card').innerHTML = subCardHtml(sub);
   document.getElementById('home-renew-cta').innerHTML = `
     <div class="cta-renew" onclick="showView('renewal')">
@@ -1511,8 +1572,22 @@ function renderHome() {
       <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Продление</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод · автопродление</div></div>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
     </div>`;
-  document.getElementById('renewal-sub-card').innerHTML = subCardHtml(sub);
-  document.getElementById('autorenew-toggle').className = 'toggle ' + (sub.auto_renew ? 'on' : 'off');
+}
+
+function renderRenewal(sub) {
+  const card = document.getElementById('renewal-sub-card');
+  const arRow = document.getElementById('autorenew-row');
+  const arDiv = document.getElementById('autorenew-divider');
+  if (sub) {
+    card.innerHTML = subCardHtml(sub);
+    document.getElementById('autorenew-toggle').className = 'toggle ' + (sub.auto_renew ? 'on' : 'off');
+    arRow.style.display = 'flex';
+    arDiv.style.display = 'block';
+  } else {
+    card.innerHTML = `<div style="padding:6px 2px 2px;"><div style="font:800 18px Manrope;color:#fff;">Оформите подписку</div><div class="muted" style="font:500 13px Manrope;margin-top:4px;">Выберите тариф ниже и оплатите с баланса</div></div>`;
+    arRow.style.display = 'none';
+    arDiv.style.display = 'none';
+  }
   renderPlans();
 }
 
@@ -1523,6 +1598,8 @@ function renderPlans() {
   list.innerHTML = CTX.plans.map(p => {
     const disc = parseFloat(p.discount_percent || '0');
     const hasDisc = disc > 0;
+    const orig = Math.round(parseFloat(p.original_price_rub || p.price_rub));
+    const final = Math.round(parseFloat(p.price_rub));
     return `
     <div class="plan" data-plan="${p.id}" style="margin-top:10px;" onclick="selectPlan(${p.id})">
       ${hasDisc ? `<div class="badge">−${disc}%</div>` : ''}
@@ -1532,8 +1609,8 @@ function renderPlans() {
         <div class="muted" style="font:500 12px Manrope;">${p.traffic_limit_gb || p.monthly_gb_limit || '∞'} ГБ · ${p.device_limit || CTX.included_device_slots || 2} устройств</div>
       </div>
       <div style="text-align:right;">
-        <div style="font:800 16px Manrope;color:#fff;">${Math.round(parseFloat(p.price_rub))} ₽</div>
-        ${hasDisc ? `<div class="muted" style="font:500 11px Manrope;text-decoration:line-through;">${Math.round(parseFloat(p.catalog_price_rub))} ₽</div>` : ''}
+        <div style="font:800 16px Manrope;color:#fff;">${final} ₽</div>
+        ${(hasDisc && orig > final) ? `<div class="muted" style="font:500 11px Manrope;text-decoration:line-through;">${orig} ₽</div>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -1678,6 +1755,15 @@ document.querySelectorAll('.payrow').forEach(el => el.addEventListener('click', 
 document.querySelector('.preset[data-amount="300"]').classList.add('selected');
 function updateTopupBtn() {
   document.getElementById('btn-topup').textContent = 'Пополнить на ' + (selectedAmount || 0) + ' ₽';
+  const pct = parseFloat((CTX && CTX.pending_topup_bonus_percent) || '0');
+  const note = document.getElementById('topup-bonus-note');
+  if (pct > 0 && selectedAmount > 0) {
+    const bonus = Math.floor(selectedAmount * pct / 100);
+    document.getElementById('topup-bonus-text').textContent = `Промокод: +${pct}% к пополнению — придёт ещё ${bonus} ₽`;
+    note.style.display = 'flex';
+  } else {
+    note.style.display = 'none';
+  }
 }
 let _topupInFlight = false;
 async function doTopup() {
@@ -1781,35 +1867,65 @@ async function loadHistory() {
 function dlBtn(msgId, kind) {
   return `<span class="chat-media-dl" data-dl-msg="${msgId}" data-dl-kind="${kind}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt=""></span>`;
 }
-// Если медиа уже в кэше — сразу подставляем src и помечаем loaded (без мигания).
-function mediaAttrs(msgId, kind, isAnchor) {
+// Если медиа уже в кэше — сразу подставляем src (без мигания); иначе data-атрибуты для hydrate.
+// Класс media-loaded дописывается в существующий class элемента, чтобы не плодить дубль-атрибут.
+function mCls(msgId, kind) {
+  return MEDIA_CACHE[msgId + ':' + kind] ? ' media-loaded' : '';
+}
+function mSrc(msgId, kind, isAnchor) {
   const cached = MEDIA_CACHE[msgId + ':' + kind];
-  if (cached) {
-    const attr = isAnchor ? `href="${cached}"` : `src="${cached}"`;
-    return `${attr} class="media-loaded"`;
-  }
+  if (cached) return isAnchor ? `href="${cached}"` : `src="${cached}"`;
   return `data-media-msg="${msgId}" data-media-kind="${kind}"`;
+}
+function voicePlayerHtml(id, kind, name) {
+  const label = name ? `<div class="va-name">${name.replace(/</g,'&lt;')}</div>` : '';
+  return `<div class="va-player">${label}<div class="va-row"><audio class="va-audio" ${mSrc(id,kind,false)} preload="metadata"></audio><button class="va-play" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><div class="va-track"><div class="va-fill"></div></div><span class="va-time mono">0:00</span><span class="va-dl" data-dl-msg="${id}" data-dl-kind="${kind}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt=""></span></div></div>`;
+}
+function setupVoicePlayers(root) {
+  root.querySelectorAll('.va-player').forEach(pl => {
+    if (pl._wired) return; pl._wired = true;
+    const audio = pl.querySelector('.va-audio');
+    const playBtn = pl.querySelector('.va-play');
+    const fill = pl.querySelector('.va-fill');
+    const track = pl.querySelector('.va-track');
+    const timeEl = pl.querySelector('.va-time');
+    const icon = playBtn.querySelector('svg path');
+    const fmt = (s) => { s = Math.floor(s||0); return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2); };
+    const PLAY = 'M8 5v14l11-7z', PAUSE = 'M7 5h3v14H7zM14 5h3v14h-3z';
+    playBtn.addEventListener('click', () => {
+      if (audio.paused) {
+        document.querySelectorAll('.va-audio').forEach(a => { if (a !== audio) a.pause(); });
+        audio.play();
+      } else audio.pause();
+    });
+    audio.addEventListener('play', () => icon.setAttribute('d', PAUSE));
+    audio.addEventListener('pause', () => icon.setAttribute('d', PLAY));
+    audio.addEventListener('ended', () => { icon.setAttribute('d', PLAY); fill.style.width = '0%'; timeEl.textContent = fmt(audio.duration); });
+    audio.addEventListener('timeupdate', () => { if (audio.duration) { fill.style.width = (audio.currentTime/audio.duration*100)+'%'; timeEl.textContent = fmt(audio.currentTime); } });
+    audio.addEventListener('loadedmetadata', () => { if (audio.duration && isFinite(audio.duration)) timeEl.textContent = fmt(audio.duration); });
+    track.addEventListener('click', (e) => { const rect = track.getBoundingClientRect(); if (audio.duration) audio.currentTime = ((e.clientX-rect.left)/rect.width)*audio.duration; });
+  });
 }
 function chatMediaHtml(m) {
   let html = '';
   if (m.photo_file_id) {
-    html += `<div class="chat-media-wrap"><img class="chat-media-img" ${mediaAttrs(m.id,'photo',false)} alt="">${dlBtn(m.id,'photo')}</div>`;
+    html += `<div class="chat-media-wrap"><img class="chat-media-img${mCls(m.id,'photo')}" ${mSrc(m.id,'photo',false)} alt="">${dlBtn(m.id,'photo')}</div>`;
   }
   if (m.video_file_id) {
-    html += `<div class="chat-media-wrap"><video class="chat-media-video" ${mediaAttrs(m.id,'video',false)} controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
+    html += `<div class="chat-media-wrap"><video class="chat-media-video${mCls(m.id,'video')}" ${mSrc(m.id,'video',false)} controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
   }
   if (m.video_note_file_id) {
-    html += `<video class="chat-media-vidnote" ${mediaAttrs(m.id,'video-note',false)} controls playsinline preload="metadata"></video>`;
+    html += `<video class="chat-media-vidnote${mCls(m.id,'video-note')}" ${mSrc(m.id,'video-note',false)} controls playsinline preload="metadata"></video>`;
   }
   if (m.voice_file_id) {
-    html += `<audio class="chat-media-audio media-loaded" ${mediaAttrs(m.id,'voice',false)} controls preload="metadata"></audio>`;
+    html += voicePlayerHtml(m.id, 'voice', '');
   }
   if (m.audio_file_id) {
-    html += `<audio class="chat-media-audio media-loaded" ${mediaAttrs(m.id,'audio',false)} controls preload="metadata"></audio>`;
+    html += voicePlayerHtml(m.id, 'audio', (m.audio_file_name || ''));
   }
   if (m.document_file_id) {
     const name = (m.document_file_name || 'Документ').replace(/</g,'&lt;');
-    html += `<a class="chat-media-doc" ${mediaAttrs(m.id,'document',true)} download="${name}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt="">${name}</a>`;
+    html += `<a class="chat-media-doc" ${mSrc(m.id,'document',true)} download="${name}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt="">${name}</a>`;
   }
   return html;
 }
@@ -1838,9 +1954,13 @@ async function loadSupport() {
       const cls = m.sender_role === 'user' ? 'me' : 'op';
       const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) : '';
       const txt = (m.text||'').trim();
-      return `<div class="bubble ${cls}">${txt ? txt.replace(/</g,'&lt;') : ''}${chatMediaHtml(m)}<div class="bubbletime">${time}</div></div>`;
+      const media = chatMediaHtml(m);
+      const txtHtml = txt ? `<div class="bubble-text">${txt.replace(/</g,'&lt;')}</div>` : '';
+      // Медиа сверху, текст-подпись под ним.
+      return `<div class="bubble ${cls}">${media}${txtHtml}<div class="bubbletime">${time}</div></div>`;
     }).join('');
     wrap.scrollTop = wrap.scrollHeight;
+    setupVoicePlayers(wrap);
     hydrateChatMedia(wrap);
   } catch (e) { toast('Ошибка загрузки чата'); }
 }
