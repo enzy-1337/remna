@@ -770,10 +770,12 @@ async def api_subscription_reissue(
 @router.get("/api/subscription/qr")
 async def api_subscription_qr(
     init: str = "",
+    data: str = "",
     authorization: str | None = Header(default=None),
     x_telegram_init_data: str | None = Header(default=None),
 ) -> Response:
-    """QR подписки. initData можно передать в query (?init=...) — для <img>, который не шлёт заголовки."""
+    """QR подписки. initData и сама ссылка (data) передаются в query — для <img>, который не шлёт заголовки.
+    Если data не передана — берём ссылку из панели."""
     settings = get_settings()
     init_header = _extract_init_data(authorization, x_telegram_init_data)
     init_data = init or init_header
@@ -784,16 +786,19 @@ async def api_subscription_qr(
     tg_id = (parsed.get("user") or {}).get("id")
     if not tg_id:
         raise HTTPException(status_code=401, detail="no user")
-    factory = get_session_factory()
-    async with factory() as session:
-        user = await get_user_by_telegram_id(session, int(tg_id))
-        if user is None or user.remnawave_uuid is None:
-            raise HTTPException(status_code=404, detail="no subscription")
-        try:
-            uinf = await fetch_panel_hwid_context(user, settings)
-            url = subscription_url_for_telegram((uinf[0] or {}).get("subscriptionUrl"), settings) or ""
-        except Exception:
-            url = ""
+    url = (data or "").strip()
+    if not url or len(url) > 2048:
+        # Резервный путь — достаём из панели.
+        factory = get_session_factory()
+        async with factory() as session:
+            user = await get_user_by_telegram_id(session, int(tg_id))
+            if user is None or user.remnawave_uuid is None:
+                raise HTTPException(status_code=404, detail="no subscription")
+            try:
+                uinf = await fetch_panel_hwid_context(user, settings)
+                url = subscription_url_for_telegram((uinf[0] or {}).get("subscriptionUrl"), settings) or ""
+            except Exception:
+                url = ""
     if not url:
         raise HTTPException(status_code=404, detail="no subscription url")
     png = subscription_url_qr_png(url, scale=7)
@@ -1267,11 +1272,14 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 @keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.35);}50%{box-shadow:0 0 0 6px rgba(255,107,107,.12);}}
 .chat-attach-preview{display:flex;align-items:center;gap:10px;background:var(--header);padding:8px 14px;font:600 12px Manrope;color:#fff;border-top:1px solid rgba(255,255,255,.05);}
 .chat-attach-remove{color:var(--danger);cursor:pointer;font-weight:700;margin-left:auto;}
-.bubble img.chat-media-img{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;cursor:pointer;object-fit:cover;opacity:0;transition:opacity .25s ease;}
-.bubble video.chat-media-video{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;background:#000;opacity:0;transition:opacity .25s ease;}
-.bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;background:#000;opacity:0;transition:opacity .25s ease;}
-.bubble img.chat-media-img:not(.media-loaded),.bubble video.chat-media-video:not(.media-loaded),.bubble video.chat-media-vidnote:not(.media-loaded){background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;}
-.media-loaded{opacity:1 !important;}
+.bubble img.chat-media-img{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;cursor:pointer;object-fit:cover;}
+.bubble video.chat-media-video{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;}
+.bubble video.chat-media-video.media-loaded{background:#000;}
+.bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;}
+.bubble video.chat-media-vidnote.media-loaded{background:#000;}
+/* Скелетон-шиммер пока медиа не загрузилось (виден, т.к. opacity не скрываем). */
+.bubble img.chat-media-img:not(.media-loaded),.bubble video.chat-media-video:not(.media-loaded),.bubble video.chat-media-vidnote:not(.media-loaded){background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;color:transparent;}
+.media-loaded{animation:none;}
 .chat-media-img,.chat-media-video,.chat-media-vidnote{cursor:zoom-in;}
 .vid-play-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;}
 .vid-play-ov svg{width:46px;height:46px;background:rgba(0,0,0,.55);border-radius:50%;padding:11px;box-sizing:border-box;}
@@ -1355,26 +1363,26 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div id="home-sub-card"></div>
     <div class="card row" style="margin-top:10px;cursor:pointer;" onclick="showView('balance')">
-      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="mi" style="width:22px;height:22px;-webkit-mask-image:url(/assets/miniapp_icons/wallet-100.png);mask-image:url(/assets/miniapp_icons/wallet-100.png);"></span></div>
+      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="mi" style="width:25px;height:25px;-webkit-mask-image:url(/assets/miniapp_icons/wallet-100.png);mask-image:url(/assets/miniapp_icons/wallet-100.png);"></span></div>
       <div class="spacer"><div class="muted" style="font:500 12px Manrope;">Баланс</div><div style="font:800 22px Manrope;color:#fff;letter-spacing:-.01em;" id="home-balance">0 <span style="font-size:15px;color:var(--muted);">₽</span></div></div>
       <div style="font:700 13px Manrope;color:var(--accent);background:rgba(123,92,255,.12);padding:9px 16px;border-radius:12px;" onclick="event.stopPropagation();showView('balance')">Пополнить</div>
     </div>
     <div class="sectiontitle">Быстрый доступ</div>
     <div class="navgrid">
       <div class="navitem" onclick="showView('referrals')">
-        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/user-account-100.png);mask-image:url(/assets/miniapp_icons/user-account-100.png);"></span></div>
+        <div class="ic"><span class="mi" style="width:21px;height:21px;-webkit-mask-image:url(/assets/miniapp_icons/user-account-100.png);mask-image:url(/assets/miniapp_icons/user-account-100.png);"></span></div>
         <div><div class="lbl">Рефералы</div><div class="sub" id="home-ref-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('support')">
-        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/chat-100.png);mask-image:url(/assets/miniapp_icons/chat-100.png);"></span></div>
+        <div class="ic"><span class="mi" style="width:21px;height:21px;-webkit-mask-image:url(/assets/miniapp_icons/chat-100.png);mask-image:url(/assets/miniapp_icons/chat-100.png);"></span></div>
         <div><div class="lbl">Поддержка</div><div class="sub">напишите нам</div></div>
       </div>
       <div class="navitem" onclick="showView('devices')">
-        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/monitor-100.png);mask-image:url(/assets/miniapp_icons/monitor-100.png);"></span></div>
+        <div class="ic"><span class="mi" style="width:21px;height:21px;-webkit-mask-image:url(/assets/miniapp_icons/monitor-100.png);mask-image:url(/assets/miniapp_icons/monitor-100.png);"></span></div>
         <div><div class="lbl">Устройства</div><div class="sub" id="home-dev-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('history')">
-        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/clock-100.png);mask-image:url(/assets/miniapp_icons/clock-100.png);"></span></div>
+        <div class="ic"><span class="mi" style="width:21px;height:21px;-webkit-mask-image:url(/assets/miniapp_icons/clock-100.png);mask-image:url(/assets/miniapp_icons/clock-100.png);"></span></div>
         <div><div class="lbl">История</div><div class="sub">операций</div></div>
       </div>
     </div>
@@ -1415,10 +1423,10 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Ваш реферальный код</div>
     <div class="card row">
       <span class="mono" style="font-size:14px;color:#fff;flex:1;letter-spacing:.01em;word-break:break-all;" id="ref-link">—</span>
-      <div class="copybtn" onclick="copyReferralLink()"><img src="/assets/miniapp_icons/documents-100.png" style="width:14px;height:14px;object-fit:contain;" alt="">Копировать</div>
+      <div class="copybtn" onclick="copyReferralLink()"><span class="mi" style="width:17px;height:17px;-webkit-mask-image:url(/assets/miniapp_icons/documents-100.png);mask-image:url(/assets/miniapp_icons/documents-100.png);"></span>Копировать</div>
     </div>
     <div class="btn btn-primary" style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px;" onclick="shareReferralLink()">
-      <img src="/assets/miniapp_icons/forward-arrow-100.png" style="width:17px;height:17px;object-fit:contain;" alt="">Поделиться в Telegram
+      <img src="/assets/miniapp_icons/forward-arrow-100.png" style="width:19px;height:19px;object-fit:contain;" alt="">Поделиться в Telegram
     </div>
     <div class="sectiontitle" id="ref-invited-title">Приглашённые</div>
     <div class="card" style="padding:0;overflow:hidden;" id="ref-invited-list"></div>
@@ -1461,7 +1469,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Ссылка на подписку</div>
     <div class="card row" style="gap:11px;">
       <span class="mono" id="sm-link" style="font-size:12px;color:#aab8c2;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
-      <div class="copybtn" onclick="copySubLink()" style="flex-shrink:0;"><img src="/assets/miniapp_icons/documents-100.png" style="width:13px;height:13px;object-fit:contain;" alt="">Копировать</div>
+      <div class="copybtn" onclick="copySubLink()" style="flex-shrink:0;"><span class="mi" style="width:16px;height:16px;-webkit-mask-image:url(/assets/miniapp_icons/documents-100.png);mask-image:url(/assets/miniapp_icons/documents-100.png);"></span>Копировать</div>
     </div>
     <div class="card row" style="margin-top:12px;background:rgba(245,181,68,.08);border-color:rgba(245,181,68,.22);cursor:pointer;" onclick="reissueKeys()">
       <div style="width:38px;height:38px;border-radius:11px;background:rgba(245,181,68,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
@@ -1490,13 +1498,13 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <input class="amount" id="custom-amount" placeholder="Введите сумму, ₽" style="display:none;" inputmode="numeric">
     <div id="topup-bonus-note" style="display:none;margin-top:10px;background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.25);border-radius:13px;padding:11px 14px;align-items:center;gap:9px;">
-      <img src="/assets/miniapp_icons/gift-100.png" style="width:18px;height:18px;object-fit:contain;" alt="">
+      <img src="/assets/miniapp_icons/gift-100.png" style="width:20px;height:20px;object-fit:contain;" alt="">
       <span id="topup-bonus-text" style="font:600 12px Manrope;color:var(--accent);"></span>
     </div>
     <div class="sectiontitle">Способ оплаты</div>
     <div style="display:flex;flex-direction:column;gap:10px;" id="paymethods">
       <div class="payrow selected" data-provider="platega">
-        <div style="width:36px;height:36px;border-radius:10px;background:rgba(106,179,243,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/card-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(106,179,243,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/card-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Банковская карта</div><div class="muted" style="font:500 12px Manrope;">Platega · Visa, MIR, СБП</div></div>
         <div class="radio" style="border:6px solid var(--accent);background:#fff;"></div>
       </div>
@@ -1523,7 +1531,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Подключено</div>
     <div id="devices-list"></div>
     <div class="card row" style="margin-top:16px;background:linear-gradient(130deg, rgba(123,92,255,.14), rgba(123,92,255,.03));border:1px solid rgba(123,92,255,.2);cursor:pointer;" id="buy-slots-row" onclick="buySlot()">
-      <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/plus-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+      <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/plus-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Добавить слот</div><div class="muted" style="font:500 12px Manrope;" id="buy-slots-sub">1 устройство</div></div>
       <span style="font:700 13px Manrope;color:var(--accent);" id="buy-slots-price"></span>
     </div>
@@ -1944,12 +1952,14 @@ async function loadReferrals() {
     list.innerHTML = r.invited.map(f => {
       const initial = (f.name || '?').charAt(0).toUpperCase();
       const bonus = Math.round(parseFloat(f.bonus_rub || '0'));
+      // Цвет фона аватарки — по telegram_id, как в Telegram (фото других юзеров недоступно в Mini App).
+      const avColor = TG_AVATAR_COLORS[Math.abs(parseInt(f.telegram_id)||0) % TG_AVATAR_COLORS.length];
       // 0 ₽ показываем без плюса; больше нуля — с плюсом и акцентом.
       const amt = bonus > 0
         ? `<div style="font:800 14px Manrope;color:var(--accent);">+${bonus} ₽</div>`
         : `<div style="font:800 14px Manrope;color:var(--muted);">0 ₽</div>`;
       return `<div class="history-item" style="cursor:pointer;" onclick="openReferralDetail(${f.id})">
-        <div class="avatar-circle" style="width:38px;height:38px;font-size:14px;">${initial}</div>
+        <div class="avatar-circle" style="width:40px;height:40px;font-size:15px;background:${avColor};">${initial}</div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${f.name}</div><div class="muted" style="font:500 11px Manrope;">${f.username ? '@'+f.username : ('ID '+f.telegram_id)}</div></div>
         ${amt}
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><path d="M9 6l6 6-6 6"/></svg>
@@ -1981,7 +1991,7 @@ async function openReferralDetail(id) {
     if (!d.rewards.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока нет начислений</div>'; return; }
     list.innerHTML = d.rewards.map(rw => `
       <div class="history-item">
-        <div class="history-ic" style="background:rgba(123,92,255,.14);"><img src="/assets/miniapp_icons/up-arrow-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="history-ic" style="background:rgba(123,92,255,.14);"><img src="/assets/miniapp_icons/up-arrow-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${rw.title}</div><div class="muted" style="font:500 11px Manrope;">${fmtDate(rw.created_at)}</div></div>
         <div style="font:800 14px Manrope;color:var(--accent);">+${Math.round(parseFloat(rw.bonus_rub))} ₽</div>
       </div>`).join('');
@@ -2009,18 +2019,19 @@ function loadSubManage() {
   const url = sub.subscription_url || '';
   window._subUrl = url;
   document.getElementById('sm-link').textContent = url || 'недоступно';
+  loadQr(url);
+}
+function loadQr(url) {
   const qr = document.getElementById('sm-qr');
-  if (url) {
-    // Скелетон, пока QR грузится с сервера.
-    qr.style.background = 'linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%)';
-    qr.style.backgroundSize = '600px 100%';
-    qr.style.animation = 'shimmer 1.3s infinite linear';
-    qr.style.opacity = '0';
-    qr.onload = () => { qr.style.background = '#fff'; qr.style.animation = 'none'; qr.style.transition = 'opacity .25s'; qr.style.opacity = '1'; };
-    qr.src = API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData());
-  } else {
-    qr.removeAttribute('src');
-  }
+  if (!url) { qr.removeAttribute('src'); return; }
+  // Скелетон, пока QR грузится с сервера.
+  qr.style.background = 'linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%)';
+  qr.style.backgroundSize = '600px 100%';
+  qr.style.animation = 'shimmer 1.3s infinite linear';
+  qr.style.opacity = '0';
+  qr.onload = () => { qr.style.background = '#fff'; qr.style.animation = 'none'; qr.style.transition = 'opacity .25s'; qr.style.opacity = '1'; };
+  qr.onerror = () => { qr.style.animation = 'none'; qr.style.background = 'var(--card2)'; qr.style.opacity = '1'; };
+  qr.src = API_BASE + '/api/subscription/qr?data=' + encodeURIComponent(url) + '&init=' + encodeURIComponent(initData());
 }
 function copySubLink() {
   const url = window._subUrl || '';
@@ -2045,7 +2056,7 @@ async function reissueKeys() {
       if (CTX && CTX.subscription) CTX.subscription.subscription_url = r.subscription_url;
       window._subUrl = r.subscription_url;
       document.getElementById('sm-link').textContent = r.subscription_url || '';
-      document.getElementById('sm-qr').src = API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData()) + '&t=' + Date.now();
+      loadQr(r.subscription_url);
     } else toast(r.message || 'Не удалось перевыпустить');
   } catch (e) { toast('Ошибка: ' + e.message); }
   finally { _reissueInFlight = false; }
@@ -2156,6 +2167,7 @@ async function checkTopup(id) {
 }
 
 // --- Devices ---
+let CTX_DEVICES = null;
 async function loadDevices() {
   // Скелетон, пока грузится список из панели.
   document.getElementById('dev-count-text').innerHTML = skelInline(150, 18);
@@ -2164,6 +2176,7 @@ async function loadDevices() {
   document.getElementById('buy-slots-row').style.display = 'none';
   try {
     const d = await api('/api/devices');
+    CTX_DEVICES = d;
     const pct = d.total ? Math.min(100, Math.round(d.used / d.total * 100)) : 0;
     document.getElementById('dev-ring').setAttribute('stroke-dashoffset', String(138 - 138 * pct / 100));
     document.getElementById('dev-count-text').textContent = d.unlimited ? (d.used + ' устройств (без лимита)') : (d.used + ' из ' + d.total + ' устройств');
@@ -2172,16 +2185,17 @@ async function loadDevices() {
       <div class="card row" style="margin-top:10px;">
         <div style="width:38px;height:38px;border-radius:11px;background:#2b3947;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aab8c2" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${dev.title}</div><div class="muted" style="font:500 12px Manrope;">${dev.platform || ''}</div></div>
-        <img src="/assets/miniapp_icons/trash-100.png" style="width:18px;height:18px;object-fit:contain;cursor:pointer;flex-shrink:0;" onclick="unbindDevice('${dev.hwid}')" alt="Удалить">
+        <img src="/assets/miniapp_icons/trash-100.png" style="width:20px;height:20px;object-fit:contain;cursor:pointer;flex-shrink:0;" onclick="unbindDevice('${dev.hwid}')" alt="Удалить">
       </div>`).join('') || '<div class="muted" style="padding:14px;">Нет подключённых устройств</div>';
     document.getElementById('buy-slots-row').style.display = d.available_to_buy > 0 ? 'flex' : 'none';
-    document.getElementById('buy-slots-sub').textContent = '1 устройство · доступно ещё ' + d.available_to_buy;
-    document.getElementById('buy-slots-price').textContent = d.extra_slot_price_rub + ' ₽';
+    document.getElementById('buy-slots-sub').textContent = '1 устройство · списывается ежемесячно';
+    document.getElementById('buy-slots-price').textContent = d.extra_slot_price_rub + ' ₽/мес';
   } catch (e) { toast('Ошибка загрузки устройств'); }
 }
 let _buySlotInFlight = false;
 async function buySlot() {
-  if (_buySlotInFlight || !confirm('Добавить 1 слот устройства?')) return;
+  const priceTxt = (CTX_DEVICES && CTX_DEVICES.extra_slot_price_rub) ? (CTX_DEVICES.extra_slot_price_rub + ' ₽/мес') : 'месячную плату';
+  if (_buySlotInFlight || !confirm('Добавить 1 слот устройства за ' + priceTxt + '?\\nСумма списывается ежемесячно автоматически, пока слот активен.')) return;
   _buySlotInFlight = true;
   try {
     const r = await api('/api/devices/buy-slots', {method:'POST', body: JSON.stringify({quantity:1, idempotency_key: genKey()})});
@@ -2226,7 +2240,7 @@ async function loadHistory() {
       const sign = t.direction === 'debit' ? '−' : '+';
       const color = t.direction === 'debit' ? '#C8D2DA' : '#7B5CFF';
       return `<div class="history-item">
-        <div class="history-ic" style="background:${ic[1]};"><img src="/assets/miniapp_icons/${ic[0]}" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="history-ic" style="background:${ic[1]};"><img src="/assets/miniapp_icons/${ic[0]}" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${t.description || t.type}</div><div class="muted" style="font:500 11px Manrope;">${fmtDate(t.created_at)}</div></div>
         <div style="font:800 15px Manrope;color:${color};">${sign}${Math.round(parseFloat(t.amount_rub))} ₽</div>
       </div>`;
