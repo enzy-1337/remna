@@ -1912,7 +1912,25 @@ async function applyPromo() {
   finally { _promoInFlight = false; }
 }
 
+// --- Скелетоны загрузки ---
+function skelInline(w, h) { return `<span class="skel" style="display:inline-block;width:${w}px;height:${h||16}px;border-radius:6px;vertical-align:middle;"></span>`; }
+function skelCardRows(n) {
+  let h = '';
+  for (let i = 0; i < (n || 3); i++) h += `<div class="card row" style="margin-top:10px;"><div class="skel" style="width:38px;height:38px;border-radius:11px;flex-shrink:0;"></div><div class="spacer"><div class="skel" style="width:55%;height:13px;border-radius:6px;"></div><div class="skel" style="width:32%;height:10px;border-radius:6px;margin-top:8px;"></div></div></div>`;
+  return h;
+}
+function skelHistory(n) {
+  let h = '';
+  for (let i = 0; i < (n || 4); i++) h += `<div class="history-item"><div class="skel" style="width:38px;height:38px;border-radius:11px;flex-shrink:0;"></div><div class="spacer"><div class="skel" style="width:55%;height:13px;border-radius:6px;"></div><div class="skel" style="width:32%;height:10px;border-radius:6px;margin-top:8px;"></div></div><div class="skel" style="width:50px;height:14px;border-radius:6px;"></div></div>`;
+  return h;
+}
+
 async function loadReferrals() {
+  // Скелетон, пока грузятся данные.
+  document.getElementById('ref-total').innerHTML = skelInline(90, 30);
+  document.getElementById('ref-friends').innerHTML = skelInline(24, 18);
+  document.getElementById('ref-percent').innerHTML = skelInline(36, 18);
+  document.getElementById('ref-invited-list').innerHTML = skelHistory(3);
   try {
     const r = await api('/api/referrals');
     document.getElementById('ref-total').innerHTML = Math.round(parseFloat(r.total_earned_rub)) + ' <span style="font-size:22px;color:var(--accent);">₽</span>';
@@ -1941,6 +1959,13 @@ async function loadReferrals() {
 }
 async function openReferralDetail(id) {
   showView('refdetail');
+  // Скелетон шапки и истории.
+  document.getElementById('rd-name').innerHTML = skelInline(120, 19);
+  document.getElementById('rd-username').innerHTML = skelInline(80, 13);
+  document.getElementById('rd-id').innerHTML = skelInline(90, 11);
+  document.getElementById('rd-brought').innerHTML = skelInline(60, 20);
+  document.getElementById('rd-topups').innerHTML = skelInline(60, 20);
+  document.getElementById('rd-rewards').innerHTML = skelHistory(3);
   try {
     const d = await api('/api/referrals/' + id);
     const av = document.getElementById('rd-avatar');
@@ -1985,7 +2010,17 @@ function loadSubManage() {
   window._subUrl = url;
   document.getElementById('sm-link').textContent = url || 'недоступно';
   const qr = document.getElementById('sm-qr');
-  qr.src = url ? (API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData())) : '';
+  if (url) {
+    // Скелетон, пока QR грузится с сервера.
+    qr.style.background = 'linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%)';
+    qr.style.backgroundSize = '600px 100%';
+    qr.style.animation = 'shimmer 1.3s infinite linear';
+    qr.style.opacity = '0';
+    qr.onload = () => { qr.style.background = '#fff'; qr.style.animation = 'none'; qr.style.transition = 'opacity .25s'; qr.style.opacity = '1'; };
+    qr.src = API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData());
+  } else {
+    qr.removeAttribute('src');
+  }
 }
 function copySubLink() {
   const url = window._subUrl || '';
@@ -2122,6 +2157,11 @@ async function checkTopup(id) {
 
 // --- Devices ---
 async function loadDevices() {
+  // Скелетон, пока грузится список из панели.
+  document.getElementById('dev-count-text').innerHTML = skelInline(150, 18);
+  document.getElementById('dev-count-sub').innerHTML = skelInline(90, 11);
+  document.getElementById('devices-list').innerHTML = skelCardRows(3);
+  document.getElementById('buy-slots-row').style.display = 'none';
   try {
     const d = await api('/api/devices');
     const pct = d.total ? Math.min(100, Math.round(d.used / d.total * 100)) : 0;
@@ -2176,6 +2216,7 @@ function histIconFor(t) {
   return t.direction === 'debit' ? ['buying-100.png', 'rgba(255,255,255,.06)'] : ['gift-100.png', 'rgba(123,92,255,.14)'];
 }
 async function loadHistory() {
+  document.getElementById('history-list').innerHTML = skelHistory(4);
   try {
     const r = await api('/api/transactions');
     const list = document.getElementById('history-list');
