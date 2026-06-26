@@ -201,17 +201,90 @@ body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);
 .hotbtn{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:12px;min-height:46px;
   display:flex;align-items:center;justify-content:center;font:600 13px Manrope;background:rgba(255,255,255,.02);}
 .hotbtn.active{color:#fff;border-color:rgba(123,92,255,.45);background:rgba(123,92,255,.18);}
+
+/* --- Пополнение --- */
+.balance{font:800 38px Manrope;letter-spacing:-.02em;}
+.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+.amount-chip{appearance:none;border:1px solid var(--line);background:var(--card2);color:#fff;
+  border-radius:13px;padding:13px 6px;text-align:center;font:800 16px Manrope;cursor:pointer;}
+.amount-chip.active{border-color:var(--accent);background:rgba(123,92,255,.12);color:var(--accent);}
+.field{width:100%;border:1px solid var(--line);background:var(--card2);color:#fff;border-radius:13px;
+  padding:13px 14px;font:700 16px Manrope;margin-top:10px;outline:none;}
+
+/* --- Устройства --- */
+.dev-item{display:flex;align-items:center;gap:13px;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;padding:13px 15px;margin-top:10px;}
+.dev-ic{width:38px;height:38px;border-radius:11px;background:rgba(123,92,255,.14);display:flex;
+  align-items:center;justify-content:center;flex-shrink:0;}
+.dev-meta{flex:1;min-width:0;}
+.dev-title{font:700 14px Manrope;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dev-sub{font:500 12px Manrope;color:var(--muted);margin-top:2px;}
+.btn-qty{appearance:none;border:1px solid var(--line);background:var(--card2);color:#fff;border-radius:12px;
+  min-height:48px;font:800 15px Manrope;cursor:pointer;}
+.stat{font:500 13px Manrope;color:var(--muted);}
+
+/* --- Поддержка (чат) --- */
+.head{position:sticky;top:0;z-index:20;padding:12px 14px;background:var(--header);
+  border-bottom:1px solid var(--line);}
+.sub{display:flex;align-items:center;justify-content:space-between;margin-top:6px;}
+.subtitle{font:500 13px Manrope;color:var(--muted);}
+.online{border:1px solid rgba(123,92,255,.4);color:var(--accent);border-radius:999px;padding:4px 10px;
+  font:700 11px Manrope;display:flex;align-items:center;gap:6px;}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
+.chat{flex:1;overflow:auto;padding:14px 14px 150px;display:flex;flex-direction:column;gap:8px;}
+.msg-row{display:flex;}
+.msg-row.me{justify-content:flex-end;}
+.bubble{max-width:84%;border-radius:16px 16px 16px 4px;padding:10px 13px;font:500 14px Manrope;
+  line-height:1.4;background:var(--card);color:#fff;}
+.msg-row.me .bubble{background:var(--accent);border-radius:16px 16px 4px 16px;}
+.ts{margin-top:4px;font:500 10px Manrope;color:var(--muted);opacity:.85;}
+.msg-row.me .bubble .ts{color:rgba(255,255,255,.6);}
+.msg-media{margin-top:6px;}
+.msg-media img{display:block;max-width:100%;max-height:260px;border-radius:12px;object-fit:cover;cursor:zoom-in;}
+.lb{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.88);padding:20px;}
+.lb.open{display:flex;}
+.lb img{max-width:min(95vw,1280px);max-height:92vh;border-radius:12px;}
+.lb-close{position:absolute;top:14px;right:16px;width:38px;height:38px;border-radius:50%;border:none;
+  background:rgba(255,255,255,.12);color:#fff;font-size:18px;cursor:pointer;}
+.composer{position:fixed;left:0;right:0;bottom:0;background:var(--header);border-top:1px solid var(--line);
+  padding:10px 12px calc(10px + env(safe-area-inset-bottom));z-index:35;}
+.composer-inner{max-width:430px;margin:0 auto;display:flex;align-items:center;gap:10px;}
+.input{flex:1;background:var(--bg);border:none;border-radius:20px;padding:11px 16px;color:#fff;
+  font:500 14px Manrope;outline:none;}
+.iconbtn{width:36px;height:36px;border-radius:50%;border:none;background:transparent;color:var(--accent);
+  font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.attach-preview-wrap{max-width:430px;margin:8px auto 0;display:none;}
+.attach-preview-wrap.visible{display:block;}
+.attach-preview{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:12px;padding:8px 10px;}
+.attach-preview img{width:40px;height:40px;border-radius:8px;object-fit:cover;}
+.attach-preview .fname{flex:1;font:500 12px Manrope;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.attach-preview .rm{border:none;background:transparent;color:var(--danger);font-size:16px;cursor:pointer;}
 """
 
 
+def _flux_logo_url() -> str:
+    try:
+        url = (get_settings().admin_panel_logo_url or "").strip()
+    except Exception:
+        url = ""
+    return url if url.startswith(("http://", "https://")) else ""
+
+
 def _flux_brand(title: str = "Flux VPN") -> str:
-    """Шапка с логотипом-плиткой как в мини-аппе."""
-    return (
-        '<h1 class="brand"><span class="logo">'
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>'
-        f'</span><span>{_esc(title)}</span></h1>'
-    )
+    """Шапка с логотипом-плиткой как в мини-аппе (подтягивает логотип из настроек, если задан)."""
+    logo = _flux_logo_url()
+    if logo:
+        inner = (
+            f'<img src="{_esc(logo)}" alt="" '
+            'style="width:calc(100% - 4px);height:calc(100% - 4px);object-fit:contain;" />'
+        )
+    else:
+        inner = (
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" '
+            'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>'
+        )
+    return f'<h1 class="brand"><span class="logo">{inner}</span><span>{_esc(title)}</span></h1>'
 
 
 def _subscription_page(
@@ -329,108 +402,16 @@ def _renew_page(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>Flux Network — продление</title>
-  <style>
-    :root {{
-      color-scheme: dark;
-      --bg: #060a1b;
-      --card: #0b1328;
-      --line: rgba(148, 163, 184, 0.15);
-      --text: #e8edf6;
-      --muted: #95a3bf;
-      --blue: #2b78ff;
-      --blue2: #1f68e8;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
-      color: var(--text);
-      min-height: 100vh;
-    }}
-    .wrap {{ max-width: 430px; margin: 0 auto; padding: 20px 14px 90px; }}
-    .brand {{ font-size: 28px; font-weight: 700; margin: 4px 0 14px; }}
-    .brand span {{ color: #f4cc44; margin-right: 6px; }}
-    .card {{
-      background: linear-gradient(180deg, var(--card), #091021);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }}
-    .muted {{ color: var(--muted); font-size: 15px; line-height: 1.45; }}
-    .error-box {{
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.35);
-      color: #fecaca;
-      padding: 10px 12px;
-      border-radius: 10px;
-      margin-bottom: 12px;
-      font-size: 14px;
-    }}
-    .tariffs {{ display: grid; gap: 10px; margin-top: 14px; }}
-    .btn-tariff {{
-      width: 100%;
-      min-height: 52px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(15, 26, 52, 0.85);
-      color: #e8edf6;
-      font-size: 18px;
-      font-weight: 600;
-      cursor: pointer;
-    }}
-    .btn-tariff-disabled {{
-      opacity: 0.45;
-      cursor: not-allowed;
-      color: #8b9bb8;
-      background: rgba(30, 40, 60, 0.5);
-    }}
-    .btn-back {{
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 48px;
-      margin-top: 14px;
-      border-radius: 12px;
-      text-decoration: none;
-      color: #d8e3fa;
-      border: 1px solid var(--line);
-      font-size: 18px;
-      font-weight: 600;
-    }}
-    .hotbar {{
-      position: fixed; left: 0; right: 0; bottom: 0;
-      border-top: 1px solid var(--line);
-      background: rgba(7, 12, 28, 0.95);
-      padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-    }}
-    .hotbar-inner {{
-      max-width: 430px; margin: 0 auto;
-      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-    }}
-    .hotbtn {{
-      text-decoration: none; color: #c8d5ef;
-      border: 1px solid var(--line); border-radius: 12px;
-      min-height: 46px; display: flex; align-items: center; justify-content: center;
-      font-size: 15px; font-weight: 600;
-      background: rgba(15, 26, 52, 0.55);
-    }}
-    .hotbtn.active {{
-      color: #fff;
-      border-color: rgba(86, 135, 255, 0.45);
-      background: rgba(39, 101, 224, 0.35);
-    }}
-  </style>
+  <title>Flux VPN — продление</title>
+  <style>{_FLUX_CSS}</style>
 </head>
 <body>
   <main class="wrap">
-    <h1 class="brand"><span>⚡</span>Flux Network</h1>
+    {_flux_brand()}
     <section class="card">
-      <h2 style="margin:0 0 8px;font-size:22px;">Продлить подписку</h2>
+      <h2 style="margin:0 0 10px;font:800 20px Manrope;">Продлить подписку</h2>
       <p class="muted">{_esc(hint)}</p>
-      <p class="muted" style="margin-top:8px;">Баланс: {_esc(_format_rub(balance_rub))}</p>
+      <p class="muted" style="margin-top:8px;">Баланс: <b style="color:#fff;">{_esc(_format_rub(balance_rub))}</b></p>
       {error_html}
       <form method="post" action="{form_action}" class="tariffs">
         {plans_html}
@@ -439,7 +420,7 @@ def _renew_page(
     </section>
   </main>
   <nav class="hotbar">
-    <div class="hotbar-inner">
+    <div class="hotbar-inner cols2">
       <a class="hotbtn" href="{back_href}">Моя подписка</a>
       <a class="hotbtn" href="/sub/{_esc(token)}/support">Поддержка</a>
     </div>
@@ -469,69 +450,14 @@ def _topup_page(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>Flux Network — пополнение</title>
-  <style>
-    :root {{
-      color-scheme: dark;
-      --bg: #060a1b;
-      --card: #0b1328;
-      --line: rgba(148, 163, 184, 0.15);
-      --text: #e8edf6;
-      --muted: #95a3bf;
-      --blue: #2b78ff;
-      --blue2: #1f68e8;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
-      color: var(--text);
-      min-height: 100vh;
-    }}
-    .wrap {{ max-width: 430px; margin: 0 auto; padding: 20px 14px 24px; }}
-    .brand {{ font-size: 30px; font-weight: 700; margin: 4px 0 14px; }}
-    .brand span {{ color: #f4cc44; margin-right: 6px; }}
-    .card {{
-      background: linear-gradient(180deg, var(--card), #091021);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }}
-    .title {{ color: var(--muted); font-size: 14px; letter-spacing: 0.9px; text-transform: uppercase; margin-bottom: 8px; }}
-    .balance {{ font-size: 34px; font-weight: 700; }}
-    .amounts {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }}
-    .amount-chip {{
-      appearance: none; border: 1px solid var(--line); background: #0c1730; color: #d9e5ff;
-      border-radius: 10px; padding: 10px 6px; text-align: center; font-size: 16px; cursor: pointer;
-    }}
-    .amount-chip.active {{ border-color: #4e8bff; background: #10244d; color: #fff; }}
-    .field {{
-      width: 100%; border: 1px solid var(--line); background: #0c1730; color: #fff;
-      border-radius: 10px; padding: 12px; font-size: 18px; margin-top: 10px;
-    }}
-    .btn {{
-      display: flex; justify-content: center; align-items: center; min-height: 52px; border-radius: 12px;
-      text-decoration: none; font-size: 22px; font-weight: 600; border: 0; width: 100%; margin-top: 10px;
-      background: linear-gradient(180deg, var(--blue), var(--blue2)); color: #fff; cursor: pointer;
-    }}
-    .btn-back {{
-      display: flex; justify-content: center; align-items: center; min-height: 46px;
-      border-radius: 12px; text-decoration: none; font-size: 18px; font-weight: 600;
-      width: 100%; margin-top: 8px; border: 1px solid var(--line); color: #d8e3fa; background: #0c1730;
-    }}
-    .error-box {{
-      margin-bottom: 10px; border: 1px solid rgba(239,68,68,.45); background: rgba(239,68,68,.12);
-      color: #ffc5c5; border-radius: 10px; padding: 10px 12px; font-size: 14px;
-    }}
-  </style>
+  <title>Flux VPN — пополнение</title>
+  <style>{_FLUX_CSS}</style>
 </head>
 <body>
   <main class="wrap">
-    <h1 class="brand"><span>⚡</span>Flux Network</h1>
-    <section class="card">
-      <div class="title">Текущий баланс</div>
+    {_flux_brand()}
+    <section class="card" style="text-align:center;">
+      <div class="title" style="margin-bottom:6px;">Текущий баланс</div>
       <div class="balance">{_esc(_format_rub(balance_rub))}</div>
     </section>
     <section class="card">
@@ -545,9 +471,9 @@ def _topup_page(
           <button type="button" class="amount-chip" data-amount="500">500 ₽</button>
         </div>
         <input class="field" type="number" min="{_esc(str(min_topup_rub))}" step="1" name="custom_amount" placeholder="Или введите сумму вручную">
-        <button type="submit" class="btn">Оплатить</button>
+        <button type="submit" class="btn btn-primary" style="margin-top:12px;">Оплатить</button>
       </form>
-      <a class="btn-back" href="{back_href}">Назад</a>
+      <a class="btn-back" href="{back_href}" style="margin-top:8px;">Назад</a>
     </section>
   </main>
   <script>
@@ -574,104 +500,23 @@ def _support_page(token: str) -> HTMLResponse:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>Flux Network — поддержка</title>
+  <title>Flux VPN — поддержка</title>
+  <style>{_FLUX_CSS}</style>
   <style>
-    :root {{
-      color-scheme: dark;
-      --bg:#060a1b; --line:rgba(148,163,184,.16); --text:#e8edf6; --muted:#95a3bf;
-      --accent:#7c6cff; --chip:#111a30; --my:#1a2440; --admin:#1f3569;
-    }}
-    * {{ box-sizing:border-box; }}
-    body {{
-      margin:0; min-height:100vh; color:var(--text);
-      font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
-      background: radial-gradient(circle at top, #0d1733 0%, var(--bg) 45%);
-    }}
-    .wrap {{ max-width:430px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; }}
-    .head {{
-      position:sticky;
-      top:0;
-      z-index:20;
-      padding:14px 14px 8px;
-      background:linear-gradient(180deg, rgba(6,10,27,.96), rgba(6,10,27,.82));
-      backdrop-filter: blur(6px);
-      border-bottom:1px solid var(--line);
-    }}
-    .brand {{ font-weight:700; font-size:22px; }}
-    .sub {{ display:flex; align-items:center; justify-content:space-between; margin-top:4px; }}
-    .subtitle {{ font-size:14px; color:var(--muted); }}
-    .online {{ border:1px solid rgba(34,197,94,.45); color:#7ff0a8; border-radius:999px; padding:4px 10px; font-size:12px; display:flex; align-items:center; gap:6px; }}
-    .dot {{ width:8px; height:8px; border-radius:50%; background:#22c55e; }}
-    .chat {{ flex:1; overflow:auto; padding:8px 14px 150px; }}
-    .msg-row {{ display:flex; margin:8px 0; }}
-    .msg-row.me {{ justify-content:flex-end; }}
-    .bubble {{ max-width:84%; border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; background:var(--admin); }}
-    .msg-row.me .bubble {{ background:var(--my); }}
-    .ts {{ margin-top:4px; font-size:11px; color:var(--muted); }}
-    .msg-media {{ margin-top:8px; }}
-    .msg-media img {{
-      display:block;
-      max-width:100%;
-      max-height:320px;
-      border-radius:10px;
-      border:1px solid var(--line);
-      object-fit:contain;
-      background:rgba(255,255,255,.03);
-      cursor:zoom-in;
-    }}
-    .lb {{
-      position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
-      background:rgba(0,0,0,.85); padding:20px;
-    }}
-    .lb.open {{ display:flex; }}
-    .lb img {{
-      max-width:min(95vw,1280px); max-height:92vh; border-radius:12px; border:1px solid var(--line);
-      background:rgba(255,255,255,.03); object-fit:contain;
-    }}
-    .lb-close {{
-      position:absolute; top:14px; right:14px; width:38px; height:38px; border-radius:10px;
-      border:1px solid var(--line); background:rgba(15,26,52,.75); color:#fff; cursor:pointer;
-    }}
-    .composer {{
-      position:fixed; left:0; right:0; bottom:62px; background:rgba(7,12,28,.95); border-top:1px solid var(--line);
-      padding:10px 14px calc(10px + env(safe-area-inset-bottom));
-      z-index:30;
-    }}
-    .composer-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:44px 1fr 44px; gap:8px; align-items:center; }}
-    .iconbtn {{ width:44px; height:44px; border-radius:12px; border:1px solid var(--line); background:#0d1730; color:#dbe6ff; display:flex; align-items:center; justify-content:center; cursor:pointer; }}
-    .input {{ width:100%; height:44px; border-radius:12px; border:1px solid var(--line); background:#0b142b; color:#fff; padding:10px 12px; }}
-    .attach-preview-wrap {{ max-width:430px; margin:8px auto 0; display:none; }}
-    .attach-preview-wrap.visible {{ display:block; }}
-    .attach-preview {{
-      position:relative; display:inline-flex; flex-direction:column; align-items:flex-start; gap:4px;
-      padding:6px; border-radius:12px; border:1px solid var(--line); background:rgba(15,26,52,.55);
-    }}
-    .attach-preview img {{
-      width:72px; height:72px; border-radius:8px; object-fit:cover; border:1px solid var(--line);
-      background:rgba(255,255,255,.04);
-    }}
-    .attach-preview .fname {{ max-width:140px; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-    .attach-preview .rm {{
-      position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:6px;
-      border:1px solid var(--line); background:rgba(7,12,28,.9); color:#fff; cursor:pointer;
-      display:flex; align-items:center; justify-content:center; font-size:12px; line-height:1;
-    }}
-    .hotbar {{
-      position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line);
-      background:rgba(7,12,28,.95); padding:8px 14px calc(8px + env(safe-area-inset-bottom));
-      z-index:35;
-    }}
-    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }}
-    .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:rgba(15,26,52,.55); }}
-    .hotbtn.active {{ color:#fff; border-color:rgba(124,108,255,.55); background:rgba(124,108,255,.25); }}
+    body{{min-height:100vh;}}
+    .wrap{{min-height:100vh;display:flex;flex-direction:column;padding:0;max-width:430px;}}
+    .head{{padding:12px 14px 10px;}}
+    .composer{{bottom:64px;}}
+    .chat{{padding:14px 14px 180px;}}
+    .hotbar{{z-index:35;}}
   </style>
 </head>
 <body>
   <main class="wrap">
     <header class="head">
-      <div class="brand">Flux Network</div>
+      {_flux_brand("Поддержка Flux")}
       <div class="sub">
-        <div class="subtitle">Поддержка</div>
+        <div class="subtitle">Ответ 30 мин – 6 часов</div>
         <div class="online"><span class="dot"></span>Онлайн</div>
       </div>
     </header>
@@ -1708,7 +1553,13 @@ def _devices_page(
         for i, d in enumerate(devices, start=1):
             title = _esc(device_display_title(d, i))
             plat = _esc(str(d.get("platform") or "—"))
-            dev_items += f'<div class="dev-item"><div class="dev-title">{title}</div><div class="dev-meta">{plat}</div></div>'
+            dev_items += (
+                '<div class="dev-item">'
+                '<div class="dev-ic"><img src="/assets/miniapp_icons/monitor-100.png" '
+                'style="width:18px;height:18px;object-fit:contain;" alt=""></div>'
+                f'<div class="dev-meta"><div class="dev-title">{title}</div>'
+                f'<div class="dev-sub">{plat}</div></div></div>'
+            )
 
     qty_buttons = ""
     if can_buy > 0:
@@ -1727,42 +1578,23 @@ def _devices_page(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Устройства — Flux Network</title>
-  <style>
-    :root {{ --bg:#060b18; --card:#0c1428; --line:#1a2744; --text:#e8eef8; --muted:#8fa3c8; --blue:#3b82f6; }}
-    body {{ margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }}
-    .wrap {{ max-width:430px; margin:0 auto; padding:18px 14px 100px; }}
-    .card {{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }}
-    .stat {{ font-size:28px; font-weight:700; }}
-    .muted {{ color:var(--muted); font-size:14px; }}
-    .dev-item {{ border-top:1px solid var(--line); padding:10px 0; }}
-    .dev-title {{ font-weight:600; }}
-    .dev-meta {{ color:var(--muted); font-size:13px; }}
-    .btn-qty {{ width:100%; min-height:44px; margin:6px 0; border-radius:10px; border:1px solid var(--line); background:rgba(59,130,246,.2); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }}
-    .error-box {{ background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.4); padding:10px; border-radius:10px; margin-bottom:10px; }}
-    .ok-box {{ background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.35); padding:10px; border-radius:10px; margin-bottom:10px; }}
-    .hotbar {{ position:fixed; left:0; right:0; bottom:0; border-top:1px solid var(--line); background:rgba(7,12,28,.95); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); }}
-    .hotbar-inner {{ max-width:430px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }}
-    .hotbtn {{ text-decoration:none; color:#c8d5ef; border:1px solid var(--line); border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }}
-    .hotbtn.active {{ color:#fff; border-color:rgba(86,135,255,.45); background:rgba(39,101,224,.35); }}
-  </style>
+  <title>Flux VPN — устройства</title>
+  <style>{_FLUX_CSS}</style>
 </head>
 <body>
-  <main class="wrap">
-    <h1 style="font-size:24px;margin:0 0 12px">🖥 Устройства</h1>
+  <main class="wrap" style="padding-bottom:90px;">
+    {_flux_brand("Устройства")}
     {err_html}{ok_html}
     <section class="card">
-      <div class="muted">Привязано / лимит слотов</div>
-      <div class="stat">{devices_used} / {_esc(devices_max_label)}</div>
-      <p class="muted">Баланс: {_esc(_format_rub(balance_rub))} · слот: {_esc(str(unit_price))} ₽ (скидка от 3 шт.)</p>
+      <div class="title" style="margin-bottom:4px;">Привязано / лимит слотов</div>
+      <div class="balance">{devices_used} / {_esc(devices_max_label)}</div>
+      <p class="muted" style="margin-top:8px;">Баланс: <b style="color:#fff;">{_esc(_format_rub(balance_rub))}</b> · слот: {_esc(str(unit_price))} ₽ (скидка от 3 шт.)</p>
     </section>
-    <section class="card">
-      <div class="muted" style="margin-bottom:8px">Привязанные устройства</div>
-      {dev_items}
-    </section>
-    <section class="card">
-      <div class="muted" style="margin-bottom:8px">Докупить слоты</div>
-      <form method="post" action="/sub/{_esc(token)}/devices/buy">
+    <div class="title" style="margin:18px 4px 4px;">Подключено</div>
+    {dev_items}
+    <section class="card" style="margin-top:16px;">
+      <div class="title" style="margin-bottom:10px;">Докупить слоты</div>
+      <form method="post" action="/sub/{_esc(token)}/devices/buy" class="tariffs">
         {qty_buttons}
       </form>
     </section>

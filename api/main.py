@@ -237,6 +237,8 @@ app.include_router(web_admin.router, prefix="/admin")
 app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")
+app.include_router(miniapp.router, prefix="/my")
+# Совместимость со старым путём (на случай уже выданных ссылок/закладок).
 app.include_router(miniapp.router, prefix="/miniapp")
 
 _assets_dir = _ROOT / "assets"

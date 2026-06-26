@@ -582,6 +582,14 @@ class Settings(BaseSettings):
             "и абсолютных ссылок; без слэша на конце"
         ),
     )
+    miniapp_url: str | None = Field(
+        default=None,
+        validation_alias="MINIAPP_URL",
+        description=(
+            "Полный HTTPS-URL мини-аппа для кнопки в боте (например https://miniapp.example.com/my). "
+            "Если не задан — используется {PUBLIC_SITE_URL}/my. Без слэша на конце."
+        ),
+    )
     admin_panel_title: str = Field(
         default="Remna",
         validation_alias="ADMIN_PANEL_TITLE",

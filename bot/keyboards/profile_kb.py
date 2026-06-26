@@ -16,12 +16,16 @@ def profile_main_keyboard(
     show_welcome_topup: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    site = (get_settings().public_site_url or "").strip().rstrip("/")
-    if site:
+    _settings = get_settings()
+    miniapp_url = (_settings.miniapp_url or "").strip().rstrip("/")
+    if not miniapp_url:
+        site = (_settings.public_site_url or "").strip().rstrip("/")
+        miniapp_url = f"{site}/my" if site else ""
+    if miniapp_url:
         b.row(
             InlineKeyboardButton(
                 text="🚀 Открыть приложение",
-                web_app=WebAppInfo(url=f"{site}/miniapp"),
+                web_app=WebAppInfo(url=miniapp_url),
             )
         )
     if show_welcome_topup:

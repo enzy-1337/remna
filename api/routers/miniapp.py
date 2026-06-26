@@ -1010,8 +1010,11 @@ async def miniapp_shell(request: Request) -> HTMLResponse:
     safe_logo_url = logo_url.replace("\\", "\\\\").replace('"', '\\"')
     bot_username = (settings.bot_username or "").strip().lstrip("@")
     bot_deeplink = f"https://t.me/{bot_username}" if bot_username else "https://t.me"
+    # База API = префикс монтирования (/my или /miniapp), берём из пути запроса.
+    base = (request.url.path or "/my").rstrip("/") or "/my"
     html = _SHELL_HTML.replace("__FLUX_LOGO_URL__", safe_logo_url)
     html = html.replace("__BOT_DEEPLINK__", bot_deeplink)
+    html = html.replace("__MINIAPP_BASE__", base)
     return HTMLResponse(html)
 
 
@@ -1360,6 +1363,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 
 <script>
 const FLUX_LOGO_URL = "__FLUX_LOGO_URL__";
+const API_BASE = "__MINIAPP_BASE__";
 if (FLUX_LOGO_URL) {
   document.querySelectorAll('.brandicon').forEach(el => {
     el.innerHTML = '';
@@ -1413,7 +1417,7 @@ function toast(msg) {
 async function api(path, opts) {
   opts = opts || {};
   opts.headers = Object.assign({'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData()}, opts.headers || {});
-  const r = await fetch('/miniapp' + path, opts);
+  const r = await fetch(API_BASE + path, opts);
   if (!r.ok) {
     let detail = '';
     try { detail = (await r.json()).detail || ''; } catch(e) {}
@@ -1422,7 +1426,7 @@ async function api(path, opts) {
   return r.json();
 }
 async function apiForm(path, formData) {
-  const r = await fetch('/miniapp' + path, {method:'POST', body: formData, headers: {'X-Telegram-Init-Data': initData()}});
+  const r = await fetch(API_BASE + path, {method:'POST', body: formData, headers: {'X-Telegram-Init-Data': initData()}});
   if (!r.ok) {
     let detail = '';
     try { detail = (await r.json()).detail || ''; } catch(e) {}
@@ -1437,7 +1441,7 @@ async function fetchMediaBlobUrl(msgId, kind) {
   if (MEDIA_CACHE[key]) return MEDIA_CACHE[key];
   if (MEDIA_INFLIGHT[key]) return MEDIA_INFLIGHT[key];
   const p = (async () => {
-    const r = await fetch('/miniapp/api/support/media/' + msgId + '/' + kind, {headers: {'X-Telegram-Init-Data': initData()}});
+    const r = await fetch(API_BASE + '/api/support/media/' + msgId + '/' + kind, {headers: {'X-Telegram-Init-Data': initData()}});
     if (!r.ok) throw new Error('media fetch failed');
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
@@ -1501,7 +1505,7 @@ function showView(name) {
     if (name === 'home') tg.BackButton.hide(); else tg.BackButton.show();
   }
 }
-function goHome() { showView(CTX && CTX.subscription ? 'home' : 'empty'); }
+function goHome() { showView('home'); }
 if (tg && tg.BackButton) tg.BackButton.onClick(goHome);
 
 function fmtDate(iso) {
@@ -1564,7 +1568,22 @@ function renderHome() {
     ? (refCount + ' · +' + Math.round(parseFloat(CTX.referrals_earned_rub || '0')) + ' ₽')
     : 'Пусто :(';
   renderRenewal(sub);
-  if (!sub) { showView('empty'); return; }
+  if (!sub) {
+    document.getElementById('home-sub-card').innerHTML = `
+      <div class="card" style="display:flex;align-items:center;gap:13px;">
+        <div style="width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4a5d70" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
+        </div>
+        <div><div style="font:700 15px Manrope;color:#fff;">Нет активной подписки</div><div class="muted" style="font:500 12px Manrope;margin-top:2px;">Оформите подписку, чтобы пользоваться VPN</div></div>
+      </div>`;
+    document.getElementById('home-renew-cta').innerHTML = `
+      <div class="cta-renew" onclick="showView('renewal')">
+        <div class="ic"><img src="/assets/miniapp_icons/buying-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
+        <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Купить подписку</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод</div></div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>`;
+    return;
+  }
   document.getElementById('home-sub-card').innerHTML = subCardHtml(sub);
   document.getElementById('home-renew-cta').innerHTML = `
     <div class="cta-renew" onclick="showView('renewal')">
@@ -1706,11 +1725,18 @@ async function buyPlan() {
   if (btn) btn.dataset.busy = '1';
   try {
     const r = await api('/api/plan/buy', {method:'POST', body: JSON.stringify({plan_id: selectedPlanId, idempotency_key: genKey()})});
-    if (r.ok) { toast('Подписка оформлена ✅'); await loadContext(); }
+    if (r.ok) { toast('Подписка оформлена ✅'); await loadContext(); showView('home'); }
+    else if (r.kind === 'insufficient') {
+      // Денег не хватает — ведём на пополнение, после оплаты вернёмся к покупке.
+      pendingBuyPlanId = selectedPlanId;
+      toast('Недостаточно средств — пополните баланс');
+      showView('balance');
+    }
     else toast(r.message || 'Недостаточно средств');
   } catch (e) { toast('Ошибка: ' + e.message); }
   finally { _buyPlanInFlight = false; }
 }
+let pendingBuyPlanId = null;
 
 let _trialInFlight = false;
 async function activateTrial() {
@@ -1785,7 +1811,13 @@ async function doTopup() {
 async function checkTopup(id) {
   try {
     const r = await api('/api/topup/status/' + id);
-    if (r.status === 'completed') { toast('Оплата получена ✅'); await loadContext(); document.getElementById('payment-waiting').style.display = 'none'; }
+    if (r.status === 'completed') {
+      toast('Оплата получена ✅');
+      await loadContext();
+      document.getElementById('payment-waiting').style.display = 'none';
+      // Если пополняли ради покупки тарифа — возвращаемся к нему.
+      if (pendingBuyPlanId) { selectedPlanId = pendingBuyPlanId; pendingBuyPlanId = null; renderPlans(); showView('renewal'); }
+    }
     else toast('Платёж пока не подтверждён');
   } catch (e) { toast('Ошибка проверки'); }
 }
