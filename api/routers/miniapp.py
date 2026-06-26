@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from aiogram.types import User as TgUser
-from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,10 +54,20 @@ from shared.tickets_db_compat import (
     ticket_messages_has_document_columns,
     ticket_messages_has_photo_file_id_column,
     ticket_messages_has_video_file_id_column,
+    ticket_messages_has_voice_columns,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Транзакции этих типов списывают с баланса; всё остальное (топап, рефералка, бонусы, промо) — пополнение.
+_DEBIT_TXN_TYPES = {
+    "subscription",
+    "subscription_autorenew",
+    "manual_add",
+    "device_slots_purchased",
+    "purchase_plan",
+}
 
 
 _MD2_ESCAPED_CHAR_RE = re.compile(r"\\([_*\[\]()~`>#+\-=|{}.!\\])")
@@ -230,10 +240,12 @@ async def api_context(
                         traffic_limit_gb = round(int(limit_bytes) / (1024 ** 3), 1)
             except Exception:
                 pass
+            is_lifetime = sub.expires_at is not None and sub.expires_at.year >= settings.billing_legacy_lifetime_cutoff_year
             sub_out = {
                 "status": sub.status,
                 "expires_at": _to_iso(sub.expires_at),
                 "days_left": _days_left(sub.expires_at),
+                "is_lifetime": is_lifetime,
                 "auto_renew": bool(sub.auto_renew),
                 "devices_count": sub.devices_count,
                 "plan_id": sub.plan_id,
@@ -379,6 +391,7 @@ async def api_transactions(
                         "id": t.id,
                         "type": t.type,
                         "amount_rub": str(t.amount),
+                        "direction": "debit" if t.type in _DEBIT_TXN_TYPES else "credit",
                         "provider": t.payment_provider,
                         "description": t.description,
                         "created_at": _to_iso(t.created_at),
@@ -606,6 +619,7 @@ async def api_support_messages(
         has_photo = await ticket_messages_has_photo_file_id_column(session)
         has_video = await ticket_messages_has_video_file_id_column(session)
         has_doc = await ticket_messages_has_document_columns(session)
+        has_voice = await ticket_messages_has_voice_columns(session)
         cols = "id,sender_role,text,created_at"
         if has_photo:
             cols += ",photo_file_id"
@@ -613,6 +627,8 @@ async def api_support_messages(
             cols += ",video_file_id"
         if has_doc:
             cols += ",document_file_id,document_file_name"
+        if has_voice:
+            cols += ",voice_file_id,video_note_file_id,audio_file_id,audio_file_name"
         rows = (
             await session.execute(
                 text(
@@ -635,6 +651,10 @@ async def api_support_messages(
                         "video_file_id": r.get("video_file_id") if has_video else None,
                         "document_file_id": r.get("document_file_id") if has_doc else None,
                         "document_file_name": r.get("document_file_name") if has_doc else None,
+                        "voice_file_id": r.get("voice_file_id") if has_voice else None,
+                        "video_note_file_id": r.get("video_note_file_id") if has_voice else None,
+                        "audio_file_id": r.get("audio_file_id") if has_voice else None,
+                        "audio_file_name": r.get("audio_file_name") if has_voice else None,
                     }
                     for r in rows
                 ],
@@ -642,20 +662,147 @@ async def api_support_messages(
         )
 
 
-class SupportSendIn(BaseModel):
-    text: str
+async def _user_owns_ticket_message(session: AsyncSession, *, user_id: int, msg_id: int) -> int | None:
+    """Возвращает ticket_id, если сообщение принадлежит тикету этого пользователя, иначе None."""
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT tm.ticket_id FROM ticket_messages tm
+                JOIN tickets t ON t.id = tm.ticket_id
+                WHERE tm.id = :mid AND t.user_id = :uid
+                """
+            ),
+            {"mid": msg_id, "uid": user_id},
+        )
+    ).scalar_one_or_none()
+    return int(row) if row is not None else None
+
+
+async def _proxy_support_media(
+    auth: WebAppAuth, settings: Settings, msg_id: int, column: str, *, media_type: str, filename_col: str | None = None
+) -> Response:
+    from aiogram import Bot
+    from tickets.config import config as tickets_config
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        owned = await _user_owns_ticket_message(session, user_id=user.id, msg_id=msg_id)
+        if owned is None:
+            raise HTTPException(status_code=404, detail="not found")
+        cols = column if not filename_col else f"{column}, {filename_col}"
+        row = (
+            await session.execute(
+                text(f"SELECT {cols} FROM ticket_messages WHERE id=:mid"), {"mid": msg_id}
+            )
+        ).mappings().first()
+    if not row or not row.get(column):
+        raise HTTPException(status_code=404, detail="media not found")
+    fid = str(row[column])
+    tok = (tickets_config.bot_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=503, detail="bot not configured")
+    async with Bot(token=tok) as bot:
+        f = await bot.get_file(fid)
+        fp = f.file_path
+        if not fp:
+            raise HTTPException(status_code=404, detail="file path unavailable")
+    url = f"https://api.telegram.org/file/bot{tok}/{fp}"
+    headers = {}
+    if filename_col and row.get(filename_col):
+        headers["Content-Disposition"] = f'attachment; filename="{row[filename_col]}"'
+    import httpx
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return Response(content=r.content, media_type=media_type, headers=headers)
+
+
+@router.get("/api/support/media/{msg_id}/photo")
+async def api_support_media_photo(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(auth, settings, msg_id, "photo_file_id", media_type="image/jpeg")
+
+
+@router.get("/api/support/media/{msg_id}/video")
+async def api_support_media_video(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(auth, settings, msg_id, "video_file_id", media_type="video/mp4")
+
+
+@router.get("/api/support/media/{msg_id}/voice")
+async def api_support_media_voice(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(auth, settings, msg_id, "voice_file_id", media_type="audio/ogg")
+
+
+@router.get("/api/support/media/{msg_id}/video-note")
+async def api_support_media_video_note(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(auth, settings, msg_id, "video_note_file_id", media_type="video/mp4")
+
+
+@router.get("/api/support/media/{msg_id}/audio")
+async def api_support_media_audio(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(
+        auth, settings, msg_id, "audio_file_id", media_type="audio/mpeg", filename_col="audio_file_name"
+    )
+
+
+@router.get("/api/support/media/{msg_id}/document")
+async def api_support_media_document(
+    msg_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    return await _proxy_support_media(
+        auth, settings, msg_id, "document_file_id", media_type="application/octet-stream", filename_col="document_file_name"
+    )
 
 
 @router.post("/api/support/send")
 async def api_support_send(
-    body: SupportSendIn,
+    text_value: str = Form(default="", alias="text"),
+    kind: str = Form(default=""),
+    file: UploadFile | None = File(default=None),
     authorization: str | None = Header(default=None),
     x_telegram_init_data: str | None = Header(default=None),
 ) -> JSONResponse:
     settings = get_settings()
     auth = await _auth(settings, authorization, x_telegram_init_data)
-    msg = (body.text or "").strip()
-    if not msg:
+    msg = (text_value or "").strip()
+    has_file = file is not None and bool(file.filename)
+    if not msg and not has_file:
         raise HTTPException(status_code=400, detail="empty message")
 
     from api.routers.public_pages import (
@@ -665,6 +812,8 @@ async def api_support_send(
     )
     from aiogram import Bot
     from aiogram.enums import ParseMode
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.types import BufferedInputFile
     from tickets.config import config as tickets_config
 
     factory = get_session_factory()
@@ -672,10 +821,77 @@ async def api_support_send(
         user = await _get_or_create_db_user(session, auth)
         await session.commit()
 
+    photo_fid = video_fid = voice_fid = vidnote_fid = audio_fid = doc_fid = None
+    audio_fname = doc_fname = None
+
+    if has_file:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="empty file")
+        if len(raw) > int(tickets_config.media_max_mb) * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"file too large (max {tickets_config.media_max_mb} MB)")
+        if not tickets_config.bot_token:
+            raise HTTPException(status_code=503, detail="bot not configured")
+        ctype = (file.content_type or "").lower()
+        safe_name = (file.filename or "upload").strip() or "upload"
+        uid = int(user.telegram_id)
+        async with Bot(token=tickets_config.bot_token) as bot:
+            upload = BufferedInputFile(file=raw, filename=safe_name)
+            if kind == "voice" or (ctype.startswith("audio/") and kind != "document"):
+                try:
+                    sent = await bot.send_voice(chat_id=uid, voice=upload, caption=(msg[:1024] or None))
+                    voice_fid = sent.voice.file_id if sent.voice else None
+                except TelegramBadRequest:
+                    upload2 = BufferedInputFile(file=raw, filename=safe_name)
+                    sent = await bot.send_audio(chat_id=uid, audio=upload2, caption=(msg[:1024] or None))
+                    audio_fid = sent.audio.file_id if sent.audio else None
+                    audio_fname = safe_name
+            elif kind == "photo" or ctype.startswith("image/"):
+                try:
+                    sent = await bot.send_photo(chat_id=uid, photo=upload, caption=(msg[:1024] or None))
+                    photo_fid = sent.photo[-1].file_id if sent.photo else None
+                except TelegramBadRequest as e:
+                    err = str(e)
+                    if "PHOTO_INVALID_DIMENSIONS" in err or "IMAGE_PROCESS_FAILED" in err:
+                        upload2 = BufferedInputFile(file=raw, filename=safe_name)
+                        sent = await bot.send_document(chat_id=uid, document=upload2, caption=(msg[:1024] or None))
+                        doc_fid = sent.document.file_id if sent.document else None
+                        doc_fname = safe_name
+                    else:
+                        raise
+            elif kind == "video" or ctype.startswith("video/"):
+                sent = await bot.send_video(chat_id=uid, video=upload, caption=(msg[:1024] or None))
+                video_fid = sent.video.file_id if sent.video else None
+            else:
+                sent = await bot.send_document(chat_id=uid, document=upload, caption=(msg[:1024] or None))
+                doc_fid = sent.document.file_id if sent.document else None
+                doc_fname = safe_name
+
     active = await _get_active_support_ticket(db_user=user)
     is_new = active is None
     if is_new:
-        ticket_id, topic_id = await _start_web_support_ticket(db_user=user, message_text=msg)
+        ticket_id, topic_id = await _start_web_support_ticket(db_user=user, message_text=msg or "📎 Вложение")
+        if has_file:
+            async with factory() as session:
+                user = await _get_or_create_db_user(session, auth)
+                await add_ticket_message(
+                    session,
+                    ticket_id=ticket_id,
+                    sender_id=user.id,
+                    sender_role="user",
+                    sender_telegram_id=int(user.telegram_id),
+                    text_body="",
+                    is_internal=False,
+                    photo_file_id=photo_fid,
+                    video_file_id=video_fid,
+                    document_file_id=doc_fid,
+                    document_file_name=doc_fname,
+                    voice_file_id=voice_fid,
+                    video_note_file_id=vidnote_fid,
+                    audio_file_id=audio_fid,
+                    audio_file_name=audio_fname,
+                )
+                await session.commit()
     else:
         ticket_id, topic_id = active
         async with factory() as session:
@@ -688,23 +904,40 @@ async def api_support_send(
                 sender_telegram_id=int(user.telegram_id),
                 text_body=msg,
                 is_internal=False,
+                photo_file_id=photo_fid,
+                video_file_id=video_fid,
+                document_file_id=doc_fid,
+                document_file_name=doc_fname,
+                voice_file_id=voice_fid,
+                video_note_file_id=vidnote_fid,
+                audio_file_id=audio_fid,
+                audio_file_name=audio_fname,
             )
             await session.commit()
 
     if topic_id and tickets_config.bot_token and tickets_config.support_group_id:
         try:
             async with Bot(token=tickets_config.bot_token) as bot:
-                if is_new:
-                    cap = msg
-                else:
-                    cap = _web_support_topic_text(ticket_id=ticket_id, db_user=user, msg=msg)
-                await bot.send_message(
-                    chat_id=tickets_config.support_group_id,
-                    message_thread_id=topic_id,
-                    text=cap,
-                    parse_mode=ParseMode.HTML if not is_new else None,
-                    disable_web_page_preview=True,
-                )
+                cap = (msg[:1024] or None) if is_new else _web_support_topic_text(ticket_id=ticket_id, db_user=user, msg=msg)[:1024]
+                pm = ParseMode.HTML if (cap and not is_new) else None
+                if photo_fid:
+                    await bot.send_photo(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, photo=photo_fid, caption=cap, parse_mode=pm)
+                elif video_fid:
+                    await bot.send_video(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, video=video_fid, caption=cap, parse_mode=pm)
+                elif voice_fid:
+                    await bot.send_voice(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, voice=voice_fid, caption=cap, parse_mode=pm)
+                elif audio_fid:
+                    await bot.send_audio(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, audio=audio_fid, caption=cap, parse_mode=pm)
+                elif doc_fid:
+                    await bot.send_document(chat_id=tickets_config.support_group_id, message_thread_id=topic_id, document=doc_fid, caption=cap, parse_mode=pm)
+                elif not is_new:
+                    await bot.send_message(
+                        chat_id=tickets_config.support_group_id,
+                        message_thread_id=topic_id,
+                        text=_web_support_topic_text(ticket_id=ticket_id, db_user=user, msg=msg),
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
         except Exception:
             logger.warning("miniapp support: failed to post to topic", exc_info=True)
 
@@ -751,7 +984,6 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 #app{min-height:100vh;display:flex;flex-direction:column;}
 .header{background:var(--header);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;position:sticky;top:0;z-index:10;}
 .header .left{display:flex;align-items:center;gap:10px;}
-.back{width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--link);}
 .brandicon{width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .title{font:700 16px Manrope;color:#fff;}
 .subtitle{font:500 11px Manrope;color:var(--muted);margin-top:1px;}
@@ -792,8 +1024,8 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .navitem .ic{width:40px;height:40px;border-radius:11px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;color:var(--accent);flex-shrink:0;}
 .navitem .lbl{font:700 14px Manrope;color:#fff;}
 .navitem .sub{font:500 11px Manrope;color:var(--muted);margin-top:1px;}
-.avatar-circle{width:44px;height:44px;border-radius:50%;background:linear-gradient(140deg,#3a4a5a,#222e3a);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font:800 16px Manrope;color:#fff;flex-shrink:0;}
-.greet-row{display:flex;align-items:center;gap:12px;padding:2px 2px 4px;}
+.avatar-circle{width:44px;height:44px;border-radius:50%;background:linear-gradient(140deg,#3a4a5a,#222e3a);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font:800 16px Manrope;color:#fff;flex-shrink:0;background-size:cover;background-position:center;overflow:hidden;}
+.greet-row{display:flex;align-items:center;gap:12px;padding:2px 2px 10px;}
 .greet-row .hi{font:500 12px Manrope;color:var(--muted);}
 .greet-row .nm{font:800 18px Manrope;color:#fff;letter-spacing:-.01em;}
 .cta-renew{background:var(--accent);border-radius:16px;padding:16px 18px;display:flex;align-items:center;gap:13px;cursor:pointer;margin-top:14px;}
@@ -821,7 +1053,24 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .bubbletime{font:500 10px Manrope;opacity:.6;text-align:right;margin-top:4px;}
 .inputbar{display:flex;align-items:center;gap:10px;background:var(--header);padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid rgba(255,255,255,.05);position:sticky;bottom:0;}
 .inputbar input{flex:1;background:var(--bg);border:none;border-radius:20px;padding:11px 16px;color:#fff;font:500 14px Manrope;outline:none;}
-.sendbtn{color:var(--accent);cursor:pointer;}
+.sendbtn{color:var(--accent);cursor:pointer;flex-shrink:0;}
+.iconbtn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;opacity:.85;}
+.iconbtn img{width:20px;height:20px;object-fit:contain;}
+.iconbtn.recording img{filter:drop-shadow(0 0 0 #FF6B6B);}
+.iconbtn.recording{background:rgba(255,107,107,.18);border-radius:50%;animation:recpulse 1.1s ease-in-out infinite;}
+@keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.35);}50%{box-shadow:0 0 0 6px rgba(255,107,107,.12);}}
+.chat-attach-preview{display:flex;align-items:center;gap:10px;background:var(--header);padding:8px 14px;font:600 12px Manrope;color:#fff;border-top:1px solid rgba(255,255,255,.05);}
+.chat-attach-remove{color:var(--danger);cursor:pointer;font-weight:700;margin-left:auto;}
+.bubble img.chat-media-img{max-width:100%;max-height:240px;border-radius:12px;display:block;cursor:pointer;object-fit:cover;}
+.bubble video.chat-media-video{max-width:100%;max-height:240px;border-radius:12px;display:block;background:#000;}
+.bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;background:#000;}
+.bubble audio.chat-media-audio{width:220px;margin-top:6px;}
+.bubble .chat-media-doc{display:flex;align-items:center;gap:8px;margin-top:6px;background:rgba(0,0,0,.15);border-radius:10px;padding:8px 12px;text-decoration:none;color:inherit;}
+.chat-media-wrap{position:relative;display:inline-block;margin-top:6px;}
+.chat-media-dl{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.chat-media-dl img{width:13px;height:13px;}
+.bubble .chat-media-doc img{width:16px;height:16px;}
+.bubble.me .chat-media-doc{background:rgba(255,255,255,.15);}
 .history-item{display:flex;align-items:center;gap:13px;padding:14px 16px;}
 .history-item+.history-item{border-top:1px solid rgba(255,255,255,.05);}
 .history-ic{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -858,9 +1107,6 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 <div id="app" style="display:none;">
   <div class="header">
     <div class="left">
-      <div class="back" id="btn-back" style="display:none;" onclick="goHome()">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
-      </div>
       <div class="brandicon" id="brandicon">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
       </div>
@@ -879,7 +1125,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div id="home-sub-card"></div>
     <div class="card row" style="margin-top:10px;cursor:pointer;" onclick="showView('balance')">
-      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7B5CFF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M16 12h2"/></svg></div>
+      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><img src="/assets/miniapp_icons/wallet-100.png" style="width:22px;height:22px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div class="muted" style="font:500 12px Manrope;">Баланс</div><div style="font:800 22px Manrope;color:#fff;letter-spacing:-.01em;" id="home-balance">0 <span style="font-size:15px;color:var(--muted);">₽</span></div></div>
       <div style="font:700 13px Manrope;color:var(--accent);background:rgba(123,92,255,.12);padding:9px 16px;border-radius:12px;" onclick="event.stopPropagation();showView('balance')">Пополнить</div>
     </div>
@@ -890,15 +1136,15 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
         <div><div class="lbl">Рефералы</div><div class="sub" id="home-ref-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('support')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L3 21l1.1-3.7A8.4 8.4 0 1 1 21 11.5z"/></svg></div>
+        <div class="ic"><img src="/assets/miniapp_icons/chat-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div><div class="lbl">Поддержка</div><div class="sub">онлайн</div></div>
       </div>
       <div class="navitem" onclick="showView('devices')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
+        <div class="ic"><img src="/assets/miniapp_icons/monitor-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div><div class="lbl">Устройства</div><div class="sub" id="home-dev-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('history')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <div class="ic"><img src="/assets/miniapp_icons/clock-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div><div class="lbl">История</div><div class="sub">операций</div></div>
       </div>
     </div>
@@ -964,12 +1210,12 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Способ оплаты</div>
     <div style="display:flex;flex-direction:column;gap:10px;" id="paymethods">
       <div class="payrow selected" data-provider="platega">
-        <div style="width:36px;height:36px;border-radius:10px;background:rgba(106,179,243,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6AB3F3" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div>
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(106,179,243,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/card-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Банковская карта</div><div class="muted" style="font:500 12px Manrope;">Platega · Visa, MIR, СБП</div></div>
         <div class="radio" style="border:6px solid var(--accent);background:#fff;"></div>
       </div>
       <div class="payrow" data-provider="cryptobot">
-        <div style="width:36px;height:36px;border-radius:10px;background:rgba(247,147,26,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="#F7931A"><circle cx="12" cy="12" r="10"/></svg></div>
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(247,147,26,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/bitcoin-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Криптовалюта</div><div class="muted" style="font:500 12px Manrope;">CryptoBot · USDT, TON, BTC</div></div>
         <div class="radio"></div>
       </div>
@@ -991,7 +1237,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Подключено</div>
     <div id="devices-list"></div>
     <div class="card row" style="margin-top:16px;background:linear-gradient(130deg, rgba(123,92,255,.14), rgba(123,92,255,.03));border:1px solid rgba(123,92,255,.2);cursor:pointer;" id="buy-slots-row" onclick="buySlot()">
-      <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.16);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7B5CFF" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.16);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/plus-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Добавить слот</div><div class="muted" style="font:500 12px Manrope;" id="buy-slots-sub">1 устройство</div></div>
       <span style="font:700 13px Manrope;color:var(--accent);" id="buy-slots-price"></span>
     </div>
@@ -1006,10 +1252,17 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
   <div class="view" id="view-support">
     <div class="chatwrap" id="chat-messages"></div>
   </div>
+  <div id="chat-attach-preview" class="chat-attach-preview" style="display:none;">
+    <span id="chat-attach-name"></span>
+    <span class="chat-attach-remove" onclick="clearChatAttachment()">✕</span>
+  </div>
   <div class="inputbar" id="support-bar" style="display:none;">
+    <div class="iconbtn" id="attach-btn" onclick="document.getElementById('chat-file').click()"><img src="/assets/miniapp_icons/attach-100.png" alt=""></div>
+    <input type="file" id="chat-file" style="display:none" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar,.7z,.tar,.gz" onchange="onChatFileSelected(event)">
     <input id="chat-input" placeholder="Сообщение…" onkeydown="if(event.key==='Enter')sendChat()">
-    <div class="sendbtn" onclick="sendChat()">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zM6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
+    <div class="iconbtn" id="mic-btn" onclick="toggleVoiceRecord()"><img src="/assets/miniapp_icons/microphone-100.png" alt=""></div>
+    <div class="sendbtn" id="send-btn" onclick="sendChat()">
+      <img src="/assets/miniapp_icons/up-arrow-100.png" style="width:20px;height:20px;object-fit:contain;" alt="">
     </div>
   </div>
 
@@ -1024,7 +1277,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div class="card" id="trial-card" style="margin-top:26px;background:linear-gradient(130deg, rgba(123,92,255,.18), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.3);">
       <div class="row">
-        <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.18);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="#7B5CFF"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg></div>
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(123,92,255,.18);display:flex;align-items:center;justify-content:center;"><img src="/assets/miniapp_icons/gift-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div><div style="font:800 16px Manrope;color:#fff;">Бесплатный триал</div><div style="font:600 12px Manrope;color:var(--accent);">разовое предложение</div></div>
       </div>
       <div class="row" style="margin-top:14px;gap:10px;" id="trial-stats"></div>
@@ -1044,10 +1297,13 @@ if (FLUX_LOGO_URL) {
     el.innerHTML = '';
     el.style.background = 'none';
     el.style.overflow = 'hidden';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
     const img = document.createElement('img');
     img.src = FLUX_LOGO_URL;
-    img.style.width = '100%';
-    img.style.height = '100%';
+    img.style.width = 'calc(100% - 4px)';
+    img.style.height = 'calc(100% - 4px)';
     img.style.objectFit = 'cover';
     img.style.borderRadius = 'inherit';
     el.appendChild(img);
@@ -1097,6 +1353,34 @@ async function api(path, opts) {
   }
   return r.json();
 }
+async function apiForm(path, formData) {
+  const r = await fetch('/miniapp' + path, {method:'POST', body: formData, headers: {'X-Telegram-Init-Data': initData()}});
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.json()).detail || ''; } catch(e) {}
+    throw new Error(detail || ('HTTP ' + r.status));
+  }
+  return r.json();
+}
+async function fetchMediaBlobUrl(msgId, kind) {
+  const r = await fetch('/miniapp/api/support/media/' + msgId + '/' + kind, {headers: {'X-Telegram-Init-Data': initData()}});
+  if (!r.ok) throw new Error('media fetch failed');
+  const blob = await r.blob();
+  return URL.createObjectURL(blob);
+}
+async function hydrateChatMedia(root) {
+  const els = root.querySelectorAll('[data-media-msg]');
+  for (const el of els) {
+    const msgId = el.getAttribute('data-media-msg');
+    const kind = el.getAttribute('data-media-kind');
+    try {
+      const url = await fetchMediaBlobUrl(msgId, kind);
+      if (el.tagName === 'A') el.href = url;
+      else el.src = url;
+      el.removeAttribute('data-media-msg');
+    } catch (e) {}
+  }
+}
 
 const VIEW_TITLES = {
   home: ['Flux VPN', 'мини-приложение'],
@@ -1130,7 +1414,6 @@ function showView(name) {
   const t = VIEW_TITLES[name] || ['Flux VPN', ''];
   document.getElementById('view-title').textContent = t[0];
   document.getElementById('view-subtitle').textContent = t[1];
-  document.getElementById('btn-back').style.display = name === 'home' ? 'none' : 'flex';
   document.getElementById('brandicon').style.display = name === 'home' ? 'flex' : 'none';
   if (tg && tg.BackButton) {
     if (name === 'home') tg.BackButton.hide(); else tg.BackButton.show();
@@ -1145,6 +1428,13 @@ function fmtDate(iso) {
   return d.toLocaleDateString('ru-RU', {day:'numeric', month:'long'});
 }
 
+function daysLabel(sub) {
+  if (sub.is_lifetime) return '∞';
+  return sub.days_left + ' ' + (sub.days_left===1?'день':(sub.days_left>=2&&sub.days_left<=4?'дня':'дней'));
+}
+function untilLabel(sub) {
+  return sub.is_lifetime ? 'навсегда' : ('до ' + fmtDate(sub.expires_at));
+}
 function subCardHtml(sub) {
   const statusLabel = sub.status === 'trial' ? 'Триал · активна' : 'Подписка · активна';
   const usedGb = sub.traffic_used_gb != null ? sub.traffic_used_gb : '—';
@@ -1154,20 +1444,36 @@ function subCardHtml(sub) {
     <div class="card" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);">
       <div class="row" style="justify-content:space-between;">
         <div style="font:700 15px Manrope;color:#fff;">${statusLabel}</div>
-        <div style="font:700 11px Manrope;color:var(--accent);background:rgba(123,92,255,.14);padding:4px 9px;border-radius:9px;">${sub.days_left} ${sub.days_left===1?'день':'дней'}</div>
+        <div style="font:700 11px Manrope;color:var(--accent);background:rgba(123,92,255,.14);padding:4px 9px;border-radius:9px;">${daysLabel(sub)}</div>
       </div>
       <div class="progress" style="margin-top:12px;"><div style="width:${pct}%;"></div></div>
       <div class="row" style="justify-content:space-between;margin-top:8px;">
         <span class="muted" style="font:500 12px Manrope;">${usedGb} / ${limitGb} ГБ использовано</span>
-        <span class="muted" style="font:500 12px Manrope;">до ${fmtDate(sub.expires_at)}</span>
+        <span class="muted" style="font:500 12px Manrope;">${untilLabel(sub)}</span>
       </div>
     </div>`;
 }
 
+const TG_AVATAR_COLORS = ['#e17076', '#eda86c', '#a695e7', '#7bc862', '#6ec9cb', '#65aadd', '#ee7aae'];
+function applyAvatar(el, opts) {
+  const photoUrl = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.photo_url) || '';
+  if (photoUrl) {
+    el.style.backgroundImage = `url("${photoUrl}")`;
+    el.style.background = `url("${photoUrl}") center/cover`;
+    el.textContent = '';
+    return;
+  }
+  const tgId = Math.abs(parseInt(opts.telegramId) || 0);
+  const idx = tgId % TG_AVATAR_COLORS.length;
+  el.style.backgroundImage = 'none';
+  el.style.background = TG_AVATAR_COLORS[idx];
+  const letter = (opts.name || opts.username || '?').trim().charAt(0).toUpperCase();
+  el.textContent = letter || '?';
+}
 function renderHome() {
   const sub = CTX.subscription;
   const u = CTX.user;
-  document.getElementById('home-avatar').textContent = (u.first_name || 'F').charAt(0).toUpperCase();
+  applyAvatar(document.getElementById('home-avatar'), {telegramId: u.telegram_id, name: u.first_name, username: u.username});
   document.getElementById('home-greet-name').textContent = u.username ? `${u.first_name} · @${u.username}` : u.first_name;
   document.getElementById('home-balance').innerHTML = Math.round(parseFloat(u.balance_rub)) + ' <span style="font-size:15px;color:var(--muted);">₽</span>';
   document.getElementById('home-dev-sub').textContent = (CTX.devices_used || 0) + ' из ' + (CTX.devices_total || 0);
@@ -1425,21 +1731,28 @@ async function unbindDevice(hwid) {
 
 // --- History ---
 const HIST_ICONS = {
-  topup: ['<path d="M12 19V5M6 11l6-6 6 6"/>', 'rgba(123,92,255,.14)', '#7B5CFF'],
-  subscription: ['<path d="M12 5v14M6 13l6 6 6-6"/>', 'rgba(255,255,255,.06)', '#C8D2DA'],
-  default: ['<circle cx="12" cy="12" r="9"/>', 'rgba(255,255,255,.06)', '#aab8c2'],
+  topup: ['wallet-100.png', 'rgba(123,92,255,.14)'],
+  subscription: ['card-100.png', 'rgba(255,255,255,.06)'],
+  subscription_autorenew: ['card-100.png', 'rgba(255,255,255,.06)'],
+  purchase_plan: ['card-100.png', 'rgba(255,255,255,.06)'],
+  manual_add: ['monitor-100.png', 'rgba(255,255,255,.06)'],
+  device_slots_purchased: ['monitor-100.png', 'rgba(255,255,255,.06)'],
 };
+function histIconFor(t) {
+  if (HIST_ICONS[t.type]) return HIST_ICONS[t.type];
+  return t.direction === 'debit' ? ['card-100.png', 'rgba(255,255,255,.06)'] : ['gift-100.png', 'rgba(123,92,255,.14)'];
+}
 async function loadHistory() {
   try {
     const r = await api('/api/transactions');
     const list = document.getElementById('history-list');
     if (!r.transactions.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока нет операций</div>'; return; }
     list.innerHTML = r.transactions.map(t => {
-      const ic = HIST_ICONS[t.type] || HIST_ICONS.default;
-      const sign = t.type === 'topup' ? '+' : '−';
-      const color = t.type === 'topup' ? '#7B5CFF' : '#C8D2DA';
+      const ic = histIconFor(t);
+      const sign = t.direction === 'debit' ? '−' : '+';
+      const color = t.direction === 'debit' ? '#C8D2DA' : '#7B5CFF';
       return `<div class="history-item">
-        <div class="history-ic" style="background:${ic[1]};"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="${ic[2]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ic[0]}</svg></div>
+        <div class="history-ic" style="background:${ic[1]};"><img src="/assets/miniapp_icons/${ic[0]}" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${t.description || t.type}</div><div class="muted" style="font:500 11px Manrope;">${fmtDate(t.created_at)}</div></div>
         <div style="font:800 15px Manrope;color:${color};">${sign}${Math.round(parseFloat(t.amount_rub))} ₽</div>
       </div>`;
@@ -1448,6 +1761,48 @@ async function loadHistory() {
 }
 
 // --- Support ---
+function dlBtn(msgId, kind) {
+  return `<span class="chat-media-dl" data-dl-msg="${msgId}" data-dl-kind="${kind}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt=""></span>`;
+}
+function chatMediaHtml(m) {
+  let html = '';
+  if (m.photo_file_id) {
+    html += `<div class="chat-media-wrap"><img class="chat-media-img" data-media-msg="${m.id}" data-media-kind="photo" alt="">${dlBtn(m.id,'photo')}</div>`;
+  }
+  if (m.video_file_id) {
+    html += `<div class="chat-media-wrap"><video class="chat-media-video" data-media-msg="${m.id}" data-media-kind="video" controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
+  }
+  if (m.video_note_file_id) {
+    html += `<video class="chat-media-vidnote" data-media-msg="${m.id}" data-media-kind="video-note" controls playsinline preload="metadata"></video>`;
+  }
+  if (m.voice_file_id) {
+    html += `<audio class="chat-media-audio" data-media-msg="${m.id}" data-media-kind="voice" controls preload="metadata"></audio>`;
+  }
+  if (m.audio_file_id) {
+    html += `<audio class="chat-media-audio" data-media-msg="${m.id}" data-media-kind="audio" controls preload="metadata"></audio>`;
+  }
+  if (m.document_file_id) {
+    const name = (m.document_file_name || 'Документ').replace(/</g,'&lt;');
+    html += `<a class="chat-media-doc" data-media-msg="${m.id}" data-media-kind="document" download="${name}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt="">${name}</a>`;
+  }
+  return html;
+}
+async function downloadChatMedia(msgId, kind) {
+  try {
+    const url = await fetchMediaBlobUrl(msgId, kind);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = kind + '-' + msgId;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) { toast('Не удалось скачать'); }
+}
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest && e.target.closest('[data-dl-msg]');
+  if (!btn) return;
+  downloadChatMedia(btn.getAttribute('data-dl-msg'), btn.getAttribute('data-dl-kind'));
+});
 async function loadSupport() {
   try {
     const r = await api('/api/support/messages');
@@ -1456,24 +1811,101 @@ async function loadSupport() {
     wrap.innerHTML = r.messages.map(m => {
       const cls = m.sender_role === 'user' ? 'me' : 'op';
       const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) : '';
-      return `<div class="bubble ${cls}">${(m.text||'').replace(/</g,'&lt;')}<div class="bubbletime">${time}</div></div>`;
+      const txt = (m.text||'').trim();
+      return `<div class="bubble ${cls}">${txt ? txt.replace(/</g,'&lt;') : ''}${chatMediaHtml(m)}<div class="bubbletime">${time}</div></div>`;
     }).join('');
     wrap.scrollTop = wrap.scrollHeight;
+    hydrateChatMedia(wrap);
   } catch (e) { toast('Ошибка загрузки чата'); }
 }
+
+let selectedChatFile = null;
+function onChatFileSelected(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  selectedChatFile = f;
+  document.getElementById('chat-attach-name').textContent = f.name;
+  document.getElementById('chat-attach-preview').style.display = 'flex';
+}
+function clearChatAttachment() {
+  selectedChatFile = null;
+  document.getElementById('chat-file').value = '';
+  document.getElementById('chat-attach-preview').style.display = 'none';
+}
+function fileKindOf(file) {
+  const t = (file.type || '').toLowerCase();
+  if (t.startsWith('image/')) return 'photo';
+  if (t.startsWith('video/')) return 'video';
+  if (t.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
 let _sendChatInFlight = false;
 async function sendChat() {
   if (_sendChatInFlight) return;
   const input = document.getElementById('chat-input');
   const val = input.value.trim();
-  if (!val) return;
+  const file = selectedChatFile;
+  if (!val && !file) return;
   input.value = '';
+  clearChatAttachment();
   _sendChatInFlight = true;
   try {
-    await api('/api/support/send', {method:'POST', body: JSON.stringify({text: val})});
+    const fd = new FormData();
+    fd.append('text', val);
+    if (file) { fd.append('kind', fileKindOf(file)); fd.append('file', file); }
+    await apiForm('/api/support/send', fd);
     await loadSupport();
   } catch (e) { toast('Ошибка отправки'); }
   finally { _sendChatInFlight = false; }
+}
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordingTimer = null;
+let recordingSeconds = 0;
+async function toggleVoiceRecord() {
+  const btn = document.getElementById('mic-btn');
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const mime = ['audio/ogg;codecs=opus','audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    mediaRecorder = mime ? new MediaRecorder(stream, {mimeType: mime}) : new MediaRecorder(stream);
+    recordedChunks = [];
+    recordingSeconds = 0;
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      btn.classList.remove('recording');
+      if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+      const placeholder = document.getElementById('chat-input');
+      placeholder.placeholder = 'Сообщение…';
+      if (!recordedChunks.length) return;
+      const blob = new Blob(recordedChunks, {type: mediaRecorder.mimeType || 'audio/webm'});
+      if (blob.size < 500) return;
+      const ext = (mediaRecorder.mimeType || '').includes('ogg') ? 'ogg' : (mediaRecorder.mimeType || '').includes('mp4') ? 'm4a' : 'webm';
+      const file = new File([blob], 'voice.' + ext, {type: blob.type});
+      _sendChatInFlight = true;
+      try {
+        const fd = new FormData();
+        fd.append('text', '');
+        fd.append('kind', 'voice');
+        fd.append('file', file);
+        await apiForm('/api/support/send', fd);
+        await loadSupport();
+      } catch (e) { toast('Ошибка отправки голосового'); }
+      finally { _sendChatInFlight = false; }
+    };
+    mediaRecorder.start();
+    btn.classList.add('recording');
+    document.getElementById('chat-input').placeholder = 'Запись… нажмите 🎤 ещё раз';
+    recordingTimer = setInterval(() => { recordingSeconds++; }, 1000);
+  } catch (e) {
+    toast('Нет доступа к микрофону');
+  }
 }
 
 async function loadContext() {
