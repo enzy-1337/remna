@@ -268,6 +268,7 @@ async def api_context(
                 "trial_available": trial_ok,
                 "trial_duration_days": settings.trial_duration_days,
                 "trial_traffic_gb": settings.trial_traffic_gb,
+                "included_device_slots": settings.subscription_included_device_slots,
                 "plans": plans_out,
             }
         )
@@ -1061,9 +1062,11 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 @keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.35);}50%{box-shadow:0 0 0 6px rgba(255,107,107,.12);}}
 .chat-attach-preview{display:flex;align-items:center;gap:10px;background:var(--header);padding:8px 14px;font:600 12px Manrope;color:#fff;border-top:1px solid rgba(255,255,255,.05);}
 .chat-attach-remove{color:var(--danger);cursor:pointer;font-weight:700;margin-left:auto;}
-.bubble img.chat-media-img{max-width:100%;max-height:240px;border-radius:12px;display:block;cursor:pointer;object-fit:cover;}
-.bubble video.chat-media-video{max-width:100%;max-height:240px;border-radius:12px;display:block;background:#000;}
-.bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;background:#000;}
+.bubble img.chat-media-img{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;cursor:pointer;object-fit:cover;opacity:0;transition:opacity .25s ease;}
+.bubble video.chat-media-video{width:200px;max-width:100%;min-height:150px;max-height:240px;border-radius:12px;display:block;background:#000;opacity:0;transition:opacity .25s ease;}
+.bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;background:#000;opacity:0;transition:opacity .25s ease;}
+.bubble img.chat-media-img:not(.media-loaded),.bubble video.chat-media-video:not(.media-loaded),.bubble video.chat-media-vidnote:not(.media-loaded){background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;}
+.media-loaded{opacity:1 !important;}
 .bubble audio.chat-media-audio{width:220px;margin-top:6px;}
 .bubble .chat-media-doc{display:flex;align-items:center;gap:8px;margin-top:6px;background:rgba(0,0,0,.15);border-radius:10px;padding:8px 12px;text-decoration:none;color:inherit;}
 .chat-media-wrap{position:relative;display:inline-block;margin-top:6px;}
@@ -1184,10 +1187,10 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="sectiontitle">Ваш реферальный код</div>
     <div class="card row">
       <span class="mono" style="font-size:14px;color:#fff;flex:1;letter-spacing:.01em;word-break:break-all;" id="ref-link">—</span>
-      <div class="copybtn" onclick="copyReferralLink()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Копировать</div>
+      <div class="copybtn" onclick="copyReferralLink()"><img src="/assets/miniapp_icons/documents-100.png" style="width:14px;height:14px;object-fit:contain;" alt="">Копировать</div>
     </div>
     <div class="btn btn-primary" style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px;" onclick="shareReferralLink()">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v14"/></svg>Поделиться в Telegram
+      <img src="/assets/miniapp_icons/forward-arrow-100.png" style="width:17px;height:17px;object-fit:contain;" alt="">Поделиться в Telegram
     </div>
     <div class="sectiontitle" id="ref-invited-title">Приглашённые</div>
     <div class="card" style="padding:0;overflow:hidden;" id="ref-invited-list"></div>
@@ -1262,7 +1265,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <input id="chat-input" placeholder="Сообщение…" onkeydown="if(event.key==='Enter')sendChat()">
     <div class="iconbtn" id="mic-btn" onclick="toggleVoiceRecord()"><img src="/assets/miniapp_icons/microphone-100.png" alt=""></div>
     <div class="sendbtn" id="send-btn" onclick="sendChat()">
-      <img src="/assets/miniapp_icons/up-arrow-100.png" style="width:20px;height:20px;object-fit:contain;" alt="">
+      <img src="/assets/miniapp_icons/sent-100.png" style="width:20px;height:20px;object-fit:contain;" alt="">
     </div>
   </div>
 
@@ -1295,8 +1298,8 @@ const FLUX_LOGO_URL = "__FLUX_LOGO_URL__";
 if (FLUX_LOGO_URL) {
   document.querySelectorAll('.brandicon').forEach(el => {
     el.innerHTML = '';
-    el.style.background = 'none';
-    el.style.overflow = 'hidden';
+    el.style.background = 'linear-gradient(140deg,var(--accent),var(--accent2))';
+    el.style.overflow = 'visible';
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
@@ -1304,8 +1307,8 @@ if (FLUX_LOGO_URL) {
     img.src = FLUX_LOGO_URL;
     img.style.width = 'calc(100% - 4px)';
     img.style.height = 'calc(100% - 4px)';
-    img.style.objectFit = 'cover';
-    img.style.borderRadius = 'inherit';
+    img.style.objectFit = 'contain';
+    img.style.borderRadius = '0';
     el.appendChild(img);
   });
 }
@@ -1362,24 +1365,38 @@ async function apiForm(path, formData) {
   }
   return r.json();
 }
+const MEDIA_CACHE = {};      // key "msgId:kind" -> objectURL
+const MEDIA_INFLIGHT = {};   // key -> Promise (дедупликация параллельных запросов)
 async function fetchMediaBlobUrl(msgId, kind) {
-  const r = await fetch('/miniapp/api/support/media/' + msgId + '/' + kind, {headers: {'X-Telegram-Init-Data': initData()}});
-  if (!r.ok) throw new Error('media fetch failed');
-  const blob = await r.blob();
-  return URL.createObjectURL(blob);
+  const key = msgId + ':' + kind;
+  if (MEDIA_CACHE[key]) return MEDIA_CACHE[key];
+  if (MEDIA_INFLIGHT[key]) return MEDIA_INFLIGHT[key];
+  const p = (async () => {
+    const r = await fetch('/miniapp/api/support/media/' + msgId + '/' + kind, {headers: {'X-Telegram-Init-Data': initData()}});
+    if (!r.ok) throw new Error('media fetch failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    MEDIA_CACHE[key] = url;
+    delete MEDIA_INFLIGHT[key];
+    return url;
+  })();
+  MEDIA_INFLIGHT[key] = p;
+  try { return await p; } catch (e) { delete MEDIA_INFLIGHT[key]; throw e; }
 }
 async function hydrateChatMedia(root) {
   const els = root.querySelectorAll('[data-media-msg]');
-  for (const el of els) {
+  await Promise.all(Array.prototype.map.call(els, async (el) => {
     const msgId = el.getAttribute('data-media-msg');
     const kind = el.getAttribute('data-media-kind');
     try {
       const url = await fetchMediaBlobUrl(msgId, kind);
-      if (el.tagName === 'A') el.href = url;
+      el.addEventListener('load', () => el.classList.add('media-loaded'), {once:true});
+      el.addEventListener('loadeddata', () => el.classList.add('media-loaded'), {once:true});
+      if (el.tagName === 'A') { el.href = url; el.classList.add('media-loaded'); }
       else el.src = url;
       el.removeAttribute('data-media-msg');
     } catch (e) {}
-  }
+  }));
 }
 
 const VIEW_TITLES = {
@@ -1490,7 +1507,7 @@ function renderHome() {
   document.getElementById('home-sub-card').innerHTML = subCardHtml(sub);
   document.getElementById('home-renew-cta').innerHTML = `
     <div class="cta-renew" onclick="showView('renewal')">
-      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></div>
+      <div class="ic"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Продление</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод · автопродление</div></div>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
     </div>`;
@@ -1512,7 +1529,7 @@ function renderPlans() {
       <div class="radio"></div>
       <div class="spacer">
         <div style="font:700 15px Manrope;color:#fff;">${p.name}</div>
-        <div class="muted" style="font:500 12px Manrope;">${p.traffic_limit_gb || p.monthly_gb_limit || '∞'} ГБ · ${p.device_limit || '—'} устройств</div>
+        <div class="muted" style="font:500 12px Manrope;">${p.traffic_limit_gb || p.monthly_gb_limit || '∞'} ГБ · ${p.device_limit || CTX.included_device_slots || 2} устройств</div>
       </div>
       <div style="text-align:right;">
         <div style="font:800 16px Manrope;color:#fff;">${Math.round(parseFloat(p.price_rub))} ₽</div>
@@ -1731,16 +1748,16 @@ async function unbindDevice(hwid) {
 
 // --- History ---
 const HIST_ICONS = {
-  topup: ['wallet-100.png', 'rgba(123,92,255,.14)'],
-  subscription: ['card-100.png', 'rgba(255,255,255,.06)'],
-  subscription_autorenew: ['card-100.png', 'rgba(255,255,255,.06)'],
-  purchase_plan: ['card-100.png', 'rgba(255,255,255,.06)'],
-  manual_add: ['monitor-100.png', 'rgba(255,255,255,.06)'],
-  device_slots_purchased: ['monitor-100.png', 'rgba(255,255,255,.06)'],
+  topup: ['bill-100.png', 'rgba(123,92,255,.14)'],
+  subscription: ['buying-100.png', 'rgba(255,255,255,.06)'],
+  subscription_autorenew: ['buying-100.png', 'rgba(255,255,255,.06)'],
+  purchase_plan: ['buying-100.png', 'rgba(255,255,255,.06)'],
+  manual_add: ['buying-100.png', 'rgba(255,255,255,.06)'],
+  device_slots_purchased: ['buying-100.png', 'rgba(255,255,255,.06)'],
 };
 function histIconFor(t) {
   if (HIST_ICONS[t.type]) return HIST_ICONS[t.type];
-  return t.direction === 'debit' ? ['card-100.png', 'rgba(255,255,255,.06)'] : ['gift-100.png', 'rgba(123,92,255,.14)'];
+  return t.direction === 'debit' ? ['buying-100.png', 'rgba(255,255,255,.06)'] : ['gift-100.png', 'rgba(123,92,255,.14)'];
 }
 async function loadHistory() {
   try {
@@ -1764,26 +1781,35 @@ async function loadHistory() {
 function dlBtn(msgId, kind) {
   return `<span class="chat-media-dl" data-dl-msg="${msgId}" data-dl-kind="${kind}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt=""></span>`;
 }
+// Если медиа уже в кэше — сразу подставляем src и помечаем loaded (без мигания).
+function mediaAttrs(msgId, kind, isAnchor) {
+  const cached = MEDIA_CACHE[msgId + ':' + kind];
+  if (cached) {
+    const attr = isAnchor ? `href="${cached}"` : `src="${cached}"`;
+    return `${attr} class="media-loaded"`;
+  }
+  return `data-media-msg="${msgId}" data-media-kind="${kind}"`;
+}
 function chatMediaHtml(m) {
   let html = '';
   if (m.photo_file_id) {
-    html += `<div class="chat-media-wrap"><img class="chat-media-img" data-media-msg="${m.id}" data-media-kind="photo" alt="">${dlBtn(m.id,'photo')}</div>`;
+    html += `<div class="chat-media-wrap"><img class="chat-media-img" ${mediaAttrs(m.id,'photo',false)} alt="">${dlBtn(m.id,'photo')}</div>`;
   }
   if (m.video_file_id) {
-    html += `<div class="chat-media-wrap"><video class="chat-media-video" data-media-msg="${m.id}" data-media-kind="video" controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
+    html += `<div class="chat-media-wrap"><video class="chat-media-video" ${mediaAttrs(m.id,'video',false)} controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
   }
   if (m.video_note_file_id) {
-    html += `<video class="chat-media-vidnote" data-media-msg="${m.id}" data-media-kind="video-note" controls playsinline preload="metadata"></video>`;
+    html += `<video class="chat-media-vidnote" ${mediaAttrs(m.id,'video-note',false)} controls playsinline preload="metadata"></video>`;
   }
   if (m.voice_file_id) {
-    html += `<audio class="chat-media-audio" data-media-msg="${m.id}" data-media-kind="voice" controls preload="metadata"></audio>`;
+    html += `<audio class="chat-media-audio media-loaded" ${mediaAttrs(m.id,'voice',false)} controls preload="metadata"></audio>`;
   }
   if (m.audio_file_id) {
-    html += `<audio class="chat-media-audio" data-media-msg="${m.id}" data-media-kind="audio" controls preload="metadata"></audio>`;
+    html += `<audio class="chat-media-audio media-loaded" ${mediaAttrs(m.id,'audio',false)} controls preload="metadata"></audio>`;
   }
   if (m.document_file_id) {
     const name = (m.document_file_name || 'Документ').replace(/</g,'&lt;');
-    html += `<a class="chat-media-doc" data-media-msg="${m.id}" data-media-kind="document" download="${name}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt="">${name}</a>`;
+    html += `<a class="chat-media-doc" ${mediaAttrs(m.id,'document',true)} download="${name}"><img src="/assets/miniapp_icons/down-arrow-100.png" alt="">${name}</a>`;
   }
   return html;
 }
