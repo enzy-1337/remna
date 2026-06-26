@@ -37,10 +37,17 @@ from shared.services.subscription_service import (
     purchase_plan_with_balance,
     remove_hwid_device_from_panel,
     resolve_user_plan_price_rub,
+    set_subscription_auto_renew,
 )
 from shared.services.topup_service import create_topup_payment
 from shared.services.trial_service import activate_trial, has_active_subscription, trial_eligible
 from shared.services.user_registration import get_user_by_telegram_id
+from shared.services.referral_service import (
+    count_invited_users,
+    list_referrer_rewards_with_referred,
+    sum_referrer_bonus_rub,
+)
+from shared.services.promo_service import apply_promo_code_for_user_v2
 from shared.telegram_webapp_auth import WebAppAuthError, validate_init_data
 from tickets.services import add_ticket_message, get_active_ticket_id
 from shared.tickets_db_compat import (
@@ -502,6 +509,85 @@ async def api_trial_activate(
         return JSONResponse({"ok": True, "subscription_url": sub_url, "days_left": _days_left(sub.expires_at)})
 
 
+class AutoRenewIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/api/subscription/auto-renew")
+async def api_subscription_auto_renew(
+    body: AutoRenewIn,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        ok, message = await set_subscription_auto_renew(session, user.id, body.enabled)
+        await session.commit()
+        return JSONResponse({"ok": ok, "message": _md2_to_plain(message)})
+
+
+class PromoApplyIn(BaseModel):
+    code: str
+
+
+@router.post("/api/promo/apply")
+async def api_promo_apply(
+    body: PromoApplyIn,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        ok, message, meta = await apply_promo_code_for_user_v2(
+            session, settings=settings, user=user, raw_code=body.code
+        )
+        await session.commit()
+        return JSONResponse({"ok": ok, "message": _md2_to_plain(message), "meta": meta})
+
+
+# --- Referrals ---------------------------------------------------------------
+
+@router.get("/api/referrals")
+async def api_referrals(
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        total = await sum_referrer_bonus_rub(session, user.id)
+        friends = await count_invited_users(session, user.id)
+        rewards = await list_referrer_rewards_with_referred(session, user.id, limit=35)
+        bot_username = (settings.bot_username or "").strip().lstrip("@")
+        link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}" if bot_username else ""
+        return JSONResponse(
+            {
+                "link": link,
+                "code": user.referral_code,
+                "total_earned_rub": str(total),
+                "friends_count": friends,
+                "percent": str(settings.referral_payment_percent),
+                "invited": [
+                    {
+                        "name": (referred.first_name or referred.username or f"ID {referred.telegram_id}"),
+                        "username": referred.username,
+                        "bonus_rub": str(reward.bonus_rub),
+                        "created_at": _to_iso(reward.created_at),
+                    }
+                    for reward, referred in rewards
+                ],
+            }
+        )
+
+
 # --- Support chat -----------------------------------------------------------
 
 @router.get("/api/support/messages")
@@ -702,9 +788,25 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#232E3C;color:#fff;padding:11px 18px;border-radius:12px;font:600 13px Manrope;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:999;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;}
 .toast.show{opacity:1;}
 .navgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
-.navitem{background:var(--card);border-radius:16px;padding:16px 14px;display:flex;flex-direction:column;gap:8px;cursor:pointer;}
-.navitem .ic{width:34px;height:34px;border-radius:10px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;color:var(--accent);}
+.navitem{background:var(--card);border-radius:16px;padding:16px;display:flex;align-items:center;gap:12px;cursor:pointer;}
+.navitem .ic{width:40px;height:40px;border-radius:11px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;color:var(--accent);flex-shrink:0;}
 .navitem .lbl{font:700 14px Manrope;color:#fff;}
+.navitem .sub{font:500 11px Manrope;color:var(--muted);margin-top:1px;}
+.avatar-circle{width:44px;height:44px;border-radius:50%;background:linear-gradient(140deg,#3a4a5a,#222e3a);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font:800 16px Manrope;color:#fff;flex-shrink:0;}
+.greet-row{display:flex;align-items:center;gap:12px;padding:2px 2px 4px;}
+.greet-row .hi{font:500 12px Manrope;color:var(--muted);}
+.greet-row .nm{font:800 18px Manrope;color:#fff;letter-spacing:-.01em;}
+.cta-renew{background:var(--accent);border-radius:16px;padding:16px 18px;display:flex;align-items:center;gap:13px;cursor:pointer;margin-top:14px;}
+.cta-renew .ic{width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.toggle{width:44px;height:26px;border-radius:16px;padding:3px;display:flex;cursor:pointer;transition:background .15s;}
+.toggle .knob{width:20px;height:20px;border-radius:50%;background:#fff;transition:margin .15s;}
+.toggle.on{background:var(--accent);justify-content:flex-end;}
+.toggle.off{background:rgba(255,255,255,.12);justify-content:flex-start;}
+.promo-row{display:flex;align-items:center;gap:10px;padding:11px 14px;}
+.promo-input{flex:1;background:transparent;border:none;color:#fff;font:600 14px Manrope;outline:none;}
+.copybtn{font:700 12px Manrope;color:var(--accent);background:rgba(123,92,255,.14);padding:8px 12px;border-radius:10px;display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;}
+.fade-in{animation:fadein .35s ease both;}
+@keyframes fadein{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 .plan{border-radius:14px;padding:14px 16px;display:flex;align-items:center;gap:13px;background:var(--card);border:1px solid rgba(255,255,255,.05);position:relative;cursor:pointer;}
 .plan.selected{border:1.5px solid var(--accent);}
 .radio{width:20px;height:20px;border-radius:50%;border:2px solid #4a5d70;flex-shrink:0;}
@@ -771,27 +873,78 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 
   <!-- HOME: subscription + plans -->
   <div class="view active" id="view-home">
+    <div class="greet-row">
+      <div class="avatar-circle" id="home-avatar">F</div>
+      <div><div class="hi">Добро пожаловать</div><div class="nm" id="home-greet-name">—</div></div>
+    </div>
     <div id="home-sub-card"></div>
+    <div class="card row" style="margin-top:10px;cursor:pointer;" onclick="showView('balance')">
+      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7B5CFF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M16 12h2"/></svg></div>
+      <div class="spacer"><div class="muted" style="font:500 12px Manrope;">Баланс</div><div style="font:800 22px Manrope;color:#fff;letter-spacing:-.01em;" id="home-balance">0 <span style="font-size:15px;color:var(--muted);">₽</span></div></div>
+      <div style="font:700 13px Manrope;color:var(--accent);background:rgba(123,92,255,.12);padding:9px 16px;border-radius:12px;" onclick="event.stopPropagation();showView('balance')">Пополнить</div>
+    </div>
+    <div class="sectiontitle">Быстрый доступ</div>
     <div class="navgrid">
-      <div class="navitem" onclick="showView('balance')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div>
-        <div class="lbl">Баланс</div>
-      </div>
-      <div class="navitem" onclick="showView('devices')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
-        <div class="lbl">Устройства</div>
-      </div>
-      <div class="navitem" onclick="showView('history')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></div>
-        <div class="lbl">История</div>
+      <div class="navitem" onclick="showView('referrals')">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11a4 4 0 1 0-8 0M3 20a6 6 0 0 1 18 0"/><circle cx="18" cy="7" r="3"/></svg></div>
+        <div><div class="lbl">Рефералы</div><div class="sub" id="home-ref-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('support')">
-        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-2a4 4 0 0 1 4-4h2M21 18v-2a4 4 0 0 0-4-4h-2M9 12a3 3 0 1 0 6 0M5 12V9a7 7 0 0 1 14 0v3"/></svg></div>
-        <div class="lbl">Поддержка</div>
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L3 21l1.1-3.7A8.4 8.4 0 1 1 21 11.5z"/></svg></div>
+        <div><div class="lbl">Поддержка</div><div class="sub">онлайн</div></div>
+      </div>
+      <div class="navitem" onclick="showView('devices')">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
+        <div><div class="lbl">Устройства</div><div class="sub" id="home-dev-sub">—</div></div>
+      </div>
+      <div class="navitem" onclick="showView('history')">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <div><div class="lbl">История</div><div class="sub">операций</div></div>
       </div>
     </div>
+    <div id="home-renew-cta"></div>
+  </div>
+
+  <!-- RENEWAL: subscription + plans -->
+  <div class="view" id="view-renewal">
+    <div id="renewal-sub-card"></div>
     <div class="sectiontitle" id="plans-title" style="display:none;">Выберите тариф</div>
     <div id="plans-list"></div>
+    <div class="card" style="margin-top:16px;padding:6px 4px;">
+      <div class="row" style="padding:11px 14px;">
+        <span style="font:600 14px Manrope;color:#fff;">Автопродление</span>
+        <div class="spacer"></div>
+        <div class="toggle off" id="autorenew-toggle" onclick="toggleAutoRenew()"><div class="knob"></div></div>
+      </div>
+      <div style="height:1px;background:rgba(255,255,255,.05);margin:0 14px;"></div>
+      <div class="promo-row">
+        <input class="promo-input" id="promo-input" placeholder="Промокод">
+        <div class="copybtn" onclick="applyPromo()">Применить</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REFERRALS -->
+  <div class="view" id="view-referrals">
+    <div class="card" style="text-align:center;padding:20px;background:linear-gradient(130deg, rgba(123,92,255,.18), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.24);">
+      <div class="sectiontitle" style="margin:0;">Заработано всего</div>
+      <div style="font:800 38px Manrope;color:#fff;margin-top:6px;letter-spacing:-.02em;" id="ref-total">0 <span style="font-size:22px;color:var(--accent);">₽</span></div>
+      <div class="row" style="gap:24px;justify-content:center;margin-top:14px;">
+        <div><div style="font:800 18px Manrope;color:#fff;" id="ref-friends">0</div><div class="muted" style="font:500 11px Manrope;">друзей</div></div>
+        <div style="width:1px;background:rgba(255,255,255,.1);"></div>
+        <div><div style="font:800 18px Manrope;color:#fff;" id="ref-percent">0%</div><div class="muted" style="font:500 11px Manrope;">с платежей</div></div>
+      </div>
+    </div>
+    <div class="sectiontitle">Ваш реферальный код</div>
+    <div class="card row">
+      <span class="mono" style="font-size:14px;color:#fff;flex:1;letter-spacing:.01em;word-break:break-all;" id="ref-link">—</span>
+      <div class="copybtn" onclick="copyReferralLink()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Копировать</div>
+    </div>
+    <div class="btn btn-primary" style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px;" onclick="shareReferralLink()">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v14"/></svg>Поделиться в Telegram
+    </div>
+    <div class="sectiontitle" id="ref-invited-title">Приглашённые</div>
+    <div class="card" style="padding:0;overflow:hidden;" id="ref-invited-list"></div>
   </div>
 
   <!-- BALANCE -->
@@ -879,7 +1032,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
   </div>
   <div class="bottombar" id="empty-bar" style="display:none;flex-direction:column;gap:10px;">
     <div class="btn btn-primary" id="btn-activate-trial" onclick="activateTrial()">Активировать триал</div>
-    <div style="text-align:center;font:700 14px Manrope;color:var(--link);padding:4px;" onclick="showView('home')">Купить подписку</div>
+    <div style="text-align:center;font:700 14px Manrope;color:var(--link);padding:4px;" onclick="showView('renewal')">Купить подписку</div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -924,7 +1077,6 @@ if (!TG_OK) {
 } else {
   tg.ready();
   tg.expand();
-  try { tg.requestFullscreen && tg.requestFullscreen(); } catch (e) {}
 }
 
 function toast(msg) {
@@ -948,6 +1100,8 @@ async function api(path, opts) {
 
 const VIEW_TITLES = {
   home: ['Flux VPN', 'мини-приложение'],
+  renewal: ['Продление', ''],
+  referrals: ['Рефералы', ''],
   balance: ['Баланс', ''],
   devices: ['Устройства', ''],
   history: ['История операций', ''],
@@ -957,19 +1111,27 @@ const VIEW_TITLES = {
 
 function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-' + name).classList.add('active');
-  ['balance-bar','empty-bar','support-bar'].forEach(id => document.getElementById(id).style.display = 'none');
+  const el = document.getElementById('view-' + name);
+  el.classList.add('active');
+  el.classList.remove('fade-in');
+  requestAnimationFrame(() => el.classList.add('fade-in'));
+  ['balance-bar','empty-bar','support-bar','home-buy-bar'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.style.display = 'none';
+  });
   if (name === 'balance') document.getElementById('balance-bar').style.display = 'block';
   if (name === 'empty') document.getElementById('empty-bar').style.display = 'flex';
   if (name === 'support') { document.getElementById('support-bar').style.display = 'flex'; loadSupport(); }
   if (name === 'devices') loadDevices();
   if (name === 'history') loadHistory();
+  if (name === 'referrals') loadReferrals();
+  currentView = name;
+  if (name === 'renewal') injectBuyBar();
   const t = VIEW_TITLES[name] || ['Flux VPN', ''];
   document.getElementById('view-title').textContent = t[0];
   document.getElementById('view-subtitle').textContent = t[1];
   document.getElementById('btn-back').style.display = name === 'home' ? 'none' : 'flex';
   document.getElementById('brandicon').style.display = name === 'home' ? 'flex' : 'none';
-  currentView = name;
   if (tg && tg.BackButton) {
     if (name === 'home') tg.BackButton.hide(); else tg.BackButton.show();
   }
@@ -983,24 +1145,12 @@ function fmtDate(iso) {
   return d.toLocaleDateString('ru-RU', {day:'numeric', month:'long'});
 }
 
-function renderHome() {
-  const sub = CTX.subscription;
-  const box = document.getElementById('home-sub-card');
-  if (!sub) {
-    showView('empty');
-    const ts = document.getElementById('trial-stats');
-    ts.innerHTML = `
-      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_duration_days}</div><div class="muted" style="font:500 11px Manrope;">дня</div></div>
-      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_traffic_gb}</div><div class="muted" style="font:500 11px Manrope;">ГБ трафика</div></div>
-    `;
-    document.getElementById('btn-activate-trial').style.display = CTX.trial_available ? 'block' : 'none';
-    return;
-  }
-  const statusLabel = sub.status === 'trial' ? 'Триал · активна' : 'Премиум · активна';
+function subCardHtml(sub) {
+  const statusLabel = sub.status === 'trial' ? 'Триал · активна' : 'Подписка · активна';
   const usedGb = sub.traffic_used_gb != null ? sub.traffic_used_gb : '—';
   const limitGb = sub.traffic_limit_gb != null ? sub.traffic_limit_gb : '∞';
   const pct = (sub.traffic_limit_gb && sub.traffic_used_gb != null) ? Math.min(100, Math.round(sub.traffic_used_gb / sub.traffic_limit_gb * 100)) : 0;
-  box.innerHTML = `
+  return `
     <div class="card" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);">
       <div class="row" style="justify-content:space-between;">
         <div style="font:700 15px Manrope;color:#fff;">${statusLabel}</div>
@@ -1011,8 +1161,35 @@ function renderHome() {
         <span class="muted" style="font:500 12px Manrope;">${usedGb} / ${limitGb} ГБ использовано</span>
         <span class="muted" style="font:500 12px Manrope;">до ${fmtDate(sub.expires_at)}</span>
       </div>
-    </div>
-  `;
+    </div>`;
+}
+
+function renderHome() {
+  const sub = CTX.subscription;
+  const u = CTX.user;
+  document.getElementById('home-avatar').textContent = (u.first_name || 'F').charAt(0).toUpperCase();
+  document.getElementById('home-greet-name').textContent = u.username ? `${u.first_name} · @${u.username}` : u.first_name;
+  document.getElementById('home-balance').innerHTML = Math.round(parseFloat(u.balance_rub)) + ' <span style="font-size:15px;color:var(--muted);">₽</span>';
+  document.getElementById('home-dev-sub').textContent = (CTX.devices_used || 0) + ' из ' + (CTX.devices_total || 0);
+  if (!sub) {
+    showView('empty');
+    const ts = document.getElementById('trial-stats');
+    ts.innerHTML = `
+      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_duration_days}</div><div class="muted" style="font:500 11px Manrope;">дня</div></div>
+      <div style="flex:1;background:rgba(0,0,0,.2);border-radius:11px;padding:11px;text-align:center;"><div style="font:800 19px Manrope;color:#fff;">${CTX.trial_traffic_gb}</div><div class="muted" style="font:500 11px Manrope;">ГБ трафика</div></div>
+    `;
+    document.getElementById('btn-activate-trial').style.display = CTX.trial_available ? 'block' : 'none';
+    return;
+  }
+  document.getElementById('home-sub-card').innerHTML = subCardHtml(sub);
+  document.getElementById('home-renew-cta').innerHTML = `
+    <div class="cta-renew" onclick="showView('renewal')">
+      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></div>
+      <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Продление</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод · автопродление</div></div>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </div>`;
+  document.getElementById('renewal-sub-card').innerHTML = subCardHtml(sub);
+  document.getElementById('autorenew-toggle').className = 'toggle ' + (sub.auto_renew ? 'on' : 'off');
   renderPlans();
 }
 
@@ -1055,9 +1232,71 @@ function injectBuyBar() {
   }
   const plan = CTX.plans.find(p => p.id === selectedPlanId);
   if (!plan) { bar.style.display = 'none'; return; }
-  bar.style.display = currentView === 'home' ? 'block' : 'none';
+  bar.style.display = currentView === 'renewal' ? 'block' : 'none';
   const verb = CTX.subscription ? 'Продлить' : 'Купить';
   bar.innerHTML = `<div class="btn btn-primary" id="buy-plan-btn" onclick="buyPlan()">${verb} · ${plan.name} — ${Math.round(parseFloat(plan.price_rub))} ₽</div>`;
+}
+
+let _autoRenewInFlight = false;
+async function toggleAutoRenew() {
+  if (_autoRenewInFlight || !CTX.subscription) return;
+  _autoRenewInFlight = true;
+  const next = !CTX.subscription.auto_renew;
+  try {
+    const r = await api('/api/subscription/auto-renew', {method:'POST', body: JSON.stringify({enabled: next})});
+    if (r.ok) { CTX.subscription.auto_renew = next; document.getElementById('autorenew-toggle').className = 'toggle ' + (next ? 'on' : 'off'); }
+    toast(r.message || (r.ok ? 'Сохранено' : 'Ошибка'));
+  } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _autoRenewInFlight = false; }
+}
+
+let _promoInFlight = false;
+async function applyPromo() {
+  if (_promoInFlight) return;
+  const input = document.getElementById('promo-input');
+  const code = input.value.trim();
+  if (!code) return;
+  _promoInFlight = true;
+  try {
+    const r = await api('/api/promo/apply', {method:'POST', body: JSON.stringify({code})});
+    toast(r.message || (r.ok ? 'Промокод применён' : 'Не удалось применить'));
+    if (r.ok) { input.value = ''; await loadContext(); }
+  } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _promoInFlight = false; }
+}
+
+async function loadReferrals() {
+  try {
+    const r = await api('/api/referrals');
+    document.getElementById('ref-total').innerHTML = Math.round(parseFloat(r.total_earned_rub)) + ' <span style="font-size:22px;color:var(--accent);">₽</span>';
+    document.getElementById('ref-friends').textContent = r.friends_count;
+    document.getElementById('ref-percent').textContent = Math.round(parseFloat(r.percent)) + '%';
+    document.getElementById('ref-link').textContent = r.link || 'недоступно';
+    window._refLink = r.link || '';
+    document.getElementById('ref-invited-title').textContent = 'Приглашённые · ' + r.friends_count;
+    const list = document.getElementById('ref-invited-list');
+    if (!r.invited.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока никого не пригласили</div>'; return; }
+    list.innerHTML = r.invited.map(f => {
+      const initial = (f.name || '?').charAt(0).toUpperCase();
+      return `<div class="history-item">
+        <div class="avatar-circle" style="width:38px;height:38px;font-size:14px;">${initial}</div>
+        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${f.name}</div><div class="muted" style="font:500 11px Manrope;">${f.username ? '@'+f.username+' · ' : ''}${fmtDate(f.created_at)}</div></div>
+        <div style="font:800 14px Manrope;color:var(--accent);">+${Math.round(parseFloat(f.bonus_rub))} ₽</div>
+      </div>`;
+    }).join('');
+  } catch (e) { toast('Ошибка загрузки рефералов'); }
+}
+function copyReferralLink() {
+  const link = window._refLink || '';
+  if (!link) return;
+  if (navigator.clipboard) navigator.clipboard.writeText(link);
+  toast('Ссылка скопирована');
+}
+function shareReferralLink() {
+  const link = window._refLink || '';
+  if (!link) return;
+  const url = 'https://t.me/share/url?url=' + encodeURIComponent(link);
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, '_blank');
 }
 let _buyPlanInFlight = false;
 async function buyPlan() {
