@@ -637,7 +637,10 @@ async def miniapp_shell(request: Request) -> HTMLResponse:
     if not logo_url.startswith(("http://", "https://")):
         logo_url = ""
     safe_logo_url = logo_url.replace("\\", "\\\\").replace('"', '\\"')
+    bot_username = (settings.bot_username or "").strip().lstrip("@")
+    bot_deeplink = f"https://t.me/{bot_username}" if bot_username else "https://t.me"
     html = _SHELL_HTML.replace("__FLUX_LOGO_URL__", safe_logo_url)
+    html = html.replace("__BOT_DEEPLINK__", bot_deeplink)
     return HTMLResponse(html)
 
 
@@ -743,7 +746,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
   <div class="brandicon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
   <h1>Откройте в Telegram</h1>
   <p>Это мини-приложение Flux VPN работает только внутри Telegram. Откройте бота и нажмите «Открыть приложение».</p>
-  <a href="https://t.me">Открыть Telegram</a>
+  <a href="__BOT_DEEPLINK__">Открыть в боте</a>
 </div>
 <div id="splash">
   <div class="brandicon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
