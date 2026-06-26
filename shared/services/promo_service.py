@@ -27,6 +27,33 @@ SUPPORTED_PROMO_TYPES = {
     "extra_days",
 }
 
+# Промокоды «отложенного» действия: эффект применяется не сразу, а при следующем
+# пополнении (topup_bonus_percent) или покупке тарифа (discount_percent).
+# Одновременно у пользователя может быть активен только один такой промокод.
+DEFERRED_PROMO_TYPES = ("topup_bonus_percent", "discount_percent")
+
+
+async def get_pending_deferred_promo(
+    session: AsyncSession, *, user_id: int
+) -> tuple[str, str] | None:
+    """Активный (ещё не использованный) промокод отложенного действия: (type, code) или None."""
+    row = (
+        await session.execute(
+            select(PromoCode.type, PromoCode.code)
+            .join(PromoUsage, PromoUsage.promo_id == PromoCode.id)
+            .where(
+                PromoUsage.user_id == user_id,
+                PromoCode.type.in_(DEFERRED_PROMO_TYPES),
+                PromoUsage.topup_bonus_applied_at.is_(None),
+            )
+            .order_by(PromoUsage.id.asc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1])
+
 _PAID_SUBSCRIPTION_TXN_TYPES = ("subscription", "subscription_autorenew")
 
 
@@ -217,6 +244,28 @@ async def apply_promo_code_for_user_v2(
     elig_err = await validate_promo_activation_eligibility(session, promo=promo, user=user)
     if elig_err is not None:
         return False, elig_err, None
+
+    # Один отложенный промокод за раз: пока активный не использован (пополнением или
+    # покупкой тарифа), новый промокод отложенного действия активировать нельзя.
+    if promo.type in DEFERRED_PROMO_TYPES:
+        pending = await get_pending_deferred_promo(session, user_id=user.id)
+        if pending is not None:
+            pending_type, pending_code = pending
+            if pending_type == "topup_bonus_percent":
+                return (
+                    False,
+                    plain("У вас уже активен промокод на бонус к пополнению ")
+                    + bold(pending_code)
+                    + plain(". Сначала используйте его — пополните баланс, а затем активируйте новый."),
+                    None,
+                )
+            return (
+                False,
+                plain("У вас уже активна промо-скидка на тариф ")
+                + bold(pending_code)
+                + plain(". Сначала используйте её — оформите или продлите подписку, а затем активируйте новый."),
+                None,
+            )
 
     now = datetime.now(timezone.utc)
     value = Decimal(str(promo.value))
