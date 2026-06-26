@@ -24,6 +24,9 @@ from shared.database import get_session_factory
 from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.user import User
+from shared.models.referral_reward import ReferralReward
+from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
+from shared.subscription_qr import subscription_url_qr_png
 from shared.services.device_slots_pricing import device_slot_cap, slots_available_to_buy
 from shared.services.hwid_devices_service import (
     connected_devices_count,
@@ -48,6 +51,7 @@ from shared.services.trial_service import activate_trial, has_active_subscriptio
 from shared.services.user_registration import get_user_by_telegram_id
 from shared.services.referral_service import (
     count_invited_users,
+    list_invited_users,
     list_referrer_rewards_with_referred,
     sum_referrer_bonus_rub,
 )
@@ -277,6 +281,7 @@ async def api_context(
         if sub is not None:
             traffic_used_gb = None
             traffic_limit_gb = None
+            subscription_url = ""
             try:
                 uinf, _devices, _err = await fetch_panel_hwid_context(user, settings)
                 if uinf:
@@ -286,6 +291,7 @@ async def api_context(
                         traffic_used_gb = round(int(used_bytes) / (1024 ** 3), 1)
                     if limit_bytes is not None and int(limit_bytes) > 0:
                         traffic_limit_gb = round(int(limit_bytes) / (1024 ** 3), 1)
+                    subscription_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
             except Exception:
                 pass
             is_lifetime = sub.expires_at is not None and sub.expires_at.year >= settings.billing_legacy_lifetime_cutoff_year
@@ -297,6 +303,7 @@ async def api_context(
                 "auto_renew": bool(sub.auto_renew),
                 "devices_count": sub.devices_count,
                 "plan_id": sub.plan_id,
+                "subscription_url": subscription_url,
                 "traffic_used_gb": traffic_used_gb,
                 "traffic_limit_gb": traffic_limit_gb,
             }
@@ -618,6 +625,10 @@ async def api_promo_apply(
 
 # --- Referrals ---------------------------------------------------------------
 
+def _ref_name(u: User) -> str:
+    return (u.first_name or u.username or f"ID {u.telegram_id}")
+
+
 @router.get("/api/referrals")
 async def api_referrals(
     authorization: str | None = Header(default=None),
@@ -630,7 +641,12 @@ async def api_referrals(
         user = await _get_or_create_db_user(session, auth)
         total = await sum_referrer_bonus_rub(session, user.id)
         friends = await count_invited_users(session, user.id)
-        rewards = await list_referrer_rewards_with_referred(session, user.id, limit=35)
+        # Все приглашённые — даже без пополнений (тогда суммарно 0 ₽).
+        invited_users = await list_invited_users(session, user.id, limit=200)
+        rewards = await list_referrer_rewards_with_referred(session, user.id, limit=500)
+        per_user_bonus: dict[int, Decimal] = {}
+        for reward, referred in rewards:
+            per_user_bonus[referred.id] = per_user_bonus.get(referred.id, Decimal("0")) + Decimal(str(reward.bonus_rub or 0))
         bot_username = (settings.bot_username or "").strip().lstrip("@")
         link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}" if bot_username else ""
         return JSONResponse(
@@ -642,15 +658,146 @@ async def api_referrals(
                 "percent": str(settings.referral_payment_percent),
                 "invited": [
                     {
-                        "name": (referred.first_name or referred.username or f"ID {referred.telegram_id}"),
-                        "username": referred.username,
-                        "bonus_rub": str(reward.bonus_rub),
-                        "created_at": _to_iso(reward.created_at),
+                        "id": ru.id,
+                        "telegram_id": ru.telegram_id,
+                        "name": _ref_name(ru),
+                        "username": ru.username,
+                        "bonus_rub": str(per_user_bonus.get(ru.id, Decimal("0"))),
                     }
-                    for reward, referred in rewards
+                    for ru in invited_users
                 ],
             }
         )
+
+
+_REF_SOURCE_LABEL = {
+    "referral_signup": "Бонус за регистрацию",
+    "referral_signup_bonus": "Бонус за регистрацию",
+    "referral_signup_invited": "Бонус за регистрацию",
+    "referral_payment_percent": "Процент с пополнения",
+}
+
+
+@router.get("/api/referrals/{referred_id}")
+async def api_referral_detail(
+    referred_id: int,
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        referred = (
+            await session.execute(
+                select(User).where(User.id == referred_id, User.referred_by == user.id)
+            )
+        ).scalar_one_or_none()
+        if referred is None:
+            raise HTTPException(status_code=404, detail="not found")
+        # Начисления именно от этого друга.
+        rows = (
+            await session.execute(
+                select(ReferralReward)
+                .where(
+                    ReferralReward.referrer_id == user.id,
+                    ReferralReward.referred_id == referred.id,
+                    ReferralReward.status == "applied",
+                )
+                .order_by(ReferralReward.id.desc())
+                .limit(100)
+            )
+        ).scalars().all()
+        total_brought = sum((Decimal(str(r.bonus_rub or 0)) for r in rows), Decimal("0"))
+        # Сколько всего пополнил приглашённый.
+        their_topups = (
+            await session.execute(
+                select(Transaction).where(
+                    Transaction.user_id == referred.id,
+                    Transaction.type == "topup",
+                    Transaction.status == "completed",
+                )
+            )
+        ).scalars().all()
+        their_topups_total = sum((Decimal(str(t.amount or 0)) for t in their_topups), Decimal("0"))
+        return JSONResponse(
+            {
+                "name": _ref_name(referred),
+                "username": referred.username,
+                "telegram_id": referred.telegram_id,
+                "total_brought_rub": str(total_brought),
+                "their_topups_rub": str(their_topups_total),
+                "percent": str(settings.referral_payment_percent),
+                "rewards": [
+                    {
+                        "title": _REF_SOURCE_LABEL.get(r.source, "Начисление"),
+                        "source": r.source,
+                        "bonus_rub": str(r.bonus_rub or 0),
+                        "created_at": _to_iso(r.created_at),
+                    }
+                    for r in rows
+                ],
+            }
+        )
+
+
+# --- Управление подпиской -----------------------------------------------------
+
+@router.post("/api/subscription/reissue")
+async def api_subscription_reissue(
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> JSONResponse:
+    settings = get_settings()
+    auth = await _auth(settings, authorization, x_telegram_init_data)
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _get_or_create_db_user(session, auth)
+        sub = await _get_active_subscription(session, user.id)
+        if sub is None or user.remnawave_uuid is None:
+            return JSONResponse({"ok": False, "message": "Нет активной подписки"}, status_code=400)
+        rw_uuid = str(user.remnawave_uuid)
+    rw = RemnaWaveClient(settings)
+    try:
+        uinf = await rw.reset_user_subscription_credentials(rw_uuid, revoke_only_passwords=False)
+    except RemnaWaveError as e:
+        return JSONResponse({"ok": False, "message": str(e)[:200]}, status_code=502)
+    new_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
+    return JSONResponse({"ok": True, "subscription_url": new_url})
+
+
+@router.get("/api/subscription/qr")
+async def api_subscription_qr(
+    init: str = "",
+    authorization: str | None = Header(default=None),
+    x_telegram_init_data: str | None = Header(default=None),
+) -> Response:
+    """QR подписки. initData можно передать в query (?init=...) — для <img>, который не шлёт заголовки."""
+    settings = get_settings()
+    init_header = _extract_init_data(authorization, x_telegram_init_data)
+    init_data = init or init_header
+    try:
+        parsed = validate_init_data(init_data, settings.bot_token)
+    except WebAppAuthError:
+        raise HTTPException(status_code=401, detail="invalid init data")
+    tg_id = (parsed.get("user") or {}).get("id")
+    if not tg_id:
+        raise HTTPException(status_code=401, detail="no user")
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await get_user_by_telegram_id(session, int(tg_id))
+        if user is None or user.remnawave_uuid is None:
+            raise HTTPException(status_code=404, detail="no subscription")
+        try:
+            uinf = await fetch_panel_hwid_context(user, settings)
+            url = subscription_url_for_telegram((uinf[0] or {}).get("subscriptionUrl"), settings) or ""
+        except Exception:
+            url = ""
+    if not url:
+        raise HTTPException(status_code=404, detail="no subscription url")
+    png = subscription_url_qr_png(url, scale=7)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 # --- Support chat -----------------------------------------------------------
@@ -1072,6 +1219,8 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 #app.revealed .plan:nth-of-type(3){animation-delay:.15s;}
 #app.revealed .bottombar{animation:fadeInUp .35s ease .1s both;}
 .spin{animation:spin 1.1s linear infinite;}
+/* Иконка-маска: красится в цвет акцента (под цвет своей плашки). */
+.mi{display:inline-block;background:var(--accent);-webkit-mask-position:center;mask-position:center;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:contain;mask-size:contain;}
 .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#232E3C;color:#fff;padding:11px 18px;border-radius:12px;font:600 13px Manrope;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:999;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86vw;text-align:center;}
 .toast.show{opacity:1;}
 .navgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
@@ -1123,6 +1272,13 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',
 .bubble video.chat-media-vidnote{width:112px;height:112px;border-radius:50%;object-fit:cover;display:block;margin-top:6px;background:#000;opacity:0;transition:opacity .25s ease;}
 .bubble img.chat-media-img:not(.media-loaded),.bubble video.chat-media-video:not(.media-loaded),.bubble video.chat-media-vidnote:not(.media-loaded){background:linear-gradient(90deg,#1b2531 0%,#26323f 50%,#1b2531 100%);background-size:600px 100%;animation:shimmer 1.3s infinite linear;}
 .media-loaded{opacity:1 !important;}
+.chat-media-img,.chat-media-video,.chat-media-vidnote{cursor:zoom-in;}
+.vid-play-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;}
+.vid-play-ov svg{width:46px;height:46px;background:rgba(0,0,0,.55);border-radius:50%;padding:11px;box-sizing:border-box;}
+.lb{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.92);padding:20px;}
+.lb.open{display:flex;}
+.lb-media{max-width:96vw;max-height:90vh;border-radius:10px;object-fit:contain;}
+.lb-close{position:absolute;top:calc(14px + env(safe-area-inset-top));right:16px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
 .bubble audio.chat-media-audio{width:220px;margin-top:6px;}
 .va-player{margin-top:6px;min-width:210px;max-width:270px;}
 .va-name{font:600 12px Manrope;opacity:.85;margin-bottom:5px;word-break:break-word;}
@@ -1199,26 +1355,26 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div id="home-sub-card"></div>
     <div class="card row" style="margin-top:10px;cursor:pointer;" onclick="showView('balance')">
-      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><img src="/assets/miniapp_icons/wallet-100.png" style="width:22px;height:22px;object-fit:contain;" alt=""></div>
+      <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="mi" style="width:22px;height:22px;-webkit-mask-image:url(/assets/miniapp_icons/wallet-100.png);mask-image:url(/assets/miniapp_icons/wallet-100.png);"></span></div>
       <div class="spacer"><div class="muted" style="font:500 12px Manrope;">Баланс</div><div style="font:800 22px Manrope;color:#fff;letter-spacing:-.01em;" id="home-balance">0 <span style="font-size:15px;color:var(--muted);">₽</span></div></div>
       <div style="font:700 13px Manrope;color:var(--accent);background:rgba(123,92,255,.12);padding:9px 16px;border-radius:12px;" onclick="event.stopPropagation();showView('balance')">Пополнить</div>
     </div>
     <div class="sectiontitle">Быстрый доступ</div>
     <div class="navgrid">
       <div class="navitem" onclick="showView('referrals')">
-        <div class="ic"><img src="/assets/miniapp_icons/user-account-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/user-account-100.png);mask-image:url(/assets/miniapp_icons/user-account-100.png);"></span></div>
         <div><div class="lbl">Рефералы</div><div class="sub" id="home-ref-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('support')">
-        <div class="ic"><img src="/assets/miniapp_icons/chat-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/chat-100.png);mask-image:url(/assets/miniapp_icons/chat-100.png);"></span></div>
         <div><div class="lbl">Поддержка</div><div class="sub">напишите нам</div></div>
       </div>
       <div class="navitem" onclick="showView('devices')">
-        <div class="ic"><img src="/assets/miniapp_icons/monitor-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/monitor-100.png);mask-image:url(/assets/miniapp_icons/monitor-100.png);"></span></div>
         <div><div class="lbl">Устройства</div><div class="sub" id="home-dev-sub">—</div></div>
       </div>
       <div class="navitem" onclick="showView('history')">
-        <div class="ic"><img src="/assets/miniapp_icons/clock-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="ic"><span class="mi" style="width:18px;height:18px;-webkit-mask-image:url(/assets/miniapp_icons/clock-100.png);mask-image:url(/assets/miniapp_icons/clock-100.png);"></span></div>
         <div><div class="lbl">История</div><div class="sub">операций</div></div>
       </div>
     </div>
@@ -1266,6 +1422,57 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     </div>
     <div class="sectiontitle" id="ref-invited-title">Приглашённые</div>
     <div class="card" style="padding:0;overflow:hidden;" id="ref-invited-list"></div>
+  </div>
+
+  <!-- REFERRAL DETAIL -->
+  <div class="view" id="view-refdetail">
+    <div class="card" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);padding:20px;">
+      <div class="row" style="gap:14px;">
+        <div class="avatar-circle" id="rd-avatar" style="width:56px;height:56px;font-size:22px;">?</div>
+        <div class="spacer">
+          <div style="font:800 19px Manrope;color:#fff;letter-spacing:-.01em;" id="rd-name">—</div>
+          <div style="font:500 13px Manrope;color:#aab8c2;margin-top:1px;" id="rd-username"></div>
+          <div class="mono" style="font-size:11px;color:var(--muted);margin-top:3px;" id="rd-id"></div>
+        </div>
+      </div>
+      <div class="row" style="gap:10px;margin-top:16px;">
+        <div style="flex:1;background:rgba(0,0,0,.2);border-radius:12px;padding:12px;text-align:center;"><div style="font:800 20px Manrope;color:var(--accent);" id="rd-brought">0 ₽</div><div class="muted" style="font:500 11px Manrope;margin-top:2px;">принёс вам</div></div>
+        <div style="flex:1;background:rgba(0,0,0,.2);border-radius:12px;padding:12px;text-align:center;"><div style="font:800 20px Manrope;color:#fff;" id="rd-topups">0 ₽</div><div class="muted" style="font:500 11px Manrope;margin-top:2px;">его пополнений</div></div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:space-between;margin:18px 4px 4px;">
+      <span class="sectiontitle" style="margin:0;">История начислений</span>
+      <span class="muted" style="font:600 11px Manrope;" id="rd-percent">0% с платежа</span>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;" id="rd-rewards"></div>
+  </div>
+
+  <!-- SUBSCRIPTION MANAGEMENT -->
+  <div class="view" id="view-submanage">
+    <div class="card" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);display:flex;align-items:center;justify-content:space-between;">
+      <div class="row" style="gap:9px;"><div style="width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);"></div><span style="font:700 14px Manrope;color:#fff;" id="sm-status">Подписка активна</span></div>
+      <span class="muted" style="font:600 12px Manrope;" id="sm-until"></span>
+    </div>
+    <div class="sectiontitle">Подключение по QR</div>
+    <div class="card" style="text-align:center;">
+      <img id="sm-qr" src="" alt="QR" style="width:170px;height:170px;border-radius:14px;background:#fff;padding:10px;box-sizing:border-box;display:inline-block;">
+      <div class="muted" style="font:500 12px Manrope;margin-top:12px;line-height:1.4;">Отсканируйте код в приложении VPN<br>на другом устройстве</div>
+    </div>
+    <div class="sectiontitle">Ссылка на подписку</div>
+    <div class="card row" style="gap:11px;">
+      <span class="mono" id="sm-link" style="font-size:12px;color:#aab8c2;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
+      <div class="copybtn" onclick="copySubLink()" style="flex-shrink:0;"><img src="/assets/miniapp_icons/documents-100.png" style="width:13px;height:13px;object-fit:contain;" alt="">Копировать</div>
+    </div>
+    <div class="card row" style="margin-top:12px;background:rgba(245,181,68,.08);border-color:rgba(245,181,68,.22);cursor:pointer;" onclick="reissueKeys()">
+      <div style="width:38px;height:38px;border-radius:11px;background:rgba(245,181,68,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
+      <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Перевыпустить ключи</div><div class="muted" style="font:500 11px Manrope;">Старые ключи перестанут работать</div></div>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </div>
+  </div>
+  <div class="bottombar" id="submanage-bar" style="display:none;">
+    <div class="btn btn-primary" onclick="connectDevice()" style="display:flex;align-items:center;justify-content:center;gap:9px;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Подключить устройство
+    </div>
   </div>
 
   <!-- BALANCE -->
@@ -1360,6 +1567,11 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="lb" id="lb" onclick="closeLightbox(event)">
+  <div class="lb-close" onclick="closeLightbox(event)">✕</div>
+  <img id="lb-img" class="lb-media" style="display:none;" alt="">
+  <video id="lb-video" class="lb-media" style="display:none;" controls playsinline></video>
+</div>
 
 <script>
 const FLUX_LOGO_URL = "__FLUX_LOGO_URL__";
@@ -1472,6 +1684,8 @@ const VIEW_TITLES = {
   home: ['Flux VPN', 'мини-приложение'],
   renewal: ['Продление', ''],
   referrals: ['Рефералы', ''],
+  refdetail: ['Реферал', ''],
+  submanage: ['Управление подпиской', ''],
   balance: ['Баланс', ''],
   devices: ['Устройства', ''],
   history: ['История операций', ''],
@@ -1485,16 +1699,19 @@ function showView(name) {
   el.classList.add('active');
   el.classList.remove('fade-in');
   requestAnimationFrame(() => el.classList.add('fade-in'));
-  ['balance-bar','empty-bar','support-bar','home-buy-bar'].forEach(id => {
+  ['balance-bar','empty-bar','support-bar','home-buy-bar','submanage-bar'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.style.display = 'none';
   });
+  // Чат поддержки опрашиваем в реальном времени только пока он открыт.
+  if (name !== 'support') stopSupportPoll();
   if (name === 'balance') { document.getElementById('balance-bar').style.display = 'block'; updateTopupBtn(); }
   if (name === 'empty') document.getElementById('empty-bar').style.display = 'flex';
-  if (name === 'support') { document.getElementById('support-bar').style.display = 'flex'; loadSupport(); }
+  if (name === 'support') { document.getElementById('support-bar').style.display = 'flex'; loadSupport(true); startSupportPoll(); }
   if (name === 'devices') loadDevices();
   if (name === 'history') loadHistory();
   if (name === 'referrals') loadReferrals();
+  if (name === 'submanage') { document.getElementById('submanage-bar').style.display = 'block'; loadSubManage(); }
   currentView = name;
   if (name === 'renewal') injectBuyBar();
   const t = VIEW_TITLES[name] || ['Flux VPN', ''];
@@ -1505,7 +1722,12 @@ function showView(name) {
     if (name === 'home') tg.BackButton.hide(); else tg.BackButton.show();
   }
 }
-function goHome() { showView('home'); }
+function goHome() {
+  // Детальные экраны возвращают к своему разделу.
+  if (currentView === 'refdetail') { showView('referrals'); return; }
+  if (currentView === 'submanage') { showView('home'); return; }
+  showView('home');
+}
 if (tg && tg.BackButton) tg.BackButton.onClick(goHome);
 
 function fmtDate(iso) {
@@ -1521,13 +1743,19 @@ function daysLabel(sub) {
 function untilLabel(sub) {
   return sub.is_lifetime ? 'навсегда' : ('до ' + fmtDate(sub.expires_at));
 }
-function subCardHtml(sub) {
+function subCardHtml(sub, clickable) {
   const statusLabel = sub.status === 'trial' ? 'Триал · активна' : 'Подписка · активна';
   const usedGb = sub.traffic_used_gb != null ? sub.traffic_used_gb : '—';
   const limitGb = sub.traffic_limit_gb != null ? sub.traffic_limit_gb : '∞';
   const pct = (sub.traffic_limit_gb && sub.traffic_used_gb != null) ? Math.min(100, Math.round(sub.traffic_used_gb / sub.traffic_limit_gb * 100)) : 0;
+  const clickAttr = clickable ? ' onclick="showView(\'submanage\')" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);cursor:pointer;"' : ' style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);"';
+  const manageHint = clickable ? `
+      <div class="row" style="justify-content:space-between;margin-top:14px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08);">
+        <span style="font:700 13px Manrope;color:#fff;">Управление подпиской</span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>` : '';
   return `
-    <div class="card" style="background:linear-gradient(130deg, rgba(123,92,255,.16), rgba(123,92,255,.04));border:1px solid rgba(123,92,255,.22);">
+    <div class="card"${clickAttr}>
       <div class="row" style="justify-content:space-between;">
         <div style="font:700 15px Manrope;color:#fff;">${statusLabel}</div>
         <div style="font:700 11px Manrope;color:var(--accent);background:rgba(123,92,255,.14);padding:4px 9px;border-radius:9px;">${daysLabel(sub)}</div>
@@ -1536,7 +1764,7 @@ function subCardHtml(sub) {
       <div class="row" style="justify-content:space-between;margin-top:8px;">
         <span class="muted" style="font:500 12px Manrope;">${usedGb} / ${limitGb} ГБ использовано</span>
         <span class="muted" style="font:500 12px Manrope;">${untilLabel(sub)}</span>
-      </div>
+      </div>${manageHint}
     </div>`;
 }
 
@@ -1584,7 +1812,7 @@ function renderHome() {
       </div>`;
     return;
   }
-  document.getElementById('home-sub-card').innerHTML = subCardHtml(sub);
+  document.getElementById('home-sub-card').innerHTML = subCardHtml(sub, true);
   document.getElementById('home-renew-cta').innerHTML = `
     <div class="cta-renew" onclick="showView('renewal')">
       <div class="ic"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
@@ -1697,13 +1925,42 @@ async function loadReferrals() {
     if (!r.invited.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока никого не пригласили</div>'; return; }
     list.innerHTML = r.invited.map(f => {
       const initial = (f.name || '?').charAt(0).toUpperCase();
-      return `<div class="history-item">
+      const bonus = Math.round(parseFloat(f.bonus_rub || '0'));
+      // 0 ₽ показываем без плюса; больше нуля — с плюсом и акцентом.
+      const amt = bonus > 0
+        ? `<div style="font:800 14px Manrope;color:var(--accent);">+${bonus} ₽</div>`
+        : `<div style="font:800 14px Manrope;color:var(--muted);">0 ₽</div>`;
+      return `<div class="history-item" style="cursor:pointer;" onclick="openReferralDetail(${f.id})">
         <div class="avatar-circle" style="width:38px;height:38px;font-size:14px;">${initial}</div>
-        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${f.name}</div><div class="muted" style="font:500 11px Manrope;">${f.username ? '@'+f.username+' · ' : ''}${fmtDate(f.created_at)}</div></div>
-        <div style="font:800 14px Manrope;color:var(--accent);">+${Math.round(parseFloat(f.bonus_rub))} ₽</div>
+        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${f.name}</div><div class="muted" style="font:500 11px Manrope;">${f.username ? '@'+f.username : ('ID '+f.telegram_id)}</div></div>
+        ${amt}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><path d="M9 6l6 6-6 6"/></svg>
       </div>`;
     }).join('');
   } catch (e) { toast('Ошибка загрузки рефералов'); }
+}
+async function openReferralDetail(id) {
+  showView('refdetail');
+  try {
+    const d = await api('/api/referrals/' + id);
+    const av = document.getElementById('rd-avatar');
+    av.textContent = (d.name || '?').charAt(0).toUpperCase();
+    av.style.background = TG_AVATAR_COLORS[Math.abs(parseInt(d.telegram_id)||0) % TG_AVATAR_COLORS.length];
+    document.getElementById('rd-name').textContent = d.name;
+    document.getElementById('rd-username').textContent = d.username ? '@'+d.username : '';
+    document.getElementById('rd-id').textContent = 'ID ' + d.telegram_id;
+    document.getElementById('rd-brought').textContent = '+' + Math.round(parseFloat(d.total_brought_rub)) + ' ₽';
+    document.getElementById('rd-topups').textContent = Math.round(parseFloat(d.their_topups_rub)) + ' ₽';
+    document.getElementById('rd-percent').textContent = Math.round(parseFloat(d.percent)) + '% с платежа';
+    const list = document.getElementById('rd-rewards');
+    if (!d.rewards.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока нет начислений</div>'; return; }
+    list.innerHTML = d.rewards.map(rw => `
+      <div class="history-item">
+        <div class="history-ic" style="background:rgba(123,92,255,.14);"><img src="/assets/miniapp_icons/up-arrow-100.png" style="width:18px;height:18px;object-fit:contain;" alt=""></div>
+        <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${rw.title}</div><div class="muted" style="font:500 11px Manrope;">${fmtDate(rw.created_at)}</div></div>
+        <div style="font:800 14px Manrope;color:var(--accent);">+${Math.round(parseFloat(rw.bonus_rub))} ₽</div>
+      </div>`).join('');
+  } catch (e) { toast('Не удалось открыть реферала'); }
 }
 function copyReferralLink() {
   const link = window._refLink || '';
@@ -1716,6 +1973,47 @@ function shareReferralLink() {
   if (!link) return;
   const url = 'https://t.me/share/url?url=' + encodeURIComponent(link);
   if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, '_blank');
+}
+
+// --- Управление подпиской ---
+function loadSubManage() {
+  const sub = CTX && CTX.subscription;
+  if (!sub) { showView('home'); return; }
+  document.getElementById('sm-status').textContent = sub.status === 'trial' ? 'Триал активен' : 'Подписка активна';
+  document.getElementById('sm-until').textContent = untilLabel(sub) + (sub.is_lifetime ? '' : (' · ' + daysLabel(sub)));
+  const url = sub.subscription_url || '';
+  window._subUrl = url;
+  document.getElementById('sm-link').textContent = url || 'недоступно';
+  const qr = document.getElementById('sm-qr');
+  qr.src = url ? (API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData())) : '';
+}
+function copySubLink() {
+  const url = window._subUrl || '';
+  if (!url) { toast('Ссылка недоступна'); return; }
+  if (navigator.clipboard) navigator.clipboard.writeText(url);
+  toast('Ссылка скопирована');
+}
+function connectDevice() {
+  const url = window._subUrl || '';
+  if (!url) { toast('Ссылка недоступна'); return; }
+  if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank');
+}
+let _reissueInFlight = false;
+async function reissueKeys() {
+  if (_reissueInFlight) return;
+  if (!confirm('Перевыпустить ключи? Старые подключения перестанут работать.')) return;
+  _reissueInFlight = true;
+  try {
+    const r = await api('/api/subscription/reissue', {method:'POST', body:'{}'});
+    if (r.ok) {
+      toast('Ключи перевыпущены ✅');
+      if (CTX && CTX.subscription) CTX.subscription.subscription_url = r.subscription_url;
+      window._subUrl = r.subscription_url;
+      document.getElementById('sm-link').textContent = r.subscription_url || '';
+      document.getElementById('sm-qr').src = API_BASE + '/api/subscription/qr?init=' + encodeURIComponent(initData()) + '&t=' + Date.now();
+    } else toast(r.message || 'Не удалось перевыпустить');
+  } catch (e) { toast('Ошибка: ' + e.message); }
+  finally { _reissueInFlight = false; }
 }
 let _buyPlanInFlight = false;
 async function buyPlan() {
@@ -1834,7 +2132,7 @@ async function loadDevices() {
       <div class="card row" style="margin-top:10px;">
         <div style="width:38px;height:38px;border-radius:11px;background:#2b3947;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aab8c2" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${dev.title}</div><div class="muted" style="font:500 12px Manrope;">${dev.platform || ''}</div></div>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" style="cursor:pointer;" onclick="unbindDevice('${dev.hwid}')"><path d="M6 7h12M9 7V5h6v2M8 7l1 13h6l1-13"/></svg>
+        <img src="/assets/miniapp_icons/trash-100.png" style="width:18px;height:18px;object-fit:contain;cursor:pointer;flex-shrink:0;" onclick="unbindDevice('${dev.hwid}')" alt="Удалить">
       </div>`).join('') || '<div class="muted" style="padding:14px;">Нет подключённых устройств</div>';
     document.getElementById('buy-slots-row').style.display = d.available_to_buy > 0 ? 'flex' : 'none';
     document.getElementById('buy-slots-sub').textContent = '1 устройство · доступно ещё ' + d.available_to_buy;
@@ -1941,10 +2239,10 @@ function setupVoicePlayers(root) {
 function chatMediaHtml(m) {
   let html = '';
   if (m.photo_file_id) {
-    html += `<div class="chat-media-wrap"><img class="chat-media-img${mCls(m.id,'photo')}" ${mSrc(m.id,'photo',false)} alt="">${dlBtn(m.id,'photo')}</div>`;
+    html += `<div class="chat-media-wrap" data-lb-msg="${m.id}" data-lb-kind="photo"><img class="chat-media-img${mCls(m.id,'photo')}" ${mSrc(m.id,'photo',false)} alt="">${dlBtn(m.id,'photo')}</div>`;
   }
   if (m.video_file_id) {
-    html += `<div class="chat-media-wrap"><video class="chat-media-video${mCls(m.id,'video')}" ${mSrc(m.id,'video',false)} controls playsinline preload="metadata"></video>${dlBtn(m.id,'video')}</div>`;
+    html += `<div class="chat-media-wrap" data-lb-msg="${m.id}" data-lb-kind="video"><video class="chat-media-video${mCls(m.id,'video')}" ${mSrc(m.id,'video',false)} playsinline preload="metadata" muted></video><div class="vid-play-ov"><svg viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div>${dlBtn(m.id,'video')}</div>`;
   }
   if (m.video_note_file_id) {
     html += `<video class="chat-media-vidnote${mCls(m.id,'video-note')}" ${mSrc(m.id,'video-note',false)} controls playsinline preload="metadata"></video>`;
@@ -1961,28 +2259,74 @@ function chatMediaHtml(m) {
   }
   return html;
 }
+const MEDIA_EXT = {photo:'.jpg', video:'.mp4', 'video-note':'.mp4', voice:'.ogg', audio:'.mp3', document:''};
 async function downloadChatMedia(msgId, kind) {
   try {
     const url = await fetchMediaBlobUrl(msgId, kind);
     const a = document.createElement('a');
     a.href = url;
-    a.download = kind + '-' + msgId;
+    a.download = 'flux-' + kind + '-' + msgId + (MEDIA_EXT[kind] || '');
+    a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
-    a.remove();
+    setTimeout(() => a.remove(), 0);
   } catch (e) { toast('Не удалось скачать'); }
 }
+// Скачивание по иконке — приоритетнее, чем открытие лайтбокса.
 document.addEventListener('click', function(e) {
   const btn = e.target.closest && e.target.closest('[data-dl-msg]');
   if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
   downloadChatMedia(btn.getAttribute('data-dl-msg'), btn.getAttribute('data-dl-kind'));
 });
-async function loadSupport() {
+// Открытие фото/видео в лайтбоксе для детального просмотра.
+document.addEventListener('click', function(e) {
+  if (e.target.closest && e.target.closest('[data-dl-msg]')) return; // это была кнопка скачать
+  const el = e.target.closest && e.target.closest('[data-lb-msg]');
+  if (!el) return;
+  openLightbox(el.getAttribute('data-lb-msg'), el.getAttribute('data-lb-kind'));
+});
+async function openLightbox(msgId, kind) {
+  const lb = document.getElementById('lb');
+  const img = document.getElementById('lb-img');
+  const vid = document.getElementById('lb-video');
+  try {
+    const url = await fetchMediaBlobUrl(msgId, kind);
+    if (kind === 'photo') {
+      vid.style.display = 'none'; vid.pause();
+      img.src = url; img.style.display = 'block';
+    } else {
+      img.style.display = 'none'; img.removeAttribute('src');
+      vid.src = url; vid.style.display = 'block'; vid.play().catch(()=>{});
+    }
+    lb.classList.add('open');
+  } catch (e) { toast('Не удалось открыть'); }
+}
+function closeLightbox(e) {
+  // Закрываем только по фону или крестику, не по самому медиа.
+  if (e && e.target && e.target.id !== 'lb' && !(e.target.classList && e.target.classList.contains('lb-close'))) return;
+  const lb = document.getElementById('lb');
+  const vid = document.getElementById('lb-video');
+  const img = document.getElementById('lb-img');
+  lb.classList.remove('open');
+  if (vid) { vid.pause(); vid.removeAttribute('src'); try { vid.load(); } catch(_e){} }
+  if (img) img.removeAttribute('src');
+}
+let _supportSig = '';
+let _supportPoll = null;
+async function loadSupport(force) {
   try {
     const r = await api('/api/support/messages');
     const wrap = document.getElementById('chat-messages');
-    if (!r.messages.length) { wrap.innerHTML = '<div class="muted" style="text-align:center;padding:20px;">Напишите нам, если есть вопросы</div>'; return; }
-    wrap.innerHTML = r.messages.map(m => {
+    const msgs = r.messages || [];
+    // Перерисовываем только при изменениях — чтобы поллинг не моргал и не сбрасывал прокрутку.
+    const sig = JSON.stringify(msgs.map(m => [m.id, m.text, m.sender_role, m.photo_file_id, m.video_file_id, m.voice_file_id, m.video_note_file_id, m.audio_file_id, m.document_file_id]));
+    if (!force && sig === _supportSig) return;
+    _supportSig = sig;
+    if (!msgs.length) { wrap.innerHTML = '<div class="muted" style="text-align:center;padding:20px;">Напишите нам, если есть вопросы</div>'; return; }
+    const nearBottom = (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) < 90;
+    wrap.innerHTML = msgs.map(m => {
       const cls = m.sender_role === 'user' ? 'me' : 'op';
       const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) : '';
       const txt = (m.text||'').trim();
@@ -1991,10 +2335,17 @@ async function loadSupport() {
       // Медиа сверху, текст-подпись под ним.
       return `<div class="bubble ${cls}">${media}${txtHtml}<div class="bubbletime">${time}</div></div>`;
     }).join('');
-    wrap.scrollTop = wrap.scrollHeight;
     setupVoicePlayers(wrap);
     hydrateChatMedia(wrap);
-  } catch (e) { toast('Ошибка загрузки чата'); }
+    if (force || nearBottom) wrap.scrollTop = wrap.scrollHeight;
+  } catch (e) { if (force) toast('Ошибка загрузки чата'); }
+}
+function startSupportPoll() {
+  stopSupportPoll();
+  _supportPoll = setInterval(() => { if (!document.hidden) loadSupport(false); }, 3000);
+}
+function stopSupportPoll() {
+  if (_supportPoll) { clearInterval(_supportPoll); _supportPoll = null; }
 }
 
 let selectedChatFile = null;
@@ -2033,7 +2384,7 @@ async function sendChat() {
     fd.append('text', val);
     if (file) { fd.append('kind', fileKindOf(file)); fd.append('file', file); }
     await apiForm('/api/support/send', fd);
-    await loadSupport();
+    await loadSupport(true);
   } catch (e) { toast('Ошибка отправки'); }
   finally { _sendChatInFlight = false; }
 }
@@ -2073,7 +2424,7 @@ async function toggleVoiceRecord() {
         fd.append('kind', 'voice');
         fd.append('file', file);
         await apiForm('/api/support/send', fd);
-        await loadSupport();
+        await loadSupport(true);
       } catch (e) { toast('Ошибка отправки голосового'); }
       finally { _sendChatInFlight = false; }
     };
