@@ -26,6 +26,7 @@ from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.models.referral_reward import ReferralReward
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError, subscription_url_for_telegram
+from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
 from shared.subscription_qr import subscription_url_qr_png
 from shared.services.device_slots_pricing import device_slot_cap, slots_available_to_buy
 from shared.services.hwid_devices_service import (
@@ -76,6 +77,28 @@ _DEBIT_TXN_TYPES = {
     "device_slots_purchased",
     "purchase_plan",
 }
+
+
+def _lifetime_used_gb(uinf: dict) -> float | None:
+    """Использовано «за всё время» (Σ) — приоритет lifetimeUsedTrafficBytes; иначе текущий период."""
+    def to_gb(v):
+        try:
+            n = float(v)
+            return round(n / (1024 ** 3), 2) if n >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    ut = uinf.get("userTraffic")
+    if isinstance(ut, dict) and ut.get("lifetimeUsedTrafficBytes") is not None:
+        g = to_gb(ut["lifetimeUsedTrafficBytes"])
+        if g is not None:
+            return g
+    if uinf.get("lifetimeUsedTrafficBytes") is not None:
+        g = to_gb(uinf["lifetimeUsedTrafficBytes"])
+        if g is not None:
+            return g
+    used, _limit = extract_traffic_gb_from_rw_user(uinf)
+    return used
 
 
 def _txn_amount_label(t) -> str:
@@ -307,19 +330,9 @@ async def api_context(
             try:
                 uinf, _devices, _err = await fetch_panel_hwid_context(user, settings)
                 if uinf:
-                    # «За всё время» — lifetimeUsedTrafficBytes; иначе текущий период.
-                    used_bytes = uinf.get("lifetimeUsedTrafficBytes")
-                    if used_bytes is None:
-                        used_bytes = uinf.get("usedTrafficBytes")
-                    if used_bytes is None:
-                        used_bytes = uinf.get("usedTraffic")
-                    limit_bytes = uinf.get("trafficLimitBytes")
-                    if limit_bytes is None:
-                        limit_bytes = uinf.get("trafficLimit")
-                    if used_bytes is not None:
-                        traffic_used_gb = round(int(used_bytes) / (1024 ** 3), 2)
-                    if limit_bytes is not None and int(limit_bytes) > 0:
-                        traffic_limit_gb = round(int(limit_bytes) / (1024 ** 3), 1)
+                    # Трафик лежит в userTraffic.* (вложенно). «За всё время» = lifetime.
+                    traffic_used_gb = _lifetime_used_gb(uinf)
+                    _used_cur, traffic_limit_gb = extract_traffic_gb_from_rw_user(uinf)
                     subscription_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
             except Exception:
                 pass
