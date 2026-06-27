@@ -78,6 +78,28 @@ _DEBIT_TXN_TYPES = {
 }
 
 
+def _txn_amount_label(t) -> str:
+    """Подпись справа в истории. Для бонусов в днях/ГБ/устройствах — не «+0 ₽», а суть бонуса."""
+    meta = t.meta or {}
+    if t.type == "promo_extra_days":
+        days = int(meta.get("days") or 0)
+        return f"+{days} д." if days else ""
+    if t.type == "promo_extra_gb":
+        gb = int(meta.get("extra_gb") or 0)
+        return f"+{gb} ГБ" if gb else ""
+    if t.type == "promo_extra_devices":
+        n = int(meta.get("extra_devices") or 0)
+        return f"+{n} устр." if n else ""
+    try:
+        amt = float(t.amount or 0)
+    except (TypeError, ValueError):
+        amt = 0.0
+    if amt == 0:
+        return ""  # денежные нулёвки не показываем
+    sign = "−" if t.type in _DEBIT_TXN_TYPES else "+"
+    return f"{sign}{int(round(abs(amt)))} ₽"
+
+
 _MD2_ESCAPED_CHAR_RE = re.compile(r"\\([_*\[\]()~`>#+\-=|{}.!\\])")
 _MD2_MARKER_RE = re.compile(r"[*_~`]")
 
@@ -285,10 +307,17 @@ async def api_context(
             try:
                 uinf, _devices, _err = await fetch_panel_hwid_context(user, settings)
                 if uinf:
-                    used_bytes = uinf.get("usedTrafficBytes") or uinf.get("usedTraffic")
-                    limit_bytes = uinf.get("trafficLimitBytes") or uinf.get("trafficLimit")
+                    # «За всё время» — lifetimeUsedTrafficBytes; иначе текущий период.
+                    used_bytes = uinf.get("lifetimeUsedTrafficBytes")
+                    if used_bytes is None:
+                        used_bytes = uinf.get("usedTrafficBytes")
+                    if used_bytes is None:
+                        used_bytes = uinf.get("usedTraffic")
+                    limit_bytes = uinf.get("trafficLimitBytes")
+                    if limit_bytes is None:
+                        limit_bytes = uinf.get("trafficLimit")
                     if used_bytes is not None:
-                        traffic_used_gb = round(int(used_bytes) / (1024 ** 3), 1)
+                        traffic_used_gb = round(int(used_bytes) / (1024 ** 3), 2)
                     if limit_bytes is not None and int(limit_bytes) > 0:
                         traffic_limit_gb = round(int(limit_bytes) / (1024 ** 3), 1)
                     subscription_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
@@ -451,6 +480,7 @@ async def api_transactions(
                         "type": t.type,
                         "amount_rub": str(t.amount),
                         "direction": "debit" if t.type in _DEBIT_TXN_TYPES else "credit",
+                        "amount_label": _txn_amount_label(t),
                         "provider": t.payment_provider,
                         "description": t.description,
                         "created_at": _to_iso(t.created_at),
@@ -459,6 +489,24 @@ async def api_transactions(
                 ]
             }
         )
+
+
+def _classify_device(d: dict) -> str:
+    """Тип устройства по платформе/модели/UA: phone | tv | computer | unknown."""
+    hay = " ".join(
+        str(d.get(k) or "")
+        for k in ("platform", "deviceModel", "device_model", "osVersion", "os", "userAgent", "user_agent")
+    ).lower()
+    if not hay.strip():
+        return "unknown"
+    # ТВ — проверяем раньше телефона (androidtv содержит android).
+    if any(t in hay for t in ("tv", "appletv", "android tv", "androidtv", "smarttv", "smart-tv", "webos", "tizen", "google tv")):
+        return "tv"
+    if any(t in hay for t in ("iphone", "ipad", "ios", "android", "phone", "mobile", "harmonyos", "xiaomi", "samsung", "huawei", "redmi", "poco", "oneplus", "pixel")):
+        return "phone"
+    if any(t in hay for t in ("windows", "macos", "mac os", "macintosh", "darwin", "linux", "ubuntu", "debian", "desktop", "pc", "x86", "win32", "win64", "amd64")):
+        return "computer"
+    return "unknown"
 
 
 @router.get("/api/devices")
@@ -487,6 +535,7 @@ async def api_devices(
                             "hwid": d.get("hwid") or d.get("hwId") or "",
                             "title": device_display_title(d, i),
                             "platform": d.get("platform"),
+                            "dtype": _classify_device(d),
                             "updated_at": d.get("updatedAt") or d.get("createdAt"),
                         }
                     )
@@ -1474,7 +1523,7 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
     <div class="card row" style="margin-top:12px;background:rgba(245,181,68,.08);border-color:rgba(245,181,68,.22);cursor:pointer;" onclick="reissueKeys()">
       <div style="width:38px;height:38px;border-radius:11px;background:rgba(245,181,68,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">Перевыпустить ключи</div><div class="muted" style="font:500 11px Manrope;">Старые ключи перестанут работать</div></div>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="mi" style="width:20px;height:20px;background:var(--muted);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);"></span>
     </div>
   </div>
   <div class="bottombar" id="submanage-bar" style="display:none;">
@@ -1760,7 +1809,7 @@ function subCardHtml(sub, clickable) {
   const manageHint = clickable ? `
       <div class="row" style="justify-content:space-between;margin-top:14px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08);">
         <span style="font:700 13px Manrope;color:#fff;">Управление подпиской</span>
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="mi" style="width:20px;height:20px;background:var(--accent);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);"></span>
       </div>` : '';
   return `
     <div class="card"${clickAttr}>
@@ -1816,7 +1865,7 @@ function renderHome() {
       <div class="cta-renew" onclick="showView('renewal')">
         <div class="ic"><img src="/assets/miniapp_icons/buying-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Купить подписку</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод</div></div>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="mi" style="width:20px;height:20px;background:rgba(255,255,255,.85);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);"></span>
       </div>`;
     return;
   }
@@ -1825,7 +1874,7 @@ function renderHome() {
     <div class="cta-renew" onclick="showView('renewal')">
       <div class="ic"><img src="/assets/miniapp_icons/reset-100.png" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
       <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Продление</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод · автопродление</div></div>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="mi" style="width:20px;height:20px;background:rgba(255,255,255,.85);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);"></span>
     </div>`;
 }
 
@@ -1962,7 +2011,7 @@ async function loadReferrals() {
         <div class="avatar-circle" style="width:40px;height:40px;font-size:15px;background:${avColor};">${initial}</div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${f.name}</div><div class="muted" style="font:500 11px Manrope;">${f.username ? '@'+f.username : ('ID '+f.telegram_id)}</div></div>
         ${amt}
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="mi" style="width:18px;height:18px;margin-left:4px;background:var(--muted);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);flex-shrink:0;"></span>
       </div>`;
     }).join('');
   } catch (e) { toast('Ошибка загрузки рефералов'); }
@@ -2167,6 +2216,8 @@ async function checkTopup(id) {
 }
 
 // --- Devices ---
+const DEV_ICONS = {phone:'iphone-100.png', tv:'tv-100.png', computer:'workstation-100.png', unknown:'system-report-100.png'};
+function devIcon(dtype) { return DEV_ICONS[dtype] || DEV_ICONS.unknown; }
 let CTX_DEVICES = null;
 async function loadDevices() {
   // Скелетон, пока грузится список из панели.
@@ -2183,7 +2234,7 @@ async function loadDevices() {
     document.getElementById('dev-count-sub').textContent = d.used >= d.total && !d.unlimited ? 'Базовый лимит занят полностью' : 'Слоты свободны';
     document.getElementById('devices-list').innerHTML = d.devices.map(dev => `
       <div class="card row" style="margin-top:10px;">
-        <div style="width:38px;height:38px;border-radius:11px;background:#2b3947;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aab8c2" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/></svg></div>
+        <div style="width:40px;height:40px;border-radius:11px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="mi" style="width:22px;height:22px;-webkit-mask-image:url(/assets/miniapp_icons/${devIcon(dev.dtype)});mask-image:url(/assets/miniapp_icons/${devIcon(dev.dtype)});"></span></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${dev.title}</div><div class="muted" style="font:500 12px Manrope;">${dev.platform || ''}</div></div>
         <img src="/assets/miniapp_icons/trash-100.png" style="width:20px;height:20px;object-fit:contain;cursor:pointer;flex-shrink:0;" onclick="unbindDevice('${dev.hwid}')" alt="Удалить">
       </div>`).join('') || '<div class="muted" style="padding:14px;">Нет подключённых устройств</div>';
@@ -2237,12 +2288,13 @@ async function loadHistory() {
     if (!r.transactions.length) { list.innerHTML = '<div class="muted" style="padding:18px;">Пока нет операций</div>'; return; }
     list.innerHTML = r.transactions.map(t => {
       const ic = histIconFor(t);
-      const sign = t.direction === 'debit' ? '−' : '+';
       const color = t.direction === 'debit' ? '#C8D2DA' : '#7B5CFF';
+      // amount_label с бэка: «+3 д.», «+10 ГБ», «−65 ₽» или пусто.
+      const amtHtml = t.amount_label ? `<div style="font:800 15px Manrope;color:${color};">${t.amount_label}</div>` : '';
       return `<div class="history-item">
         <div class="history-ic" style="background:${ic[1]};"><img src="/assets/miniapp_icons/${ic[0]}" style="width:20px;height:20px;object-fit:contain;" alt=""></div>
         <div class="spacer"><div style="font:700 14px Manrope;color:#fff;">${t.description || t.type}</div><div class="muted" style="font:500 11px Manrope;">${fmtDate(t.created_at)}</div></div>
-        <div style="font:800 15px Manrope;color:${color};">${sign}${Math.round(parseFloat(t.amount_rub))} ₽</div>
+        ${amtHtml}
       </div>`;
     }).join('');
   } catch (e) { toast('Ошибка загрузки истории'); }
