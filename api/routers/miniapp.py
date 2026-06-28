@@ -1384,7 +1384,8 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 #tg-gate .brandicon{width:54px;height:54px;border-radius:16px;}
 #tg-gate h1{font:800 20px Manrope;margin:0;}
 #tg-gate p{font:500 14px Manrope;color:var(--muted);margin:0;max-width:280px;line-height:1.5;}
-#tg-gate a{display:inline-block;margin-top:6px;background:var(--accent);color:#fff;text-decoration:none;padding:13px 26px;border-radius:12px;font:700 14px Manrope;}
+#tg-gate a{display:inline-flex;align-items:center;gap:9px;margin-top:6px;background:var(--accent);color:#fff;text-decoration:none;padding:13px 26px;border-radius:12px;font:700 14px Manrope;}
+#tg-gate a svg{width:18px;height:18px;flex-shrink:0;}
 #splash{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:9998;}
 #splash .brandicon{width:56px;height:56px;border-radius:18px;animation:pulse 1.6s ease-in-out infinite;}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.7;transform:scale(.94);}}
@@ -1396,8 +1397,8 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
 <div id="tg-gate" style="display:none;">
   <div class="brandicon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
   <h1>Откройте в Telegram</h1>
-  <p>Это мини-приложение Flux VPN работает только внутри Telegram. Откройте бота и нажмите «Открыть приложение».</p>
-  <a href="__BOT_DEEPLINK__">Открыть в боте</a>
+  <p>Это мини-приложение Flux VPN работает только внутри Telegram. Откройте бота и нажмите «Открыть».</p>
+  <a href="__BOT_DEEPLINK__"><svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg"><circle cx="120" cy="120" r="120" fill="#fff" fill-opacity=".22"/><path d="M178.6 73.1 154.3 188c-1.8 8.1-6.6 10.1-13.4 6.3l-37.1-27.4-17.9 17.3c-2 2-3.6 3.6-7.4 3.6l2.6-37.6 68.5-61.9c3-2.6-.6-4.1-4.6-1.5l-84.7 53.4-36.5-11.4c-7.9-2.5-8.1-7.9 1.7-11.7l142.8-55c6.6-2.5 12.4 1.6 10.7 11.4Z" fill="#fff"/></svg>Открыть в боте</a>
 </div>
 <div id="splash">
   <div class="brandicon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></div>
