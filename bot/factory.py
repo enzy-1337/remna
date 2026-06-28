@@ -56,6 +56,14 @@ def _private_chat_commands() -> list[BotCommand]:
     ]
 
 
+def _resolve_miniapp_url(settings: Settings) -> str:
+    url = (settings.miniapp_url or "").strip().rstrip("/")
+    if url:
+        return url
+    site = (settings.public_site_url or "").strip().rstrip("/")
+    return f"{site}/my" if site else ""
+
+
 def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
     dp.update.middleware(PrivateChatOnlyMiddleware())
     dp.update.middleware(MaintenanceMiddleware(settings))
@@ -90,6 +98,8 @@ async def create_bot_and_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher
         bot,
         service="bot",
         private_commands=_private_chat_commands(),
+        menu_button_web_app_url=_resolve_miniapp_url(settings) or None,
+        menu_button_text="🚀 Открыть приложение",
     )
     short = ((settings.bot_profile_short_description or "").strip() or BOT_PROFILE_SHORT_DEFAULT)[:120]
     long_desc = ((settings.bot_profile_description or "").strip() or BOT_PROFILE_LONG_DEFAULT)[:512]

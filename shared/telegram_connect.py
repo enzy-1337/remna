@@ -7,7 +7,14 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError
-from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats, MenuButtonCommands
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    MenuButtonCommands,
+    MenuButtonWebApp,
+    WebAppInfo,
+)
 
 PROXY_HINT = (
     "Проверьте доступ к api.telegram.org. На VPS обычно нужен SOCKS5: "
@@ -59,8 +66,14 @@ async def safe_set_bot_commands(
     service: str,
     private_commands: list[BotCommand],
     group_commands: list[BotCommand] | None = None,
+    menu_button_web_app_url: str | None = None,
+    menu_button_text: str = "Открыть приложение",
 ) -> None:
-    """setMyCommands / menu button — не валят процесс при сетевой ошибке."""
+    """setMyCommands / menu button — не валят процесс при сетевой ошибке.
+
+    ``menu_button_web_app_url`` задан — кнопка меню рядом с полем ввода открывает
+    мини-апп напрямую, без выпадающего списка команд.
+    """
     try:
         await bot.set_my_commands(
             commands=private_commands,
@@ -71,6 +84,14 @@ async def safe_set_bot_commands(
                 commands=group_commands,
                 scope=BotCommandScopeAllGroupChats(),
             )
-        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        if menu_button_web_app_url:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text=menu_button_text[:64],
+                    web_app=WebAppInfo(url=menu_button_web_app_url),
+                )
+            )
+        else:
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except Exception:
         log.exception("%s: set_my_commands / menu button failed", service)
