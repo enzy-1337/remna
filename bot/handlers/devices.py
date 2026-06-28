@@ -25,6 +25,7 @@ from shared.services.hwid_devices_service import (
     connected_devices_count,
     device_display_title,
     fetch_panel_hwid_context,
+    heal_legacy_unlimited_hwid_limit,
     panel_devices_unlimited,
 )
 from shared.services.subscription_service import (
@@ -141,6 +142,9 @@ async def _render_devices(
             .as_markup()
         )
         return cap, kb
+
+    if not is_bot_admin and not is_admin_unlimited_devices(user, settings):
+        uinf = await heal_legacy_unlimited_hwid_limit(user, settings, uinf, int(sub.devices_count))
 
     used = connected_devices_count(uinf, devices)
     unlimited = panel_devices_unlimited(uinf, is_bot_admin=is_bot_admin) or is_admin_unlimited_devices(

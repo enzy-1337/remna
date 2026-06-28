@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from aiogram.types import User as TgUser
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import get_settings
@@ -73,7 +74,16 @@ async def register_user(
         billing_mode="hybrid" if settings.billing_v2_enabled else "legacy",
     )
     session.add(user)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Гонка: параллельный апдейт (двойной тап /start) уже создал пользователя
+        # с этим telegram_id между нашей проверкой и вставкой.
+        await session.rollback()
+        existing = await get_user_by_telegram_id(session, tg_user.id)
+        if existing is not None:
+            return existing, False, None
+        raise
 
     bonus = settings.referral_signup_bonus_rub
     invited_bonus: Decimal | None = None

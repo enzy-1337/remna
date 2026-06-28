@@ -45,5 +45,30 @@ def panel_devices_unlimited(uinf: dict | None, *, is_bot_admin: bool) -> bool:
     return uinf is not None and is_rw_hwid_devices_unlimited(uinf)
 
 
+async def heal_legacy_unlimited_hwid_limit(
+    user: User,
+    settings: Settings,
+    uinf: dict | None,
+    devices_count: int,
+) -> dict | None:
+    """Чинит легаси-аккаунты: в панели ``hwidDeviceLimit`` бывает ``null`` (без лимита)
+    у пользователей, заведённых до появления лимита по HWID — лимит для них никогда
+    не выставлялся, а не был осознанно снят админом. Для обычных (не безлимитных)
+    пользователей принудительно проставляем реальный лимит из подписки.
+    """
+    if uinf is None or not is_rw_hwid_devices_unlimited(uinf):
+        return uinf
+    if user.remnawave_uuid is None:
+        return uinf
+    rw = RemnaWaveClient(settings)
+    try:
+        await rw.update_user(str(user.remnawave_uuid), hwid_device_limit=int(devices_count))
+    except RemnaWaveError:
+        return uinf
+    healed = dict(uinf)
+    healed["hwidDeviceLimit"] = int(devices_count)
+    return healed
+
+
 def device_display_title(d: dict, index: int) -> str:
     return hwid_device_title(d, index)
