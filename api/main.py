@@ -29,7 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from api.middleware.web_admin_rbac import WebAdminRbacMiddleware
-from api.routers import public_pages, tickets_api, web_admin, web_admin_rbac_pages, webhooks
+from api.routers import miniapp, public_pages, tickets_api, web_admin, web_admin_rbac_pages, webhooks
 from shared.config import get_settings
 from shared.database import get_session_factory
 from shared.models.user import User
@@ -237,6 +237,9 @@ app.include_router(web_admin.router, prefix="/admin")
 app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")
+app.include_router(miniapp.router, prefix="/my")
+# Совместимость со старым путём (на случай уже выданных ссылок/закладок).
+app.include_router(miniapp.router, prefix="/miniapp")
 
 _assets_dir = _ROOT / "assets"
 if _assets_dir.is_dir():

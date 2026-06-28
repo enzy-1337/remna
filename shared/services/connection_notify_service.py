@@ -28,7 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient
-from shared.integrations.rw_user_meta import rw_user_first_connected_at
+from shared.integrations.rw_user_meta import rw_user_first_connected_at, rw_user_online_at
+from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
 from shared.md2 import bold, join_lines, link, plain
 from shared.models.subscription import Subscription
 from shared.models.user import User
@@ -67,21 +68,47 @@ def _build_message(support_username: str | None) -> tuple[str, object]:
     return text, kb.as_markup() if support_username else None
 
 
-async def _rw_first_connected_at(
-    rw: RemnaWaveClient, user: User
-) -> datetime | None:
-    """Запрашивает firstConnectedAt из Remnawave. None если uuid нет или ошибка."""
+async def _rw_user_connected(rw: RemnaWaveClient, user: User) -> bool:
+    """
+    Подключался ли пользователь хоть раз. True, если есть ЛЮБОЙ признак:
+      - firstConnectedAt / onlineAt заполнены,
+      - израсходован трафик (> 0),
+      - привязаны HWID-устройства.
+    При ошибке запроса возвращаем True (НЕ шлём ложное уведомление).
+    firstConnectedAt в одиночку ненадёжен — панель порой не проставляет его.
+    """
     if not user.remnawave_uuid:
-        return None
+        return False
     try:
         info = await rw.get_user(str(user.remnawave_uuid))
-        return rw_user_first_connected_at(info)
     except Exception as exc:
         logger.warning(
             "connection_notify: не удалось получить данные из Remnawave user_id=%s: %s",
             user.id, exc,
         )
-        return None
+        return True  # неизвестно — лучше не слать уведомление
+    if rw_user_first_connected_at(info) is not None:
+        return True
+    if rw_user_online_at(info) is not None:
+        return True
+    used_gb, _limit = extract_traffic_gb_from_rw_user(info)
+    if used_gb is not None and used_gb > 0:
+        return True
+    # Привязанные устройства = пользователь подключался.
+    try:
+        devices = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
+        if devices:
+            n = devices.get("total") if isinstance(devices, dict) else None
+            if n is None and isinstance(devices, dict):
+                lst = devices.get("devices") or devices.get("data") or []
+                n = len(lst) if isinstance(lst, list) else 0
+            if isinstance(devices, list):
+                n = len(devices)
+            if n and int(n) > 0:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 async def run_connection_notify_cleanup(
@@ -110,8 +137,7 @@ async def run_connection_notify_cleanup(
     rw = RemnaWaveClient(settings)
     cleaned = 0
     for user in users:
-        first_connected = await _rw_first_connected_at(rw, user)
-        if first_connected is None:
+        if not await _rw_user_connected(rw, user):
             # Ещё не подключались — уведомление правильное, оставляем
             continue
         # Уже подключены — удаляем сообщение
@@ -174,9 +200,8 @@ async def run_connection_notify_loop(
     skipped = 0
 
     for user in users:
-        # Проверяем через Remnawave API — подключался ли пользователь
-        first_connected = await _rw_first_connected_at(rw, user)
-        if first_connected is not None:
+        # Проверяем через Remnawave API — подключался ли пользователь (любой признак)
+        if await _rw_user_connected(rw, user):
             # Уже подключался — помечаем чтобы больше не проверять
             user.connection_notify_sent_at = datetime.now(UTC)
             skipped += 1
