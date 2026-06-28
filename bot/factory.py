@@ -99,7 +99,7 @@ async def create_bot_and_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher
         service="bot",
         private_commands=_private_chat_commands(),
         menu_button_web_app_url=_resolve_miniapp_url(settings) or None,
-        menu_button_text="🚀 Открыть приложение",
+        menu_button_text="Открыть",
     )
     short = ((settings.bot_profile_short_description or "").strip() or BOT_PROFILE_SHORT_DEFAULT)[:120]
     long_desc = ((settings.bot_profile_description or "").strip() or BOT_PROFILE_LONG_DEFAULT)[:512]
