@@ -1,9 +1,56 @@
+# ---- Secrets / environment ----
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# ---- Python ----
 .venv/
 venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ---- Logs / runtime data ----
 *.log
+logs/
+*.pid
+
+# ---- Databases / dumps ----
+*.sqlite
+*.sqlite3
+*.db
+dump.rdb
+*.sql.gz
+backups/
+pgdata/
+
+# ---- Docker local overrides ----
+docker-compose.override.yml
+!docker-compose.override.example.yml
+
+# ---- Editors / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Project-local scratch ----
+terminals/
+tmp/
+temp/
