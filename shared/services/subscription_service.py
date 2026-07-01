@@ -1268,6 +1268,73 @@ async def remove_hwid_device_from_panel(
     )
 
 
+async def unbind_hwid_device_keep_slot(
+    session: AsyncSession,
+    *,
+    user: User,
+    hwid: str,
+    settings: Settings,
+    initiator: str = "user_bot",
+) -> tuple[bool, str]:
+    """Отвязать устройство (HWID) в Remnawave, НЕ трогая лимит слотов.
+
+    В отличие от remove_hwid_device_from_panel слот остаётся у подписки —
+    освобождается только устройство, и к этому слоту можно привязать новое.
+    """
+    sub = await get_active_subscription(session, user.id)
+    if not sub:
+        return False, plain("Нет активной подписки.")
+    if user.remnawave_uuid is None:
+        return False, plain("Ошибка профиля VPN.")
+
+    hwid = (hwid or "").strip()
+    if not hwid:
+        return False, plain("Некорректный HWID.")
+
+    rw = RemnaWaveClient(settings)
+    try:
+        await rw.delete_user_hwid_device(str(user.remnawave_uuid), hwid)
+    except RemnaWaveError as e:
+        return False, join_lines(plain("Панель VPN:"), esc(str(e)))
+
+    # Слот НЕ уменьшаем и лимит в панели не трогаем — только убираем запись
+    # об устройстве. Освободившийся слот остаётся доступным для нового устройства.
+    r = await session.execute(
+        select(Device).where(
+            Device.user_id == user.id,
+            Device.subscription_id == sub.id,
+            Device.remnawave_client_id == hwid,
+        )
+    )
+    for row in r.scalars().all():
+        await session.delete(row)
+    await add_device_history_event(
+        session,
+        user_id=user.id,
+        subscription_id=sub.id,
+        device_hwid=hwid,
+        event_type="device.detached",
+        event_ts=datetime.now(timezone.utc),
+        is_active=False,
+        meta={"source": "unbind_hwid_device_keep_slot"},
+    )
+    await session.flush()
+    from shared.services.device_telegram_notify import notify_admin_device_detached
+
+    await notify_admin_device_detached(
+        settings,
+        user=user,
+        hwid=hwid,
+        mode="keep_slots",
+        initiator=initiator,
+        session=session,
+    )
+    return True, join_lines(
+        plain("Устройство отвязано, слот сохранён."),
+        plain("Слотов: ") + bold(str(sub.devices_count)) + plain("."),
+    )
+
+
 async def remove_device_slot(
     session: AsyncSession,
     *,
