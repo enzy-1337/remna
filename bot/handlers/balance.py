@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -197,10 +198,25 @@ async def _edit_or_send_balance(
 ) -> None:
     if cq.message is None:
         return
-    if cq.message.photo:
-        await cq.message.edit_caption(caption=caption, reply_markup=reply_markup)
-    else:
-        await cq.message.edit_text(caption, reply_markup=reply_markup)
+    try:
+        if cq.message.photo:
+            await cq.message.edit_caption(caption=caption, reply_markup=reply_markup)
+        else:
+            await cq.message.edit_text(caption, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        # Original message was deleted/too old/can't be edited — send a fresh screen.
+        if "not found" in msg or "can't be edited" in msg or "message to edit" in msg:
+            await answer_callback_with_photo_screen(
+                cq,
+                caption=caption,
+                reply_markup=reply_markup,
+                settings=get_settings(),
+            )
+            return
+        raise
 
 
 @router.callback_query(F.data == "menu:balance")
