@@ -28,8 +28,14 @@ from shared.services.pending_start_referral import (
     resolve_start_args_for_new_user,
     save_pending_referral_start,
 )
-from shared.services.user_registration import register_user
+from shared.services.user_registration import get_user_by_telegram_id, register_user
 from shared.services.billing_v2.transition_service import maybe_switch_to_hybrid
+from shared.integrations.remnawave import (
+    RemnaWaveClient,
+    RemnaWaveError,
+    subscription_url_for_telegram,
+)
+from shared.services.flux_login_service import parse_login_code, save_login_url
 
 router = Router(name="start")
 
@@ -116,6 +122,41 @@ def extract_start_payload(message: Message) -> str | None:
     return parts[1].strip() if len(parts) > 1 else None
 
 
+async def _handle_flux_login(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    code: str,
+    settings: Settings,
+) -> None:
+    """Resolve the user's subscription URL and bind it to the login code so the
+    Flux desktop client (polling the API) can pick it up."""
+    if user.remnawave_uuid is None:
+        await message.answer(
+            esc(
+                "У вас пока нет активной подписки. Оформите её в боте, "
+                "затем повторите вход в приложении Flux."
+            )
+        )
+        return
+    rw = RemnaWaveClient(settings)
+    uinf: dict | None = None
+    try:
+        uinf = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError:
+        uinf = None
+    url = subscription_url_for_telegram((uinf or {}).get("subscriptionUrl"), settings) if uinf else None
+    if not url:
+        await message.answer(
+            esc("Не удалось получить ссылку подписки. Продлите подписку и повторите вход.")
+        )
+        return
+    await save_login_url(code, url, settings=settings)
+    await message.answer(
+        esc("✅ Вход в приложение Flux подтверждён. Вернитесь в приложение — оно продолжит автоматически.")
+    )
+
+
 @router.message(CommandStart())
 async def cmd_start(
     message: Message,
@@ -125,6 +166,17 @@ async def cmd_start(
 ) -> None:
     settings = get_settings()
     payload = extract_start_payload(message)
+
+    # Flux desktop login: `fluxlogin_<code>` — bind the caller's subscription URL
+    # to the code so the app can complete login. Requires an existing account;
+    # otherwise fall through to normal /start (they can retry after registering).
+    flux_code = parse_login_code(payload)
+    if flux_code and message.from_user is not None:
+        existing = await get_user_by_telegram_id(session, message.from_user.id)
+        if existing is not None:
+            await _handle_flux_login(message, session, existing, flux_code, settings)
+            return
+
     if not is_channel_member:
         if message.from_user is not None:
             await save_pending_referral_start(

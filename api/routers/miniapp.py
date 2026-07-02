@@ -40,10 +40,10 @@ from shared.services.subscription_service import (
     get_one_month_reference_plan,
     list_paid_plans,
     purchase_plan_with_balance,
-    remove_hwid_device_from_panel,
     resolve_user_plan_price_rub,
     set_subscription_auto_renew,
     tariff_duration_months,
+    unbind_hwid_device_keep_slot,
     user_custom_month_price_rub,
 )
 from shared.services.promo_service import get_pending_purchase_discount_info
@@ -584,7 +584,9 @@ async def api_devices_unbind(
     factory = get_session_factory()
     async with factory() as session:
         user = await _get_or_create_db_user(session, auth)
-        ok, message = await remove_hwid_device_from_panel(
+        # Unbind keeps the slot — only the device is freed in the panel, the paid
+        # slot stays so the user can bind a new device to it.
+        ok, message = await unbind_hwid_device_keep_slot(
             session, user=user, hwid=body.hwid, settings=settings, initiator="miniapp"
         )
         await session.commit()
