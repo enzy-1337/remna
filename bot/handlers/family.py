@@ -36,6 +36,7 @@ from bot.utils.screen_photo import (
     delete_chat_message_safe,
     delete_message_safe,
 )
+from bot.utils.tg_edit import safe_edit
 from shared.config import Settings, get_settings
 from shared.md2 import join_lines, plain, strip_for_popup_alert
 from shared.models.user import User
@@ -209,7 +210,7 @@ async def cb_family_bind_confirm(
         pass
     await cq.answer("Готово")
     if cq.message:
-        await cq.message.edit_text(plain(FAMILY_BIND_OK_OWNER.format(label=user_card_label(target))))
+        await safe_edit(cq.message, plain(FAMILY_BIND_OK_OWNER.format(label=user_card_label(target))))
 
 
 @router.callback_query(F.data == "family:bind:cancel")
@@ -471,7 +472,7 @@ async def cb_transfer_confirm(
         pass
     await cq.answer("Готово")
     if cq.message:
-        await cq.message.edit_text(plain(TRANSFER_OK_SENDER.format(label=user_card_label(target))))
+        await safe_edit(cq.message, plain(TRANSFER_OK_SENDER.format(label=user_card_label(target))))
 
 
 @router.callback_query(F.data == "transfer:cancel")

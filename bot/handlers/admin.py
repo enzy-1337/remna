@@ -30,6 +30,7 @@ from bot.states.admin import (
     AdminSubscriptionStates,
 )
 from bot.utils.screen_photo import answer_callback_with_photo_screen, send_profile_screen
+from bot.utils.tg_edit import safe_edit
 from shared.config import get_settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.md2 import bold, code, esc, italic, join_lines, link, plain, strip_for_popup_alert
@@ -2396,7 +2397,8 @@ async def cb_admin_grant_manual(
     await state.update_data(admin_grant_user_id=user_id)
     await cq.answer()
     if cq.message:
-        await cq.message.edit_text(
+        await safe_edit(
+            cq.message,
             join_lines(
                 "🎁 " + bold("Выдача подписки"),
                 "",

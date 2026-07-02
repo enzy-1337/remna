@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user
 from bot.keyboards.inline import topup_amounts_keyboard, topup_invoice_keyboard, topup_providers_keyboard
 from bot.states.payment import TopupStates
+from bot.utils.tg_edit import safe_edit
 from bot.utils.screen_photo import (
     answer_callback_with_photo_screen,
     delete_message_safe,
@@ -251,20 +252,8 @@ async def cb_topup_back_amt(
         return
     assert db_user is not None
     await cq.answer()
-    settings = get_settings()
     cap = _balance_cap_for(db_user, billing_user)
-    if cq.message and cq.message.photo:
-        await cq.message.edit_caption(
-            caption=cap,
-            reply_markup=topup_amounts_keyboard(),
-        )
-    else:
-        await answer_callback_with_photo_screen(
-            cq,
-            caption=cap,
-            reply_markup=topup_amounts_keyboard(),
-            settings=settings,
-        )
+    await _edit_or_send_balance(cq, caption=cap, reply_markup=topup_amounts_keyboard())
 
 
 @router.callback_query(F.data == "topup:history")
@@ -350,20 +339,8 @@ async def cb_topup_cancel_fsm(
         return
     assert db_user is not None
     await cq.answer()
-    settings = get_settings()
     cap = _balance_cap_for(db_user, billing_user)
-    if cq.message and cq.message.photo:
-        await cq.message.edit_caption(
-            caption=cap,
-            reply_markup=topup_amounts_keyboard(),
-        )
-    else:
-        await answer_callback_with_photo_screen(
-            cq,
-            caption=cap,
-            reply_markup=topup_amounts_keyboard(),
-            settings=settings,
-        )
+    await _edit_or_send_balance(cq, caption=cap, reply_markup=topup_amounts_keyboard())
 
 
 @router.message(TopupStates.waiting_amount_rub, F.text)
@@ -501,12 +478,7 @@ async def cb_topup_provider(
         meta["invoice_message_id"] = int(cq.message.message_id)
         txn.meta = meta
         await session.flush()
-        if cq.message.photo:
-            await cq.message.edit_caption(
-                caption=text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id)
-            )
-        else:
-            await cq.message.edit_text(text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id))
+        await safe_edit(cq.message, text, reply_markup=topup_invoice_keyboard(pay_url, txn_id=txn.id))
 
 
 @router.callback_query(F.data.startswith("topup:check:"))
