@@ -10,6 +10,7 @@ ADMIN_NAV_ITEMS: tuple[tuple[str, str, str, str | None], ...] = (
     ("/admin/topups", "fa-solid fa-money-bill-transfer", "Пополнения", "view_stats"),
     ("/admin/status", "fa-solid fa-heart-pulse", "Статус", "view_stats"),
     ("/admin/users", "fa-solid fa-users", "Пользователи", "view_users"),
+    ("/admin/devices", "fa-solid fa-mobile-screen-button", "Устройства", "view_users"),
     ("/admin/tickets", "fa-solid fa-headset", "Тикеты", "manage_tickets"),
     ("/admin/subscriptions", "fa-solid fa-clock-rotate-left", "Подписки", "edit_subscriptions"),
     ("/admin/tariffs", "fa-solid fa-tags", "Тарифы", "edit_subscriptions"),
@@ -59,6 +60,7 @@ def required_permission_for_request(method: str, path: str) -> str | None:
         or p.startswith("/admin/tariffs")
         or p.startswith("/admin/promos")
         or p.startswith("/admin/broadcast")
+        or p.startswith("/admin/devices")
     ):
         return "edit_subscriptions"
 
@@ -67,6 +69,7 @@ def required_permission_for_request(method: str, path: str) -> str | None:
         ("/admin/roles", "superadmin"),
         ("/admin/settings", "superadmin"),
         ("/admin/users", "view_users"),
+        ("/admin/devices", "view_users"),
         ("/admin/tickets", "manage_tickets"),
         ("/admin/subscriptions", "edit_subscriptions"),
         ("/admin/tariffs", "edit_subscriptions"),

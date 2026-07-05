@@ -216,9 +216,28 @@ class Utf8HtmlCharsetMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Базовые security-заголовки. X-Frame-Options только для /admin — /my встраивается
+    Telegram-клиентом в iframe как Mini App и не должен блокироваться."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if (request.url.path or "").startswith("/admin"):
+            response.headers["X-Frame-Options"] = "DENY"
+        return response
+
+
 app = FastAPI(title="Remna VPN API", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
+if settings.web_admin_session_secret == "change-me-in-env" and not settings.debug:  # noqa: S105
+    raise RuntimeError(
+        "WEB_ADMIN_SESSION_SECRET использует небезопасное значение по умолчанию. "
+        "Задайте свой секрет в .env, либо явно включите DEBUG=true для локальной разработки."
+    )
 app.add_middleware(Utf8HtmlCharsetMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(WebAdminSessionValidationMiddleware)
 app.add_middleware(WebAdminRbacMiddleware)
@@ -227,7 +246,7 @@ app.add_middleware(
     secret_key=settings.web_admin_session_secret,
     session_cookie="remna_web_admin_session",
     same_site="lax",
-    https_only=False,
+    https_only=settings.web_admin_session_https_only,
     max_age=86400 * 14,
 )
 

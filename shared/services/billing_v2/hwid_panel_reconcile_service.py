@@ -29,6 +29,23 @@ def _hwid_from_panel_row(d: dict) -> str:
     return ""
 
 
+def _device_meta_from_panel_row(d: dict) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for out_key, in_key in (
+        ("device_model", "deviceModel"),
+        ("platform", "platform"),
+        ("os_version", "osVersion"),
+        ("user_agent", "userAgent"),
+    ):
+        v = d.get(in_key)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            out[out_key] = s[:256]
+    return out
+
+
 async def reconcile_hwid_devices_from_panel(
     session: AsyncSession,
     *,
@@ -54,11 +71,13 @@ async def reconcile_hwid_devices_from_panel(
         return 0
 
     panel_hwids: set[str] = set()
+    panel_by_hwid: dict[str, dict] = {}
     for d in devices:
         if isinstance(d, dict):
             h = _hwid_from_panel_row(d)
             if h:
                 panel_hwids.add(h)
+                panel_by_hwid[h] = d
 
     current_active = set(await list_active_device_hwids(session, user_id=user.id))
     now = datetime.now(timezone.utc)
@@ -66,6 +85,7 @@ async def reconcile_hwid_devices_from_panel(
     n = 0
 
     for h in sorted(panel_hwids - current_active):
+        meta = {"source": "panel_hwid_reconcile", **_device_meta_from_panel_row(panel_by_hwid.get(h) or {})}
         await add_device_history_event(
             session,
             user_id=user.id,
@@ -74,7 +94,7 @@ async def reconcile_hwid_devices_from_panel(
             event_type="user_hwid_devices.added",
             event_ts=now,
             is_active=True,
-            meta={"source": "panel_hwid_reconcile"},
+            meta=meta,
         )
         n += 1
         await charge_daily_device_once(

@@ -143,6 +143,9 @@ def device_identity_meta_from_payload(payload: dict) -> dict[str, str]:
             ("rw_device_uuid", "uuid"),
             ("rw_device_uuid", "deviceUuid"),
             ("rw_user_device_id", "id"),
+            ("platform", "platform"),
+            ("os_version", "osVersion"),
+            ("user_agent", "userAgent"),
         )
         for out_key, in_key in candidates:
             if out.get(out_key):

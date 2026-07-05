@@ -539,6 +539,11 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_SESSION_SECRET",
         description="Секрет cookie-сессии web-admin",
     )
+    web_admin_session_https_only: bool = Field(
+        default=True,
+        validation_alias="WEB_ADMIN_SESSION_HTTPS_ONLY",
+        description="Cookie сессии web-admin только по HTTPS (Secure). Отключать только для локальной разработки по http.",
+    )
     web_admin_github_logins_csv: str = Field(
         default="",
         validation_alias="WEB_ADMIN_GITHUB_LOGINS",

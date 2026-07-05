@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from sqlalchemy import and_, desc, distinct, exists, func, or_, select, text
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 from shared.admin_dotenv import WEB_ADMIN_ENV_SECTIONS, WEB_ADMIN_ENV_WHITELIST, patch_dotenv, read_whitelist_values
 from shared.config import Settings, get_settings
 from shared.database import get_session_factory
@@ -52,6 +52,7 @@ from shared.models.billing_daily_summary import BillingDailySummary
 from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
+from shared.models.device_history import DeviceHistory
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoCodeAllowedUser, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
@@ -87,6 +88,7 @@ from shared.md2 import bold, esc as md_esc, plain
 from shared.services.broadcast_service import broadcast_html_preview_fragment, save_broadcast_history
 from shared.services.telegram_notify import send_telegram_message
 from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter_at_hybrid_transition
+from shared.services.billing_v2.hwid_panel_reconcile_service import reconcile_hwid_devices_from_panel
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
 from shared.services.admin_notify import notify_admin
@@ -249,6 +251,8 @@ _DASHBOARD_HTML_CACHE: tuple[float, str] | None = None
 _DASHBOARD_HTML_TTL_SEC = 20.0
 _USERS_HTML_CACHE: dict[tuple[str, int, str, str, str], tuple[float, str]] = {}
 _USERS_HTML_TTL_SEC = 15.0
+_DEVICES_HTML_CACHE: dict[tuple[str, int, str, str], tuple[float, str]] = {}
+_DEVICES_HTML_TTL_SEC = 15.0
 _INT32_MAX = 2_147_483_647
 _INT64_MAX = 9_223_372_036_854_775_807
 _LOGIN_BG_CANDIDATES = (
@@ -2641,6 +2645,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
     pending_2fa = isinstance(request.session.get("wauth_pending"), dict)
     show_2fa = pending_2fa or (request.query_params.get("totp") == "1")
     totp_err = request.query_params.get("err") == "totp"
+    totp_locked = request.query_params.get("err") == "locked"
     link_mode = (link or "").strip().lower() in {"1", "true", "yes", "bind"}
     if not link_mode and not show_2fa:
         restored = await _maybe_restore_browser_session(request)
@@ -2818,6 +2823,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
           </h2>
           <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
           {"<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>" if totp_err else ""}
+          {"<div class='alert alert-error'><span>Слишком много неверных попыток. Попробуйте снова через несколько минут.</span></div>" if totp_locked else ""}
           <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
             <input
               type="text"
@@ -2945,12 +2951,20 @@ async def admin_login_2fa_page(request: Request, err: str = "") -> HTMLResponse:
     return RedirectResponse("/admin/login?totp=1", status_code=303)
 
 
+_TOTP_MAX_ATTEMPTS = 5
+_TOTP_LOCKOUT_SEC = 300
+
+
 @router.post("/login/2fa")
 async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> RedirectResponse:
     pending = request.session.get("wauth_pending")
     pending_uid = request.session.get("wauth_pending_user_id")
     if not isinstance(pending, dict) or pending_uid is None:
         return RedirectResponse("/admin/login", status_code=303)
+    now_ts = int(time.time())
+    locked_until = request.session.get("wauth_totp_locked_until")
+    if isinstance(locked_until, int) and now_ts < locked_until:
+        return RedirectResponse("/admin/login?totp=1&err=locked", status_code=303)
     try:
         uid = int(pending_uid)
     except (TypeError, ValueError):
@@ -2965,7 +2979,15 @@ async def admin_login_2fa_submit(request: Request, code: str = Form("")) -> Redi
         _clear_pending_2fa(request)
         return RedirectResponse("/admin/login", status_code=303)
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        fail_count = int(request.session.get("wauth_totp_fail_count") or 0) + 1
+        if fail_count >= _TOTP_MAX_ATTEMPTS:
+            request.session["wauth_totp_locked_until"] = now_ts + _TOTP_LOCKOUT_SEC
+            request.session["wauth_totp_fail_count"] = 0
+            return RedirectResponse("/admin/login?totp=1&err=locked", status_code=303)
+        request.session["wauth_totp_fail_count"] = fail_count
         return RedirectResponse("/admin/login?totp=1&err=totp", status_code=303)
+    request.session.pop("wauth_totp_fail_count", None)
+    request.session.pop("wauth_totp_locked_until", None)
     request.session["wauth"] = pending
     await _bind_web_admin_session(
         request,
@@ -6561,6 +6583,176 @@ async def admin_subscription_history(request: Request, page: int = 1) -> HTMLRes
         f"{pager}</div></div>"
     )
     return _layout("История подписок", body, request=request)
+
+
+@router.get("/devices")
+async def admin_devices(
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    active: str = "1",
+    sort: str = "",
+) -> HTMLResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    want_partial = (request.headers.get("hx-request") or "").strip().lower() == "true"
+    needle = q.strip()
+    active_f = (active or "").strip()
+    sort_f = (sort or "").strip().lower()
+    page = max(1, page)
+    cache_key = (needle.casefold(), page, active_f, sort_f)
+    now_m = time.monotonic()
+    if not want_partial:
+        cached_devices = _DEVICES_HTML_CACHE.get(cache_key)
+        if cached_devices is not None and now_m - cached_devices[0] < _DEVICES_HTML_TTL_SEC:
+            return _layout("Web-admin Devices", cached_devices[1], request=request)
+    if len(_DEVICES_HTML_CACHE) > 128:
+        stale_keys = [k for k, v in _DEVICES_HTML_CACHE.items() if now_m - v[0] >= _DEVICES_HTML_TTL_SEC]
+        for k in stale_keys:
+            _DEVICES_HTML_CACHE.pop(k, None)
+    per_page = 15
+    async with await _session() as session:
+        latest_sq = (
+            select(DeviceHistory)
+            .distinct(DeviceHistory.device_hwid)
+            .order_by(DeviceHistory.device_hwid, desc(DeviceHistory.event_ts), desc(DeviceHistory.id))
+            .subquery("latest_dh")
+        )
+        LatestDH = aliased(DeviceHistory, latest_sq)
+        query = select(LatestDH, User).join(User, User.id == LatestDH.user_id)
+        if active_f == "1":
+            query = query.where(LatestDH.is_active.is_(True))
+        if needle:
+            if needle.isdigit() and len(needle) <= 19:
+                tid = int(needle)
+                if tid > _INT64_MAX:
+                    query = query.where(text("1=0"))
+                else:
+                    conds = [User.telegram_id == tid]
+                    if tid <= _INT32_MAX:
+                        conds.append(User.id == tid)
+                    query = query.where(or_(*conds))
+            else:
+                query = query.where(
+                    or_(
+                        LatestDH.device_hwid.ilike(f"%{needle}%"),
+                        User.username.ilike(f"%{needle}%"),
+                        User.first_name.ilike(f"%{needle}%"),
+                    )
+                )
+        count_query = select(func.count()).select_from(query.subquery())
+        total_devices = int((await session.execute(count_query)).scalar_one() or 0)
+        total_pages = max(1, (total_devices + per_page - 1) // per_page)
+        if page > total_pages:
+            page = total_pages
+        app_expr = func.coalesce(LatestDH.meta.op("->>")("user_agent"), LatestDH.meta.op("->>")("platform"))
+        if sort_f == "app_asc":
+            query = query.order_by(app_expr.asc().nulls_last(), desc(LatestDH.id))
+        elif sort_f == "app_desc":
+            query = query.order_by(app_expr.desc().nulls_last(), desc(LatestDH.id))
+        elif sort_f == "account":
+            query = query.order_by(User.first_name.asc().nulls_last(), User.username.asc().nulls_last())
+        else:
+            query = query.order_by(desc(LatestDH.event_ts))
+        rows = (
+            await session.execute(query.offset((page - 1) * per_page).limit(per_page))
+        ).all()
+    tr: list[str] = []
+    for dh, u in rows:
+        meta = dh.meta or {}
+        client = str(meta.get("user_agent") or meta.get("platform") or "—")
+        os_ver = str(meta.get("os_version") or "—")
+        model = str(meta.get("device_model") or "—")
+        disp = u.first_name or u.username or f"#{u.id}"
+        status_badge = (
+            "<span class='badge badge-success badge-sm'>Активно</span>"
+            if dh.is_active
+            else "<span class='badge badge-ghost badge-sm'>Отвязано</span>"
+        )
+        reconcile_btn = ""
+        if u.billing_mode == "hybrid":
+            reconcile_btn = (
+                f"<form method='post' action='/admin/devices/{u.id}/reconcile' data-no-row-nav>"
+                "<button type='submit' class='btn btn-ghost btn-xs' data-no-row-nav title='Обновить с панели'>"
+                "<i class='fa-solid fa-rotate' aria-hidden='true'></i></button></form>"
+            )
+        tr.append(
+            "<tr class='remna-row-link cursor-pointer' "
+            f"data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Карточка пользователя'>"
+            f"<td class='font-mono text-xs'>{_esc(dh.device_hwid)}</td>"
+            f"<td><span class='link link-primary font-medium'>{_esc(disp)}</span>"
+            f" <span class='opacity-60 text-xs'>#{u.id}</span></td>"
+            f"<td>{_esc(client)}</td>"
+            f"<td>{_esc(os_ver)}</td>"
+            f"<td>{_esc(model)}</td>"
+            f"<td class='whitespace-nowrap text-xs'>{_fmt_dt_msk(dh.event_ts)}</td>"
+            f"<td>{status_badge}</td>"
+            f"<td class='text-right' data-no-row-nav>{reconcile_btn}</td></tr>"
+        )
+    pager = _pagination_bar(
+        page=page,
+        total_pages=total_pages,
+        base_path="/admin/devices",
+        query_extra={"q": needle, "active": active_f, "sort": sort_f},
+        htmx_target="#remna-devices-results",
+    )
+    active_opts = (
+        '<option value="1"' + (" selected" if active_f == "1" else "") + '>Только активные</option>'
+        '<option value=""' + (" selected" if active_f != "1" else "") + '>Все (вкл. отвязанные)</option>'
+    )
+    sort_opts = (
+        '<option value=""' + (" selected" if not sort_f else "") + '>Последняя привязка ↓</option>'
+        '<option value="app_asc"' + (" selected" if sort_f == "app_asc" else "") + '>Клиент ↑</option>'
+        '<option value="app_desc"' + (" selected" if sort_f == "app_desc" else "") + '>Клиент ↓</option>'
+        '<option value="account"' + (" selected" if sort_f == "account" else "") + '>Аккаунт</option>'
+    )
+    devices_results_inner = (
+        "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
+        "<table class='table table-zebra table-sm'><thead><tr>"
+        "<th>HWID</th><th>Аккаунт</th><th>Клиент</th><th>ОС</th><th>Модель</th><th>Привязано</th><th>Статус</th><th></th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(tr) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        f"{pager}"
+    )
+    body = (
+        "<div class='card bg-base-100 border border-base-content/10 shadow-lg'><div class='card-body gap-4'>"
+        "<h2 class='card-title text-2xl'><i class='fa-solid fa-mobile-screen-button text-primary mr-2' aria-hidden='true'></i>Устройства</h2>"
+        "<p class='text-sm opacity-60'>Все привязанные устройства всех пользователей, последние привязки — сверху.</p>"
+        "<form id='dv-form' method='get' class='flex flex-wrap items-end gap-2' "
+        "hx-get='/admin/devices' hx-target='#remna-devices-results' hx-swap='innerHTML' hx-push-url='true' "
+        "hx-trigger='submit, change from:select, keyup changed delay:320ms from:#dv-q'>"
+        f"<input id='dv-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='HWID, Telegram username, ID'/>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Статус</span>"
+        f"<select id='dv-active' name='active' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{active_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Сортировка</span>"
+        f"<select id='dv-sort' name='sort' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sort_opts}</select></label>"
+        "<a class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5' href='/admin/devices' title='Сбросить все фильтры'><i class='fa-solid fa-rotate-left' aria-hidden='true'></i>Сбросить</a>"
+        "<button class='btn btn-primary btn-sm h-9 min-h-9 gap-1.5' type='submit'><i class='fa-solid fa-magnifying-glass' aria-hidden='true'></i>Применить</button></form>"
+        "<div id='remna-devices-results'>"
+        f"{devices_results_inner}"
+        "</div>"
+        "</div></div>"
+    )
+    if want_partial:
+        return HTMLResponse(devices_results_inner, headers={"Cache-Control": "private, no-store"})
+    _DEVICES_HTML_CACHE[cache_key] = (time.monotonic(), body)
+    return _layout("Web-admin Devices", body, request=request)
+
+
+@router.post("/devices/{user_id}/reconcile")
+async def admin_devices_reconcile_one(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is not None:
+            await reconcile_hwid_devices_from_panel(session, user=user, settings=settings)
+            await session.commit()
+    _DEVICES_HTML_CACHE.clear()
+    return RedirectResponse("/admin/devices", status_code=303)
 
 
 @router.get("/users/{user_id}/telegram-photo")
