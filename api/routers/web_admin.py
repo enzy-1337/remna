@@ -997,36 +997,48 @@ def _brand_logo_mark(settings: Settings, *, compact: bool = False) -> str:
     return f'<i class="{icls}" aria-hidden="true"></i>'
 
 
-def _nav_link_class(href: str, cur: str) -> str:
+def _nav_active(href: str, cur: str) -> bool:
+    h = href.rstrip("/")
+    c = cur.rstrip("/") or "/"
+    if h == "/admin/dashboard":
+        return c in ("/admin/dashboard", "/admin")
+    return c == h or c.startswith(h + "/")
+
+
+def _nav_link_classes(href: str, cur: str) -> tuple[str, str, str]:
+    """(текущий класс, класс активного, класс неактивного) — активный/неактивный нужны
+    отдельно как data-атрибуты, чтобы клиентский JS (swapPage) мог переключить подсветку
+    после AJAX-навигации без перерисовки сайдбара сервером."""
     base = (
         "box-border flex h-9 min-h-9 min-w-0 shrink-0 items-center justify-start gap-0 rounded-xl px-0 "
         "text-sm font-medium no-underline ring-1 ring-inset ring-transparent transition-colors duration-200 remna-interactive"
     )
-    h = href.rstrip("/")
-    c = cur.rstrip("/") or "/"
-    active = False
-    if h == "/admin/dashboard":
-        active = c in ("/admin/dashboard", "/admin")
-    elif c == h or c.startswith(h + "/"):
-        active = True
-    if active:
-        return f"{base} bg-primary/20 text-primary shadow-sm ring-primary/25"
-    return f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content"
+    active_cls = f"{base} bg-primary/20 text-primary shadow-sm ring-primary/25"
+    inactive_cls = f"{base} text-base-content/75 hover:bg-base-200 hover:text-base-content"
+    cur_cls = active_cls if _nav_active(href, cur) else inactive_cls
+    return cur_cls, active_cls, inactive_cls
+
+
+def _nav_link_class(href: str, cur: str) -> str:
+    cur_cls, _, _ = _nav_link_classes(href, cur)
+    return cur_cls
 
 
 def _sidebar_nav_item(href: str, icon_class: str, label: str, cur: str) -> str:
-    cls = _nav_link_class(href, cur)
+    cls, active_cls, inactive_cls = _nav_link_classes(href, cur)
+    suffix = " w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden"
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <a href="{href}" class="{cls} w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
+    <a href="{href}" data-remna-nav data-nav-href="{_esc_attr(href)}" data-nav-active-cls="{_esc_attr(active_cls + suffix)}" data-nav-inactive-cls="{_esc_attr(inactive_cls + suffix)}" class="{cls}{suffix}">
       <span class="flex h-9 w-9 shrink-0 items-center justify-center"><i class="{icon_class} text-[15px] leading-none opacity-90" aria-hidden="true"></i></span>
       <span class="nav-label pointer-events-none min-w-0 max-w-0 shrink grow-0 basis-0 overflow-hidden whitespace-nowrap opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:max-w-[14rem] group-hover/sidebar:shrink group-hover/sidebar:basis-auto group-hover/sidebar:opacity-100">{_esc(label)}</span>
     </a></div>"""
 
 
 def _sidebar_footer_profile(href: str, label: str, avatar_markup: str, cur: str) -> str:
-    pcls = _nav_link_class(href, cur)
+    pcls, active_cls, inactive_cls = _nav_link_classes(href, cur)
+    suffix = " relative w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden"
     return f"""<div class="flex w-full justify-start overflow-hidden">
-    <div class="{pcls} relative w-9 max-w-9 min-w-9 group-hover/sidebar:w-full group-hover/sidebar:max-w-none group-hover/sidebar:min-w-0 overflow-hidden">
+    <div data-remna-nav data-nav-href="{_esc_attr(href)}" data-nav-active-cls="{_esc_attr(active_cls + suffix)}" data-nav-inactive-cls="{_esc_attr(inactive_cls + suffix)}" class="{pcls}{suffix}">
       <a href="{href}" class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full" title="{_esc(label)}">
         {avatar_markup}
       </a>
@@ -1039,20 +1051,25 @@ def _sidebar_footer_profile(href: str, label: str, avatar_markup: str, cur: str)
     </div></div>"""
 
 
+def _mob_nav_classes(href: str, cur: str) -> tuple[str, str, str]:
+    active_cls = "text-primary font-semibold"
+    inactive_cls = "text-base-content/55"
+    cur_cls = active_cls if _nav_active(href, cur) else inactive_cls
+    return cur_cls, active_cls, inactive_cls
+
+
 def _mob_nav_cls(href: str, cur: str) -> str:
-    h = href.rstrip("/")
-    c = cur.rstrip("/") or "/"
-    if h == "/admin/dashboard":
-        act = c in ("/admin/dashboard", "/admin")
-    else:
-        act = c == h or c.startswith(h + "/")
-    return "text-primary font-semibold" if act else "text-base-content/55"
+    cur_cls, _, _ = _mob_nav_classes(href, cur)
+    return cur_cls
 
 
 def _mob_drawer_link(href: str, icon_class: str, label: str, cur: str) -> str:
-    tone = _mob_nav_cls(href, cur)
+    tone, active_tone, inactive_tone = _mob_nav_classes(href, cur)
+    base_cls = "btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case "
     return (
-        f'<a href="{href}" class="btn btn-ghost btn-sm h-10 min-h-10 w-full justify-start gap-3 border-0 font-medium normal-case {tone}">'
+        f'<a href="{href}" data-remna-nav data-nav-href="{_esc_attr(href)}" '
+        f'data-nav-active-cls="{_esc_attr(base_cls + active_tone)}" data-nav-inactive-cls="{_esc_attr(base_cls + inactive_tone)}" '
+        f'class="{base_cls}{tone}">'
         f'<i class="{icon_class} w-5 shrink-0 text-center text-base" aria-hidden="true"></i>'
         f"<span>{_esc(label)}</span></a>"
     )
@@ -1657,6 +1674,19 @@ def _layout(
           s.parentNode.replaceChild(ns,s);
         });
       }
+      function remnaSyncNavActive(pathname){
+        var p;
+        try{p=new URL(pathname,window.location.href).pathname;}catch(x){p=pathname||'/';}
+        p=(p||'/').replace(/\/+$/,'')||'/';
+        document.querySelectorAll('[data-nav-href]').forEach(function(el){
+          var h=(el.getAttribute('data-nav-href')||'').replace(/\/+$/,'');
+          var active;
+          if(h==='/admin/dashboard'){active=(p==='/admin/dashboard'||p==='/admin');}
+          else{active=(p===h||p.indexOf(h+'/')===0);}
+          var cls=el.getAttribute(active?'data-nav-active-cls':'data-nav-inactive-cls');
+          if(cls!==null)el.className=cls;
+        });
+      }
       async function swapPage(url,init){
         if(window.remnaShowLoading)window.remnaShowLoading();
         try{
@@ -1675,6 +1705,7 @@ def _layout(
           extractAndRunScripts(curPage);
           document.title=doc.title||document.title;
           if(finalUrl!==window.location.href)history.pushState({remnaSwap:1},document.title,finalUrl);
+          remnaSyncNavActive(finalUrl);
           if(window.remnaConsumeUrlNotify)window.remnaConsumeUrlNotify();
         }catch(x){
           if(window.remnaHideLoading)window.remnaHideLoading();
