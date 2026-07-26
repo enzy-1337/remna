@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 import logging
@@ -21,6 +23,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from downloader.config import get_downloader_settings
+from downloader.database import get_session_factory
 from shared.md2 import bold, esc, join_lines, plain
 from shared.models.downloader_user_topic import DownloaderUserTopic
 from shared.models.user import User
@@ -34,9 +37,18 @@ from shared.services.video_downloader import (
 )
 
 router = Router(name="downloader")
-_user_locks: dict[int, asyncio.Lock] = {}
 logger = logging.getLogger(__name__)
 _TELEGRAM_BOT_UPLOAD_MAX_MB = 49
+
+
+@dataclass(slots=True)
+class _QueuedDownload:
+    message: Message
+    url: str
+
+
+_user_queues: dict[int, deque[_QueuedDownload]] = {}
+_user_workers: dict[int, asyncio.Task] = {}
 
 
 def _now_label() -> str:
@@ -47,23 +59,38 @@ def _format_size_mb(size_bytes: int) -> str:
     return f"{(size_bytes / 1024 / 1024):.2f}"
 
 
-async def _maybe_compress_for_telegram(
-    *,
-    video_path,
-    duration_sec: int,
-    size_bytes: int,
-):
-    telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
-    if size_bytes <= telegram_limit_bytes:
-        return video_path, size_bytes, False
-    compressed = await compress_video_to_limit(
-        source_path=video_path,
-        duration_sec=duration_sec,
-        max_size_mb=_TELEGRAM_BOT_UPLOAD_MAX_MB,
-    )
-    if compressed is None:
-        return video_path, size_bytes, False
-    return compressed, int(compressed.stat().st_size), True
+async def _enqueue_download(tg_id: int, message: Message, url: str) -> None:
+    """Ставит ссылку в очередь загрузки пользователя; следующая стартует сразу после предыдущей."""
+    queue = _user_queues.setdefault(tg_id, deque())
+    queue.append(_QueuedDownload(message=message, url=url))
+    position = len(queue)
+    if position > 1:
+        await message.answer(
+            join_lines(
+                "📋 " + bold("Добавлено в очередь загрузки."),
+                plain(f"Позиция: {position}. Начну скачивание, как только освобожусь."),
+            )
+        )
+    worker = _user_workers.get(tg_id)
+    if worker is None or worker.done():
+        _user_workers[tg_id] = asyncio.create_task(_run_user_queue(tg_id))
+
+
+async def _run_user_queue(tg_id: int) -> None:
+    queue = _user_queues.get(tg_id)
+    if queue is None:
+        return
+    try:
+        while queue:
+            job = queue.popleft()
+            try:
+                await _process_download(message=job.message, resolved_url=job.url)
+            except Exception:
+                logger.exception("Queued download crashed user_id=%s url=%s", tg_id, job.url)
+    finally:
+        _user_workers.pop(tg_id, None)
+        if not _user_queues.get(tg_id):
+            _user_queues.pop(tg_id, None)
 
 
 async def _generate_unique_referral_code(session: AsyncSession) -> str:
@@ -292,7 +319,6 @@ async def handle_download_link(
     message: Message,
     session: AsyncSession,
 ) -> None:
-    settings = get_downloader_settings()
     tg = message.from_user
     if tg is None or tg.is_bot:
         return
@@ -319,184 +345,179 @@ async def handle_download_link(
         )
         return
 
-    topic = await _ensure_user_topic(session=session, message=message, db_user=db_user)
-    lock = _user_locks.setdefault(tg.id, asyncio.Lock())
-    if lock.locked():
-        await message.answer(join_lines("⏳ " + bold("Предыдущее видео ещё загружается."), plain("Дождитесь завершения.")))
-        return
+    await _enqueue_download(tg.id, message, resolved_url)
 
-    progress_msg = await message.answer("⏳ " + bold("Загружаем, подождите..."))
-    async with lock:
+
+async def _process_download(*, message: Message, resolved_url: str) -> None:
+    """Скачивает и отправляет одно видео из очереди пользователя (своя сессия БД)."""
+    settings = get_downloader_settings()
+    tg = message.from_user
+    if tg is None:
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
-            video, temp_dir = await download_video(resolved_url)
-            try:
-                if settings.downloader_max_duration_sec > 0 and video.duration_sec > settings.downloader_max_duration_sec:
+            db_user = await _get_or_create_user(session, message)
+            if db_user.is_blocked:
+                await session.commit()
+                return
+            topic = await _ensure_user_topic(session=session, message=message, db_user=db_user)
+            await _download_and_send(
+                settings=settings,
+                tg=tg,
+                message=message,
+                session=session,
+                db_user=db_user,
+                topic=topic,
+                resolved_url=resolved_url,
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _download_and_send(
+    *,
+    settings,
+    tg,
+    message: Message,
+    session: AsyncSession,
+    db_user,
+    topic,
+    resolved_url: str,
+) -> None:
+    url = resolved_url
+    progress_msg = await message.answer("⏳ " + bold("Загружаем, подождите..."))
+    try:
+        video, temp_dir = await download_video(resolved_url)
+        try:
+            if settings.downloader_max_duration_sec > 0 and video.duration_sec > settings.downloader_max_duration_sec:
+                await progress_msg.edit_text(
+                    plain(
+                        f"Видео слишком длинное: {video.duration_sec} сек. Лимит: {settings.downloader_max_duration_sec} сек."
+                    )
+                )
+                return
+            if settings.downloader_max_file_mb > 0:
+                max_bytes = int(Decimal(settings.downloader_max_file_mb) * 1024 * 1024)
+                if video.size_bytes > max_bytes:
                     await progress_msg.edit_text(
                         plain(
-                            f"Видео слишком длинное: {video.duration_sec} сек. Лимит: {settings.downloader_max_duration_sec} сек."
+                            f"Видео слишком большое: {_format_size_mb(video.size_bytes)} MB. Лимит: {settings.downloader_max_file_mb} MB."
                         )
                     )
                     return
-                if settings.downloader_max_file_mb > 0:
-                    max_bytes = int(Decimal(settings.downloader_max_file_mb) * 1024 * 1024)
-                    if video.size_bytes > max_bytes:
-                        await progress_msg.edit_text(
-                            plain(
-                                f"Видео слишком большое: {_format_size_mb(video.size_bytes)} MB. Лимит: {settings.downloader_max_file_mb} MB."
-                            )
+            kb = build_bot_cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
+            sent_user_video: Message | None = None
+            sent_user_photos: list[Message] = []
+            delivered_size = video.size_bytes
+            if video.photo_paths:
+                await progress_msg.delete()
+                media = [InputMediaPhoto(media=FSInputFile(p)) for p in video.photo_paths[:10]]
+                sent_user_photos = await message.answer_media_group(media)
+                delivered_size = sum(int(p.stat().st_size) for p in video.photo_paths[:10])
+                if kb is not None:
+                    await message.answer(plain("💜 Поддержать бота"), reply_markup=kb)
+            else:
+                send_path = video.path
+                send_size = video.size_bytes
+                was_compressed = False
+                telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
+                if video.size_bytes > telegram_limit_bytes:
+                    await progress_msg.edit_text(
+                        join_lines(
+                            "🗜 " + bold("Видео сжимается, пожалуйста подождите."),
+                            plain("Это может занять несколько минут."),
                         )
-                        return
-                kb = build_bot_cta_keyboard(settings.bot_username, label_template=settings.bot_cta_label)
-                sent_user_video: Message | None = None
-                sent_user_photos: list[Message] = []
-                delivered_size = video.size_bytes
-                if video.photo_paths:
-                    await progress_msg.delete()
-                    media = [InputMediaPhoto(media=FSInputFile(p)) for p in video.photo_paths[:10]]
-                    sent_user_photos = await message.answer_media_group(media)
-                    delivered_size = sum(int(p.stat().st_size) for p in video.photo_paths[:10])
-                    if kb is not None:
-                        await message.answer(plain("💜 Поддержать бота"), reply_markup=kb)
-                else:
-                    send_path, send_size, was_compressed = await _maybe_compress_for_telegram(
-                        video_path=video.path,
-                        duration_sec=video.duration_sec,
-                        size_bytes=video.size_bytes,
                     )
-                    if was_compressed:
-                        await message.answer(plain("🎞 Видео было автоматически сжато для отправки в Telegram."))
-                    telegram_limit_bytes = _TELEGRAM_BOT_UPLOAD_MAX_MB * 1024 * 1024
-                    if send_size > telegram_limit_bytes:
-                        await progress_msg.delete()
-                        await message.answer(
-                            plain(
-                                "Видео скачалось, но Telegram не принял размер даже после попытки сжатия. "
-                                f"Размер: {_format_size_mb(send_size)} MB, лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
-                            )
+                    compressed = await compress_video_to_limit(
+                        source_path=video.path,
+                        duration_sec=video.duration_sec,
+                        max_size_mb=_TELEGRAM_BOT_UPLOAD_MAX_MB,
+                    )
+                    if compressed is not None:
+                        send_path = compressed
+                        send_size = int(compressed.stat().st_size)
+                        was_compressed = True
+                if was_compressed:
+                    await progress_msg.edit_text(
+                        join_lines(
+                            "🎞 " + bold("Видео было автоматически сжато для отправки в Telegram."),
+                            "📤 " + bold("Отправляем видео, подождите."),
+                            plain("Это может занять несколько минут."),
                         )
-                        return
-                    delivered_size = send_size
+                    )
+                if send_size > telegram_limit_bytes:
                     await progress_msg.delete()
-                    try:
-                        if video.is_gif:
-                            sent_user_video = await message.answer_animation(
-                                FSInputFile(send_path),
-                                reply_markup=kb,
-                            )
-                        else:
-                            sent_user_video = await message.answer_video(
-                                FSInputFile(send_path),
-                                reply_markup=kb,
-                            )
-                    except TelegramBadRequest as e:
-                        msg = str(e).lower()
-                        if "file is too big" in msg or "request entity too large" in msg:
-                            await message.answer(
-                                join_lines(
-                                    "❌ " + bold("Telegram не принял файл по размеру."),
-                                    plain("Попробуйте другую ссылку или более короткий ролик."),
-                                )
-                            )
-                            logger.warning(
-                                "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
-                                tg.id,
-                                _format_size_mb(video.size_bytes),
-                                resolved_url,
-                                e,
-                            )
-                            return
-                        raise
-                    except TelegramEntityTooLarge:
+                    await message.answer(
+                        plain(
+                            "Видео скачалось, но Telegram не принял размер даже после попытки сжатия. "
+                            f"Размер: {_format_size_mb(send_size)} MB, лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."
+                        )
+                    )
+                    return
+                delivered_size = send_size
+                await progress_msg.delete()
+                try:
+                    if video.is_gif:
+                        sent_user_video = await message.answer_animation(
+                            FSInputFile(send_path),
+                            reply_markup=kb,
+                        )
+                    else:
+                        sent_user_video = await message.answer_video(
+                            FSInputFile(send_path),
+                            reply_markup=kb,
+                        )
+                except TelegramBadRequest as e:
+                    msg = str(e).lower()
+                    if "file is too big" in msg or "request entity too large" in msg:
                         await message.answer(
                             join_lines(
                                 "❌ " + bold("Telegram не принял файл по размеру."),
-                                plain(f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."),
+                                plain("Попробуйте другую ссылку или более короткий ролик."),
                             )
                         )
                         logger.warning(
-                            "TelegramEntityTooLarge user_id=%s size_mb=%s url=%s",
+                            "Telegram rejected video size user_id=%s size_mb=%s url=%s err=%s",
                             tg.id,
                             _format_size_mb(video.size_bytes),
                             resolved_url,
+                            e,
                         )
                         return
-
-                meta = _meta_caption(
-                    platform=video.platform,
-                    duration_sec=video.duration_sec,
-                    size_bytes=delivered_size,
-                    tg_id=tg.id,
-                    username=tg.username,
-                    url=video.original_url,
-                )
-                await message.bot.send_message(
-                    chat_id=topic.forum_chat_id,
-                    message_thread_id=topic.topic_id,
-                    text=meta,
-                )
-                if sent_user_photos:
-                    try:
-                        for sent_photo in sent_user_photos:
-                            await message.bot.forward_message(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                from_chat_id=sent_photo.chat.id,
-                                message_id=sent_photo.message_id,
-                            )
-                    except TelegramBadRequest:
-                        media_admin = []
-                        for sent_photo in sent_user_photos[:10]:
-                            if not sent_photo.photo:
-                                continue
-                            media_admin.append(InputMediaPhoto(media=sent_photo.photo[-1].file_id))
-                        if media_admin:
-                            await message.bot.send_media_group(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                media=media_admin,
-                            )
-                else:
-                    if sent_user_video is None:
-                        raise RuntimeError("Не удалось отправить видео пользователю.")
-                    try:
-                        await message.bot.forward_message(
-                            chat_id=topic.forum_chat_id,
-                            message_thread_id=topic.topic_id,
-                            from_chat_id=sent_user_video.chat.id,
-                            message_id=sent_user_video.message_id,
-                        )
-                    except TelegramBadRequest:
-                        if sent_user_video.animation is not None:
-                            await message.bot.send_animation(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                animation=sent_user_video.animation.file_id,
-                            )
-                        elif sent_user_video.video is not None:
-                            await message.bot.send_video(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                video=sent_user_video.video.file_id,
-                                reply_markup=kb,
-                            )
-                        else:
-                            raise
-            except Exception as topic_exc:
-                err = str(topic_exc).lower()
-                if "message thread not found" not in err and "topic" not in err:
                     raise
-                topic = await _recreate_user_topic(
-                    session=session,
-                    message=message,
-                    db_user=db_user,
-                    existing=topic,
-                )
-                await message.bot.send_message(
-                    chat_id=topic.forum_chat_id,
-                    message_thread_id=topic.topic_id,
-                    text=meta,
-                )
-                if sent_user_photos:
+                except TelegramEntityTooLarge:
+                    await message.answer(
+                        join_lines(
+                            "❌ " + bold("Telegram не принял файл по размеру."),
+                            plain(f"Лимит Telegram: {_TELEGRAM_BOT_UPLOAD_MAX_MB} MB."),
+                        )
+                    )
+                    logger.warning(
+                        "TelegramEntityTooLarge user_id=%s size_mb=%s url=%s",
+                        tg.id,
+                        _format_size_mb(video.size_bytes),
+                        resolved_url,
+                    )
+                    return
+
+            meta = _meta_caption(
+                platform=video.platform,
+                duration_sec=video.duration_sec,
+                size_bytes=delivered_size,
+                tg_id=tg.id,
+                username=tg.username,
+                url=video.original_url,
+            )
+            await message.bot.send_message(
+                chat_id=topic.forum_chat_id,
+                message_thread_id=topic.topic_id,
+                text=meta,
+            )
+            if sent_user_photos:
+                try:
                     for sent_photo in sent_user_photos:
                         await message.bot.forward_message(
                             chat_id=topic.forum_chat_id,
@@ -504,54 +525,115 @@ async def handle_download_link(
                             from_chat_id=sent_photo.chat.id,
                             message_id=sent_photo.message_id,
                         )
-                else:
-                    try:
-                        await message.bot.forward_message(
+                except TelegramBadRequest:
+                    media_admin = []
+                    for sent_photo in sent_user_photos[:10]:
+                        if not sent_photo.photo:
+                            continue
+                        media_admin.append(InputMediaPhoto(media=sent_photo.photo[-1].file_id))
+                    if media_admin:
+                        await message.bot.send_media_group(
                             chat_id=topic.forum_chat_id,
                             message_thread_id=topic.topic_id,
-                            from_chat_id=sent_user_video.chat.id,
-                            message_id=sent_user_video.message_id,
+                            media=media_admin,
                         )
-                    except TelegramBadRequest:
-                        if sent_user_video is None:
-                            raise
-                        if sent_user_video.animation is not None:
-                            await message.bot.send_animation(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                animation=sent_user_video.animation.file_id,
-                            )
-                        elif sent_user_video.video is not None:
-                            await message.bot.send_video(
-                                chat_id=topic.forum_chat_id,
-                                message_thread_id=topic.topic_id,
-                                video=sent_user_video.video.file_id,
-                                reply_markup=kb,
-                            )
-                        else:
-                            raise
-            finally:
-                temp_dir.cleanup()
-        except Exception as e:
-            logger.exception(
-                "Downloader failed user_id=%s url=%s resolved_url=%s",
-                tg.id,
-                url,
-                resolved_url,
+            else:
+                if sent_user_video is None:
+                    raise RuntimeError("Не удалось отправить видео пользователю.")
+                try:
+                    await message.bot.forward_message(
+                        chat_id=topic.forum_chat_id,
+                        message_thread_id=topic.topic_id,
+                        from_chat_id=sent_user_video.chat.id,
+                        message_id=sent_user_video.message_id,
+                    )
+                except TelegramBadRequest:
+                    if sent_user_video.animation is not None:
+                        await message.bot.send_animation(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            animation=sent_user_video.animation.file_id,
+                        )
+                    elif sent_user_video.video is not None:
+                        await message.bot.send_video(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            video=sent_user_video.video.file_id,
+                            reply_markup=kb,
+                        )
+                    else:
+                        raise
+        except Exception as topic_exc:
+            err = str(topic_exc).lower()
+            if "message thread not found" not in err and "topic" not in err:
+                raise
+            topic = await _recreate_user_topic(
+                session=session,
+                message=message,
+                db_user=db_user,
+                existing=topic,
             )
-            reason = str(e).strip()
-            reason_line = f"\nПричина: {reason[:220]}" if reason else ""
-            try:
-                await progress_msg.edit_text(
-                    join_lines(
-                        "❌ " + bold("Не удалось скачать видео."),
-                        plain("Проверьте ссылку и попробуйте снова." + reason_line),
+            await message.bot.send_message(
+                chat_id=topic.forum_chat_id,
+                message_thread_id=topic.topic_id,
+                text=meta,
+            )
+            if sent_user_photos:
+                for sent_photo in sent_user_photos:
+                    await message.bot.forward_message(
+                        chat_id=topic.forum_chat_id,
+                        message_thread_id=topic.topic_id,
+                        from_chat_id=sent_photo.chat.id,
+                        message_id=sent_photo.message_id,
                     )
-                )
-            except Exception:
-                await message.answer(
-                    join_lines(
-                        "❌ " + bold("Не удалось скачать видео."),
-                        plain("Проверьте ссылку и попробуйте снова." + reason_line),
+            else:
+                try:
+                    await message.bot.forward_message(
+                        chat_id=topic.forum_chat_id,
+                        message_thread_id=topic.topic_id,
+                        from_chat_id=sent_user_video.chat.id,
+                        message_id=sent_user_video.message_id,
                     )
+                except TelegramBadRequest:
+                    if sent_user_video is None:
+                        raise
+                    if sent_user_video.animation is not None:
+                        await message.bot.send_animation(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            animation=sent_user_video.animation.file_id,
+                        )
+                    elif sent_user_video.video is not None:
+                        await message.bot.send_video(
+                            chat_id=topic.forum_chat_id,
+                            message_thread_id=topic.topic_id,
+                            video=sent_user_video.video.file_id,
+                            reply_markup=kb,
+                        )
+                    else:
+                        raise
+        finally:
+            temp_dir.cleanup()
+    except Exception as e:
+        logger.exception(
+            "Downloader failed user_id=%s url=%s resolved_url=%s",
+            tg.id,
+            url,
+            resolved_url,
+        )
+        reason = str(e).strip()
+        reason_line = f"\nПричина: {reason[:220]}" if reason else ""
+        try:
+            await progress_msg.edit_text(
+                join_lines(
+                    "❌ " + bold("Не удалось скачать видео."),
+                    plain("Проверьте ссылку и попробуйте снова." + reason_line),
                 )
+            )
+        except Exception:
+            await message.answer(
+                join_lines(
+                    "❌ " + bold("Не удалось скачать видео."),
+                    plain("Проверьте ссылку и попробуйте снова." + reason_line),
+                )
+            )

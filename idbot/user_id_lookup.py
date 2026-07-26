@@ -23,6 +23,31 @@ router = Router(name="id_lookup")
 _USERNAME_RE = re.compile(r"^@([a-zA-Z][a-zA-Z0-9_]{4,31})$")
 
 
+def _extract_forward_user(msg: Message) -> TgUser | None:
+    """Автор пересланного сообщения: сперва forward_origin (Bot API 7.0+), затем legacy forward_from."""
+    origin = getattr(msg, "forward_origin", None)
+    sender_user = getattr(origin, "sender_user", None)
+    if sender_user is not None:
+        return sender_user
+    return getattr(msg, "forward_from", None)
+
+
+def _is_hidden_forward(msg: Message) -> bool:
+    """True, если сообщение переслано, но автор скрыл пересылку (нельзя узнать ID)."""
+    origin = getattr(msg, "forward_origin", None)
+    if origin is not None:
+        return getattr(origin, "sender_user", None) is None and getattr(origin, "sender_user_name", None) is not None
+    return bool(getattr(msg, "forward_sender_name", None)) and getattr(msg, "forward_from", None) is None
+
+
+def _resolve_target_user(target: Message) -> TgUser | None:
+    """Для реплая: автор исходного (пересланного) сообщения, а не тот, кто его переслал."""
+    forwarded = _extract_forward_user(target)
+    if forwarded is not None:
+        return forwarded
+    return target.from_user
+
+
 class UsernameLookupFilter(Filter):
     """Личка: только строка `@username` или сущность text_mention (выбор из подсказки)."""
 
@@ -38,6 +63,17 @@ class UsernameLookupFilter(Filter):
             if ent.type == MessageEntityType.TEXT_MENTION and ent.user:
                 return True
         return False
+
+
+class ForwardedMessageFilter(Filter):
+    """Личка: пользователь напрямую переслал сообщение (без команды /id)."""
+
+    async def __call__(self, message: Message) -> bool:
+        if message.chat.type != "private" or message.reply_to_message:
+            return False
+        if message.text and message.text.strip().startswith("/"):
+            return False
+        return _extract_forward_user(message) is not None or _is_hidden_forward(message)
 
 
 def _full_name(user: TgUser | None) -> str:
@@ -110,9 +146,11 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
         tg = message.from_user
         if tg is None or tg.is_bot:
             return
-        if message.reply_to_message and message.reply_to_message.from_user:
-            await _answer_from_tg_user(message, message.reply_to_message.from_user)
-            return
+        if message.reply_to_message:
+            target_user = _resolve_target_user(message.reply_to_message)
+            if target_user:
+                await _answer_from_tg_user(message, target_user)
+                return
         arg = (command.args or "").strip()
         if arg.startswith("@"):
             arg = arg[1:]
@@ -122,9 +160,11 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
         await send_group_id_destination_prompt(message)
         return
 
-    if message.reply_to_message and message.reply_to_message.from_user:
-        await _answer_from_tg_user(message, message.reply_to_message.from_user)
-        return
+    if message.reply_to_message:
+        target_user = _resolve_target_user(message.reply_to_message)
+        if target_user:
+            await _answer_from_tg_user(message, target_user)
+            return
 
     arg = (command.args or "").strip()
     if arg.startswith("@"):
@@ -145,6 +185,18 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
             plain("• ответьте на сообщение командой ") + code("/id"),
             plain("• или ") + code("/id @username"),
         ),
+    )
+
+
+@router.message(ForwardedMessageFilter())
+async def private_lookup_by_forward(message: Message) -> None:
+    """Личка: переслали сообщение пользователя напрямую (без /id) — сразу отдаём его ID."""
+    forwarded_user = _extract_forward_user(message)
+    if forwarded_user is not None:
+        await _answer_from_tg_user(message, forwarded_user)
+        return
+    await message.answer(
+        plain("Автор пересланного сообщения скрыл информацию о пересылке — узнать ID не получится."),
     )
 
 
