@@ -451,6 +451,7 @@ async def _render_admin_subs_screen(
         caption=join_lines(*lines),
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:subs",
     )
 
 
@@ -497,6 +498,7 @@ async def cb_admin_section_users(cq: CallbackQuery, db_user: User | None, is_bot
         ),
         reply_markup=_admin_users_section_keyboard(),
         settings=get_settings(),
+        photo_key="admin:section:users",
     )
 
 
@@ -517,6 +519,7 @@ async def cb_admin_section_profile(cq: CallbackQuery, db_user: User | None, is_b
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
+        photo_key="admin:section:profile",
     )
 
 
@@ -548,6 +551,7 @@ async def cb_admin_profile_totp_enable_start(
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
+        photo_key="admin:section:profile",
     )
 
 
@@ -576,6 +580,7 @@ async def cb_admin_profile_totp_disable_start(
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
+        photo_key="admin:section:profile",
     )
 
 
@@ -606,6 +611,7 @@ async def cb_admin_profile_disable_web_session(
         ),
         reply_markup=_admin_profile_section_keyboard(db_user),
         settings=get_settings(),
+        photo_key="admin:section:profile",
     )
 
 
@@ -662,6 +668,7 @@ async def cb_admin_profile_sessions(
         caption=join_lines(*lines),
         reply_markup=b.as_markup(),
         settings=get_settings(),
+        photo_key="admin:section:profile",
     )
 
 
@@ -708,6 +715,7 @@ async def cb_admin_section_analytics(cq: CallbackQuery, db_user: User | None, is
         ),
         reply_markup=_admin_analytics_section_keyboard(),
         settings=get_settings(),
+        photo_key="admin:section:analytics",
     )
 
 
@@ -724,22 +732,22 @@ async def msg_admin_profile_totp_enable_code(
         return
     if db_user is None:
         await state.clear()
-        await message.answer("Сначала выполните /start.")
+        await message.answer(plain("Сначала выполните /start."))
         return
     secret = str((await state.get_data()).get("admin_totp_secret") or "").strip()
     if not secret:
         await state.clear()
-        await message.answer("Настройка истекла. Нажмите кнопку подключения Google Auth заново.")
+        await message.answer(plain("Настройка истекла. Нажмите кнопку подключения Google Auth заново."))
         return
     otp = "".join(ch for ch in (message.text or "") if ch.isdigit())
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
-        await message.answer("Неверный код. Отправьте актуальный код из Google Authenticator.")
+        await message.answer(plain("Неверный код. Отправьте актуальный код из Google Authenticator."))
         return
     db_user.web_admin_totp_secret = secret
     db_user.web_admin_totp_enabled = True
     await session.commit()
     await state.clear()
-    await message.answer("Google Auth подключен для web-admin.")
+    await message.answer(plain("Google Auth подключен для web-admin."))
 
 
 @router.message(StateFilter(AdminSecurityStates.waiting_totp_disable_code), F.text)
@@ -755,7 +763,7 @@ async def msg_admin_profile_totp_disable_code(
         return
     if db_user is None:
         await state.clear()
-        await message.answer("Сначала выполните /start.")
+        await message.answer(plain("Сначала выполните /start."))
         return
     secret = (db_user.web_admin_totp_secret or "").strip()
     if not db_user.web_admin_totp_enabled or not secret:
@@ -764,7 +772,7 @@ async def msg_admin_profile_totp_disable_code(
         return
     otp = "".join(ch for ch in (message.text or "") if ch.isdigit())
     if not pyotp.TOTP(secret).verify(otp, valid_window=1):
-        await message.answer("Неверный код. Отправьте актуальный код из Google Authenticator.")
+        await message.answer(plain("Неверный код. Отправьте актуальный код из Google Authenticator."))
         return
     db_user.web_admin_totp_enabled = False
     db_user.web_admin_totp_secret = None
@@ -930,6 +938,7 @@ async def _render_admin_users_list_screen(
         caption=join_lines(*lines),
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:users",
     )
 
 
@@ -1354,6 +1363,7 @@ async def cb_admin_transition_calc(
         caption=join_lines(*lines),
         reply_markup=kb.as_markup(),
         settings=s,
+        photo_key="admin:transition_calc",
     )
 
 
@@ -1380,6 +1390,7 @@ async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None, is_bot_adm
         caption=cap,
         reply_markup=_admin_web_keyboard(),
         settings=s,
+        photo_key="admin:web",
     )
 
 
@@ -1414,6 +1425,7 @@ async def cb_admin_mass_convert_payg(
         ),
         reply_markup=_admin_analytics_section_keyboard(),
         settings=s,
+        photo_key="admin:calc_payg",
     )
 
 
@@ -1564,6 +1576,7 @@ async def cb_admin_metrics(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=get_settings(),
+        photo_key="admin:metrics",
     )
 
 
@@ -1659,6 +1672,7 @@ async def cb_admin_delete_user_ask(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key=f"admin:u:{uid}",
     )
 
 
@@ -2086,12 +2100,12 @@ async def msg_admin_add_months(
     raw = (message.text or "").strip()
     if not raw.isdigit():
         await _del_admin_input()
-        await message.answer("Нужно целое число.")
+        await message.answer(plain("Нужно целое число."))
         return
     months = int(raw)
     if months < 1 or months > 120:
         await _del_admin_input()
-        await message.answer("Допустимо от 1 до 120.")
+        await message.answer(plain("Допустимо от 1 до 120."))
         return
 
     sub = (
@@ -2106,7 +2120,7 @@ async def msg_admin_add_months(
         if message.bot and prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
         await state.clear()
-        await message.answer("Подписка не найдена.")
+        await message.answer(plain("Подписка не найдена."))
         return
 
     await _del_admin_input()
@@ -2141,7 +2155,7 @@ async def msg_admin_add_months(
     viewer = message.from_user.id if message.from_user else None
     built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     if built is None or message.bot is None:
-        await message.answer(f"Подписка продлена на: {months} мес.")
+        await message.answer(plain(f"Подписка продлена на: {months} мес."))
         return
     cap, kb = built
     await send_profile_screen(
@@ -2274,7 +2288,7 @@ async def msg_admin_add_days(
         days = int(raw)
     except ValueError:
         await _del_admin_input()
-        await message.answer("Нужно целое число (можно со знаком минус).")
+        await message.answer(plain("Нужно целое число (можно со знаком минус)."))
         return
 
     settings = get_settings()
@@ -2287,7 +2301,7 @@ async def msg_admin_add_days(
     )
     if not ok:
         await _del_admin_input()
-        await message.answer(err)
+        await message.answer(plain(err))
         return
 
     await _del_admin_input()
@@ -2299,7 +2313,7 @@ async def msg_admin_add_days(
     viewer = message.from_user.id if message.from_user else None
     built = await _build_user_card(session, user_id=user_id, viewer_telegram_id=viewer)
     if built is None or message.bot is None:
-        await message.answer(f"Срок изменён: {_admin_days_delta_label(days)} дн.")
+        await message.answer(plain(f"Срок изменён: {_admin_days_delta_label(days)} дн."))
         return
     cap, kb = built
     await send_profile_screen(
@@ -2340,10 +2354,10 @@ def _grant_prompt_text() -> str:
     return join_lines(
         "🎁 " + bold("Выдача подписки"),
         "",
-        plain("Выберите срок или введите количество дней вручную\\."),
+        plain("Выберите срок или введите количество дней вручную."),
         "",
-        plain("Если у пользователя нет подписки — будет создана новая\\."),
-        plain("Если есть — будет продлена на указанный срок\\."),
+        plain("Если у пользователя нет подписки — будет создана новая."),
+        plain("Если есть — будет продлена на указанный срок."),
     )
 
 
@@ -2402,7 +2416,7 @@ async def cb_admin_grant_manual(
             join_lines(
                 "🎁 " + bold("Выдача подписки"),
                 "",
-                plain("Введите количество дней \\(1–3650\\):"),
+                plain("Введите количество дней (1–3650):"),
             ),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:grant:{user_id}"),
@@ -2485,13 +2499,14 @@ async def _do_admin_grant(
     await answer_callback_with_photo_screen(
         cq,
         caption=join_lines(
-            plain(f"✅ Подписка {action_label} на {days} дн\\."),
-            plain(f"\\(до {esc(msk_exp.strftime('%d.%m.%Y %H:%M'))} МСК\\)"),
+            plain(f"✅ Подписка {action_label} на {days} дн."),
+            plain(f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"),
             "",
             cap,
         ),
         reply_markup=kb,
         settings=settings,
+        photo_key="admin:users:card",
     )
 
 
@@ -2583,8 +2598,8 @@ async def msg_admin_grant_days(
         message.bot,
         chat_id=message.chat.id,
         caption=join_lines(
-            plain(f"✅ Подписка {action_label} на {days} дн\\."),
-            plain(f"\\(до {esc(msk_exp.strftime('%d.%m.%Y %H:%M'))} МСК\\)"),
+            plain(f"✅ Подписка {action_label} на {days} дн."),
+            plain(f"(до {msk_exp.strftime('%d.%m.%Y %H:%M')} МСК)"),
             "",
             cap,
         ),
@@ -2766,23 +2781,23 @@ async def msg_admin_rw_lookup(
         if prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
     if not raw:
-        await message.answer("Введите Telegram ID или @username.")
+        await message.answer(plain("Введите Telegram ID или @username."))
         return
     settings = get_settings()
     if settings.remnawave_stub:
         await state.clear()
-        await message.answer("REMNAWAVE_STUB включён: проверка в реальной панели недоступна.")
+        await message.answer(plain("REMNAWAVE_STUB включён: проверка в реальной панели недоступна."))
         return
     rw = RemnaWaveClient(settings)
     try:
         hit, mode = await _find_rw_user_by_tg_or_username(rw, query=raw)
     except RemnaWaveError as e:
         await state.clear()
-        await message.answer(f"Ошибка обращения к Remnawave: {e}")
+        await message.answer(plain(f"Ошибка обращения к Remnawave: {e}"))
         return
     await state.clear()
     if hit is None:
-        await message.answer("В панели Remnawave ничего не найдено.")
+        await message.answer(plain("В панели Remnawave ничего не найдено."))
         return
     rw_uuid = str(hit.get("uuid") or "—")
     rw_un = str(hit.get("username") or hit.get("tag") or "—")
@@ -2843,13 +2858,13 @@ async def msg_admin_manual_bind_subscription(
         if prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
     if not raw.isdigit():
-        await message.answer("Нужен числовой ID: локальной подписки или пользователя Remnawave (например 105).")
+        await message.answer(plain("Нужен числовой ID: локальной подписки или пользователя Remnawave (например 105)."))
         return
     typed_id = int(raw)
     target_user = await session.get(User, user_id)
     if target_user is None:
         await state.clear()
-        await message.answer("Пользователь не найден.")
+        await message.answer(plain("Пользователь не найден."))
         return
     sub = await session.get(Subscription, typed_id)
     used_panel_id = False
@@ -2857,29 +2872,29 @@ async def msg_admin_manual_bind_subscription(
         settings = get_settings()
         if settings.remnawave_stub:
             await state.clear()
-            await message.answer("Подписка не найдена в локальной БД.")
+            await message.answer(plain("Подписка не найдена в локальной БД."))
             return
         rw = RemnaWaveClient(settings)
         try:
             rw_user = await rw.find_user_by_panel_id(typed_id)
         except RemnaWaveError as e:
             await state.clear()
-            await message.answer(f"Ошибка Remnawave: {e}")
+            await message.answer(plain(f"Ошибка Remnawave: {e}"))
             return
         if rw_user is None:
             await state.clear()
-            await message.answer("Не найдено: ни локальная подписка, ни пользователь Remnawave с таким ID.")
+            await message.answer(plain("Не найдено: ни локальная подписка, ни пользователь Remnawave с таким ID."))
             return
         rw_uuid_raw = str(rw_user.get("uuid") or "").strip()
         if not rw_uuid_raw:
             await state.clear()
-            await message.answer("У пользователя Remnawave нет UUID.")
+            await message.answer(plain("У пользователя Remnawave нет UUID."))
             return
         try:
             rw_uuid = UUID(rw_uuid_raw)
         except ValueError:
             await state.clear()
-            await message.answer("UUID пользователя Remnawave некорректный.")
+            await message.answer(plain("UUID пользователя Remnawave некорректный."))
             return
         sub = (
             await session.execute(
@@ -2891,7 +2906,7 @@ async def msg_admin_manual_bind_subscription(
         ).scalar_one_or_none()
         if sub is None:
             await state.clear()
-            await message.answer("В панели пользователь найден, но локальная подписка с его UUID не найдена.")
+            await message.answer(plain("В панели пользователь найден, но локальная подписка с его UUID не найдена."))
             return
         used_panel_id = True
     prev_user_id = sub.user_id
@@ -2960,11 +2975,11 @@ async def msg_admin_add_balance(
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
         await _del_admin_input()
-        await message.answer("Нужно число, например 10 или 10.5.")
+        await message.answer(plain("Нужно число, например 10 или 10.5."))
         return
     if amount <= 0:
         await _del_admin_input()
-        await message.answer("Сумма должна быть > 0.")
+        await message.answer(plain("Сумма должна быть > 0."))
         return
 
     u = await session.get(User, user_id)
@@ -2973,7 +2988,7 @@ async def msg_admin_add_balance(
         if message.bot and prompt_mid is not None:
             await _try_delete_message(message.bot, message.chat.id, int(prompt_mid))
         await state.clear()
-        await message.answer("Пользователь не найден.")
+        await message.answer(plain("Пользователь не найден."))
         return
 
     await _del_admin_input()
@@ -3025,7 +3040,7 @@ async def msg_admin_add_balance(
     )
 
     if built is None or message.bot is None:
-        await message.answer(f"Баланс добавлен: +{amount} ₽")
+        await message.answer(plain(f"Баланс добавлен: +{amount} ₽"))
         return
 
     cap, kb = built
@@ -3221,12 +3236,12 @@ async def msg_admin_custom_month_price(
     try:
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
-        await message.answer("Нужно число, например 150 или 0 для сброса.")
+        await message.answer(plain("Нужно число, например 150 или 0 для сброса."))
         return
     u = await session.get(User, user_id)
     if u is None:
         await state.clear()
-        await message.answer("Пользователь не найден.")
+        await message.answer(plain("Пользователь не найден."))
         return
     if message.bot:
         await _try_delete_message(message.bot, message.chat.id, message.message_id)
@@ -3244,7 +3259,7 @@ async def msg_admin_custom_month_price(
         session, user_id=user_id, viewer_telegram_id=message.from_user.id
     )
     if built is None or message.bot is None:
-        await message.answer(note)
+        await message.answer(plain(note))
         return
     cap, kb = built
     await send_profile_screen(
@@ -3279,12 +3294,12 @@ async def msg_admin_personal_discount(
     try:
         pct = Decimal(raw)
     except (InvalidOperation, ValueError):
-        await message.answer("Нужно число, например 10 или 0 для сброса.")
+        await message.answer(plain("Нужно число, например 10 или 0 для сброса."))
         return
     u = await session.get(User, user_id)
     if u is None:
         await state.clear()
-        await message.answer("Пользователь не найден.")
+        await message.answer(plain("Пользователь не найден."))
         return
     if message.bot:
         await _try_delete_message(message.bot, message.chat.id, message.message_id)
@@ -3295,7 +3310,7 @@ async def msg_admin_personal_discount(
         u.personal_tariff_discount_percent = None
         note = "Персональная скидка снята."
     elif pct > 100:
-        await message.answer("Скидка не может быть больше 100%.")
+        await message.answer(plain("Скидка не может быть больше 100%."))
         return
     else:
         u.personal_tariff_discount_percent = pct.quantize(Decimal("0.01"))
@@ -3305,7 +3320,7 @@ async def msg_admin_personal_discount(
         session, user_id=user_id, viewer_telegram_id=message.from_user.id
     )
     if built is None or message.bot is None:
-        await message.answer(note)
+        await message.answer(plain(note))
         return
     cap, kb = built
     await send_profile_screen(
@@ -3360,6 +3375,7 @@ async def cb_admin_find_start(
         ),
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:find",
     )
     new_mid = sent.message_id if sent else None
     await state.update_data(
@@ -3663,6 +3679,7 @@ async def cb_admin_reset_start(
         caption=warn,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:reset:start",
     )
 
 
@@ -3742,6 +3759,7 @@ async def cb_admin_reset_cancel(
         caption=text,
         reply_markup=await admin_panel_keyboard(),
         settings=settings,
+        photo_key="admin:panel",
     )
 
 
@@ -3947,6 +3965,7 @@ async def cb_broadcast_start(
         ),
         reply_markup=_broadcast_input_markup(),
         settings=get_settings(),
+        photo_key="admin:broadcast",
     )
     await state.update_data(
         broadcast_prompt_mid=(sent.message_id if sent else None),

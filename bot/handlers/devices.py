@@ -197,6 +197,7 @@ async def _open_devices_screen(
         caption=text,
         reply_markup=kb,
         settings=settings,
+        photo_key="menu:devices" if ctx == CTX_MAIN else "sub:devices",
     )
 
 
@@ -283,6 +284,7 @@ async def cb_dev_buy_menu(
         caption=cap,
         reply_markup=_buy_qty_keyboard(ctx, can_buy),
         settings=settings,
+        photo_key="dev:buy",
     )
     await cq.answer()
 
@@ -340,7 +342,9 @@ async def cb_dev_buy_qty_confirm(
         .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"dev:buy:{ctx}", style="danger"))
         .as_markup()
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key="dev:buyqty"
+    )
     await cq.answer()
 
 
@@ -453,6 +457,7 @@ async def cb_dev_rw_pick(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="dev:rw",
     )
 
 
@@ -499,7 +504,9 @@ async def cb_dev_rw_unlink_slot_confirm(
         .row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"dev:rw:{idx}:{ctx}", style="danger"))
         .as_markup()
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=get_settings())
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=get_settings(), photo_key="dev:unlsask"
+    )
 
 
 @router.callback_query(F.data.startswith("dev:unlslot:"))

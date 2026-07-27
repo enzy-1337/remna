@@ -436,6 +436,7 @@ async def _render_tariff_list(
         caption=body,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="sub:plans",
     )
 
 
@@ -458,7 +459,9 @@ async def _show_subscription_main(
         has_active=sub is not None,
         subscription_url=sub_url,
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:sub_main"
+    )
 
 
 @router.callback_query(F.data == "sub:qr")
@@ -551,6 +554,7 @@ async def cb_sub_reissue_ask(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="sub:reissue:ask",
     )
 
 
@@ -599,6 +603,7 @@ async def cb_sub_reissue_do(
         caption=cap_ok,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="sub:reissue:do",
     )
 
 
@@ -781,6 +786,7 @@ async def cb_buy_plan(
         caption=join_lines(*lines),
         reply_markup=b.as_markup(),
         settings=get_settings(),
+        photo_key="sub:plans",
     )
 
 
@@ -863,6 +869,7 @@ async def cb_buy_plan_confirm(
             caption=full,
             reply_markup=kb,
             settings=settings,
+            photo_key="menu:sub_main",
         )
         return
     b = InlineKeyboardBuilder()
@@ -880,6 +887,7 @@ async def cb_buy_plan_confirm(
         caption=msg,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="sub:plans",
     )
 
 
@@ -922,6 +930,7 @@ async def cb_sub_instructions(
         caption=text,
         reply_markup=kb,
         settings=settings,
+        photo_key="sub:instr",
     )
 
 
@@ -984,6 +993,7 @@ async def cb_renewal_menu(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=get_settings(),
+        photo_key="sub:renewal_menu",
     )
 
 
@@ -1026,6 +1036,7 @@ async def cb_detail_menu(cq: CallbackQuery, session: AsyncSession, db_user: User
         caption=join_lines("📊 " + bold("Детализация расходов"), "", plain("Выберите период.")),
         reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
         settings=settings,
+        photo_key="sub:detail:menu",
     )
 
 
@@ -1091,6 +1102,7 @@ async def cb_detail_today(cq: CallbackQuery, session: AsyncSession, db_user: Use
         caption=text,
         reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
         settings=settings,
+        photo_key="sub:detail:today",
     )
 
 
@@ -1154,6 +1166,7 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
             caption=text,
             reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
             settings=settings,
+            photo_key="sub:detail:month",
         )
     except TelegramBadRequest as e:
         if "can't parse entities" not in str(e):
@@ -1164,6 +1177,7 @@ async def cb_detail_month(cq: CallbackQuery, session: AsyncSession, db_user: Use
             caption=safe_text,
             reply_markup=_detail_menu_keyboard(show_tariff_tab=show_tar).as_markup(),
             settings=settings,
+            photo_key="sub:detail:month",
         )
 
 
@@ -1188,6 +1202,7 @@ async def cb_detail_tariff_menu(cq: CallbackQuery, session: AsyncSession, db_use
         ),
         reply_markup=_detail_tariff_menu_keyboard().as_markup(),
         settings=settings,
+        photo_key="sub:detail:tariff:menu",
     )
 
 
@@ -1230,6 +1245,7 @@ async def cb_detail_tariff_today(cq: CallbackQuery, session: AsyncSession, db_us
         caption=text,
         reply_markup=_detail_tariff_menu_keyboard().as_markup(),
         settings=settings,
+        photo_key="sub:detail:tariff:today",
     )
 
 
@@ -1274,4 +1290,5 @@ async def cb_detail_tariff_month(cq: CallbackQuery, session: AsyncSession, db_us
         caption=text,
         reply_markup=_detail_tariff_menu_keyboard().as_markup(),
         settings=settings,
+        photo_key="sub:detail:tariff:month",
     )

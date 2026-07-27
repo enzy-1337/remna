@@ -117,6 +117,7 @@ async def _show_family_menu(
         caption=cap,
         reply_markup=_family_menu_kb(is_owner=is_owner, is_member=is_member, member_count=used).as_markup(),
         settings=settings,
+        photo_key="menu:family",
     )
 
 
@@ -384,15 +385,20 @@ async def cb_transfer_start(
 @router.callback_query(F.data == "sub:transfer:cancel")
 async def cb_transfer_cancel(
     cq: CallbackQuery,
+    session: AsyncSession,
     state: FSMContext,
+    db_user: User | None,
+    is_bot_admin: bool = False,
 ) -> None:
     await state.clear()
-    await cq.answer()
-    if cq.message:
-        await delete_message_safe(cq.message)
-        _b = InlineKeyboardBuilder()
-        _b.row(InlineKeyboardButton(text="📋 К подписке", callback_data="menu:sub_main"))
-        await cq.message.answer(plain("Передача отменена."), reply_markup=_b.as_markup())
+    if db_user is None:
+        await cq.answer()
+        if cq.message:
+            await delete_message_safe(cq.message)
+        return
+    from bot.handlers.subscription import _show_subscription_main
+
+    await _show_subscription_main(cq, session, db_user, is_bot_admin=is_bot_admin)
 
 
 @router.message(TransferStates.waiting_recipient, F.text)

@@ -73,7 +73,9 @@ async def cb_main_menu(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:main"
+    )
 
 
 @router.callback_query(F.data == "trial:activate")
@@ -153,7 +155,9 @@ async def cb_trial_activate(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:main"
+    )
 
 
 @router.callback_query(F.data == "menu:instructions")
@@ -193,6 +197,7 @@ async def cb_instructions(cq: CallbackQuery, db_user: User | None) -> None:
         caption=text,
         reply_markup=kb,
         settings=settings,
+        photo_key="menu:instructions",
     )
 
 
@@ -265,4 +270,5 @@ async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
         caption=cap,
         reply_markup=_service_info_keyboard(sup).as_markup(),
         settings=settings,
+        photo_key="menu:info",
     )

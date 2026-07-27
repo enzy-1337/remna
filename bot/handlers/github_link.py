@@ -85,6 +85,7 @@ async def cb_github_open(
         caption=caption,
         reply_markup=_github_link_keyboard(has_linked=bool(db_user.github_username)).as_markup(),
         settings=settings,
+        photo_key="admin:section:profile",
     )
 
 
@@ -115,7 +116,9 @@ async def cb_github_cancel(
         is_admin=is_bot_admin,
     )
     await cq.answer()
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:main"
+    )
 
 
 @router.callback_query(F.data == "github:unlink")
@@ -138,6 +141,7 @@ async def cb_github_unlink(cq: CallbackQuery, db_user: User | None, state: FSMCo
         ),
         reply_markup=_github_link_keyboard(has_linked=False).as_markup(),
         settings=settings,
+        photo_key="admin:section:profile",
     )
 
 
@@ -173,7 +177,7 @@ async def msg_github_username(
         )
     ).scalar_one_or_none()
     if taken is not None:
-        await message.answer("Этот GitHub уже привязан к другому аккаунту.")
+        await message.answer(plain("Этот GitHub уже привязан к другому аккаунту."))
         return
 
     db_user.github_id = None

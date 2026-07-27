@@ -73,6 +73,7 @@ async def cb_promo_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
         caption=join_lines("🎁 " + bold("Промокод"), "", plain("Введите код одним сообщением.")),
         reply_markup=_promo_cancel_keyboard().as_markup(),
         settings=settings,
+        photo_key="menu:promo",
     )
     if sent is not None:
         await state.update_data(promo_prompt_message_id=sent.message_id)

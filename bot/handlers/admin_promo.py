@@ -332,6 +332,7 @@ async def _render_promos_list(
         caption=join_lines(*lines),
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:promos",
     )
 
 
@@ -729,6 +730,7 @@ async def _render_promos_view(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=settings,
+        photo_key="admin:promos",
     )
 
 
@@ -784,6 +786,7 @@ async def cb_promos_delete_ask(
         caption=cap,
         reply_markup=b.as_markup(),
         settings=get_settings(),
+        photo_key="admin:promos",
     )
 
 

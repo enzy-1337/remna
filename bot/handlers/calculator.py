@@ -188,6 +188,7 @@ async def cb_calc_menu_admin(
         caption=cap,
         reply_markup=_presets_keyboard().as_markup(),
         settings=settings,
+        photo_key=ADMIN_ENTRY,
     )
 
 
@@ -268,7 +269,9 @@ async def cb_calc_scenario_admin(
             )
         )
         kb = nb.as_markup()
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=kb, settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=kb, settings=settings, photo_key=ADMIN_ENTRY
+    )
 
 
 @router.callback_query(F.data.startswith(_COMPARE_PREFIX))
@@ -356,4 +359,6 @@ async def cb_calc_compare_admin(
             text="⬅️ Аналитика", callback_data="admin:section:analytics", style="danger"
         )
     )
-    await answer_callback_with_photo_screen(cq, caption=cap, reply_markup=b.as_markup(), settings=settings)
+    await answer_callback_with_photo_screen(
+        cq, caption=cap, reply_markup=b.as_markup(), settings=settings, photo_key=ADMIN_ENTRY
+    )

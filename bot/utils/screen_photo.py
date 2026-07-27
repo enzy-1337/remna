@@ -59,6 +59,7 @@ def _photo_name_for_key(photo_key: str) -> str | None:
         "menu:balance": "balance.png",
         "menu:promo": "promocodes.png",
         "menu:referrals": "referals.png",
+        "menu:family": "referals.png",
         "menu:devices": "devices.png",
         "menu:instructions": "instruction.png",
         "menu:info": "service.png",

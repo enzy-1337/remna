@@ -215,6 +215,7 @@ async def _edit_or_send_balance(
                 caption=caption,
                 reply_markup=reply_markup,
                 settings=get_settings(),
+                photo_key="menu:balance",
             )
             return
         raise
@@ -238,6 +239,7 @@ async def cb_balance_home(
         caption=cap,
         reply_markup=topup_amounts_keyboard(),
         settings=settings,
+        photo_key="menu:balance",
     )
 
 
@@ -368,19 +370,19 @@ async def msg_topup_custom_amount(
     except InvalidOperation:
         await _cleanup_input()
         if bot:
-            await bot.send_message(chat_id, "Введите число, например 250.")
+            await bot.send_message(chat_id, plain("Введите число, например 250."))
         return
     if d != d.to_integral_value():
         await _cleanup_input()
         if bot:
-            await bot.send_message(chat_id, "Укажите целое число рублей.")
+            await bot.send_message(chat_id, plain("Укажите целое число рублей."))
         return
     amt = int(d)
     min_topup = int(get_settings().billing_min_topup_rub)
     if amt < min_topup or amt > 100_000:
         await _cleanup_input()
         if bot:
-            await bot.send_message(chat_id, f"Допустимо от {min_topup} до 100000 ₽.")
+            await bot.send_message(chat_id, plain(f"Допустимо от {min_topup} до 100000 ₽."))
         return
 
     await state.clear()
