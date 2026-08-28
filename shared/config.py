@@ -171,6 +171,16 @@ class Settings(BaseSettings):
         validation_alias="ADMIN_LOG_TOPIC_ERRORS",
         description="Тема форума для технических ошибок (необработанные исключения)",
     )
+    admin_log_topic_fraud_suspicion: int | None = Field(
+        default=None,
+        validation_alias="ADMIN_LOG_TOPIC_FRAUD_SUSPICION",
+        description="Тема форума для подозрений антифрода (кнопки Заблокировать/На учёт/Пропустить)",
+    )
+    admin_log_topic_fraud_autoblock: int | None = Field(
+        default=None,
+        validation_alias="ADMIN_LOG_TOPIC_FRAUD_AUTOBLOCK",
+        description="Тема форума для автоблокировок антифрода (кнопки Разблокировать/В админку)",
+    )
     admin_report_enabled: bool = Field(default=False, validation_alias="ADMIN_REPORT_ENABLED")
     admin_report_hour_utc: int = Field(
         default=8,
@@ -326,6 +336,75 @@ class Settings(BaseSettings):
         ge=30,
         validation_alias="BILLING_TRAFFIC_METER_POLL_INTERVAL_SEC",
         description="Интервал фонового опроса трафика в панели для счётчика ГБ (сек)",
+    )
+
+    # Антифрод (см. shared/services/fraud/): общий рубильник + по одному на детектор.
+    # Детекторы ip_hop/hwid_collision/traffic_spike проходят staged rollout (FraudDetectorState:
+    # learning -> advisory -> autonomous), жёсткое IP-правило и blacklist всегда немедленные.
+    fraud_detection_enabled: bool = Field(default=False, validation_alias="FRAUD_DETECTION_ENABLED")
+    fraud_hwid_collision_enabled: bool = Field(
+        default=False, validation_alias="FRAUD_HWID_COLLISION_ENABLED"
+    )
+    fraud_ip_hop_enabled: bool = Field(default=False, validation_alias="FRAUD_IP_HOP_ENABLED")
+    fraud_ip_hop_poll_interval_sec: int = Field(
+        default=20,
+        ge=15,
+        validation_alias="FRAUD_IP_HOP_POLL_INTERVAL_SEC",
+        description="Интервал опроса Remnawave connections API для детектора смены IP (сек)",
+    )
+    fraud_ip_hop_hard_block_ip_count: int = Field(
+        default=10,
+        ge=2,
+        validation_alias="FRAUD_IP_HOP_HARD_BLOCK_IP_COUNT",
+        description="Жёсткое правило: столько разных IP за окно ниже -> мгновенный автобан вне staged rollout",
+    )
+    fraud_ip_hop_hard_block_window_sec: int = Field(
+        default=15,
+        ge=1,
+        validation_alias="FRAUD_IP_HOP_HARD_BLOCK_WINDOW_SEC",
+    )
+    fraud_ip_hop_suspicious_ip_count: int = Field(
+        default=5,
+        ge=2,
+        validation_alias="FRAUD_IP_HOP_SUSPICIOUS_IP_COUNT",
+        description="Мягкий порог (идёт через staged rollout, не мгновенный автобан)",
+    )
+    fraud_ip_hop_suspicious_window_sec: int = Field(
+        default=30,
+        ge=1,
+        validation_alias="FRAUD_IP_HOP_SUSPICIOUS_WINDOW_SEC",
+    )
+    fraud_traffic_spike_enabled: bool = Field(
+        default=False, validation_alias="FRAUD_TRAFFIC_SPIKE_ENABLED"
+    )
+    fraud_traffic_spike_gb_threshold: float = Field(
+        default=1.25,
+        gt=0,
+        validation_alias="FRAUD_TRAFFIC_SPIKE_GB_THRESHOLD",
+        description="Порог трафика (ГБ) за окно fraud_traffic_spike_window_sec для срабатывания",
+    )
+    fraud_traffic_spike_window_sec: int = Field(
+        default=60,
+        ge=10,
+        validation_alias="FRAUD_TRAFFIC_SPIKE_WINDOW_SEC",
+    )
+    fraud_traffic_spike_poll_interval_sec: int = Field(
+        default=30,
+        ge=15,
+        validation_alias="FRAUD_TRAFFIC_SPIKE_POLL_INTERVAL_SEC",
+        description="Опрос трафика для антифрода — для ВСЕХ пользователей, не зависит от billing_mode",
+    )
+    fraud_blacklist_sync_enabled: bool = Field(
+        default=False, validation_alias="FRAUD_BLACKLIST_SYNC_ENABLED"
+    )
+    fraud_blacklist_sync_interval_sec: int = Field(
+        default=300,
+        ge=60,
+        validation_alias="FRAUD_BLACKLIST_SYNC_INTERVAL_SEC",
+    )
+    fraud_blacklist_url: str = Field(
+        default="https://raw.githubusercontent.com/BEDOLAGA-DEV/VPN-BLACKLIST/refs/heads/main/blacklist.txt",
+        validation_alias="FRAUD_BLACKLIST_URL",
     )
     billing_device_daily_rub: Decimal = Field(default=Decimal("2.5"), validation_alias="BILLING_DEVICE_DAILY_RUB")
     billing_gb_step_rub: Decimal = Field(default=Decimal("5"), validation_alias="BILLING_GB_STEP_RUB")
@@ -774,6 +853,8 @@ class Settings(BaseSettings):
         "admin_log_topic_boot",
         "admin_log_topic_channel",
         "admin_log_topic_errors",
+        "admin_log_topic_fraud_suspicion",
+        "admin_log_topic_fraud_autoblock",
         mode="before",
     )
     @classmethod
@@ -860,6 +941,8 @@ class Settings(BaseSettings):
             AdminLogTopic.BOOT: self.admin_log_topic_boot,
             AdminLogTopic.CHANNEL: self.admin_log_topic_channel,
             AdminLogTopic.ERRORS: self.admin_log_topic_errors,
+            AdminLogTopic.FRAUD_SUSPICION: self.admin_log_topic_fraud_suspicion,
+            AdminLogTopic.FRAUD_AUTOBLOCK: self.admin_log_topic_fraud_autoblock,
         }
         tid = m.get(topic)
         if tid is not None:

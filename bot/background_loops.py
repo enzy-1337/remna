@@ -17,6 +17,9 @@ from shared.services.billing_v2.negative_balance_notify_loop import negative_bal
 from shared.services.billing_v2.transition_service import legacy_transition_loop
 from shared.services.admin_report_loop import admin_report_loop
 from shared.services.expiry_notify_service import subscription_expiry_notify_loop
+from shared.services.fraud.blacklist_sync_loop import blacklist_sync_loop
+from shared.services.fraud.ip_hop_scan_loop import ip_hop_scan_loop
+from shared.services.fraud.traffic_spike_scan_loop import traffic_spike_scan_loop
 from shared.services.remnawave_sync import sync_loop
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,13 @@ def start_background_loops(settings: Settings, stop_event: asyncio.Event) -> lis
         if settings.billing_negative_notify_enabled:
             tasks.append(asyncio.create_task(negative_balance_notify_loop(settings, stop_event)))
         tasks.append(asyncio.create_task(legacy_transition_loop(settings, stop_event)))
+    if settings.fraud_detection_enabled:
+        if settings.fraud_blacklist_sync_enabled:
+            tasks.append(asyncio.create_task(blacklist_sync_loop(settings, stop_event)))
+        if settings.fraud_traffic_spike_enabled and not settings.remnawave_stub:
+            tasks.append(asyncio.create_task(traffic_spike_scan_loop(settings, stop_event)))
+        if settings.fraud_ip_hop_enabled and not settings.remnawave_stub:
+            tasks.append(asyncio.create_task(ip_hop_scan_loop(settings, stop_event)))
     return tasks
 
 

@@ -14,10 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import get_settings
 from shared.md2 import bold, code, join_lines, plain
+from shared.models.telegram_blacklist_entry import TelegramBlacklistEntry
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
 from shared.services.admin_notify import admin_user_ref, notify_admin
+from shared.services.fraud.blacklist_action import apply_blacklist_block
+from shared.services.fraud.blacklist_sync import SOURCE_EXTERNAL
 from shared.services.referral_parse import parse_referral_code_from_start_args
 from shared.services.referral_service import replace_referrer_bonus_telegram_message
 
@@ -49,6 +52,14 @@ async def register_user(
     existing = await get_user_by_telegram_id(session, tg_user.id)
     if existing:
         return existing, False, None
+
+    is_blacklisted = (
+        await session.execute(
+            select(TelegramBlacklistEntry.telegram_id).where(
+                TelegramBlacklistEntry.telegram_id == tg_user.id
+            )
+        )
+    ).scalar_one_or_none() is not None
 
     ref_code = parse_referral_code_from_start_args(start_args)
     referrer_id: int | None = None
@@ -84,6 +95,12 @@ async def register_user(
         if existing is not None:
             return existing, False, None
         raise
+
+    if is_blacklisted:
+        # Внешний/ручной чёрный список — регистрация проходит (downstream-код ждёт User),
+        # но аккаунт сразу блокируется, без реферальных бонусов за такую регистрацию.
+        await apply_blacklist_block(session, settings, user, source=SOURCE_EXTERNAL)
+        return user, True, None
 
     bonus = settings.referral_signup_bonus_rub
     invited_bonus: Decimal | None = None

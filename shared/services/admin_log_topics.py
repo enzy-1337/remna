@@ -23,3 +23,5 @@ class AdminLogTopic(str, Enum):
     BOOT = "boot"
     CHANNEL = "channel"
     ERRORS = "errors"
+    FRAUD_SUSPICION = "fraud_suspicion"
+    FRAUD_AUTOBLOCK = "fraud_autoblock"

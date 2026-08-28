@@ -135,6 +135,70 @@ async def notify_admin(
         )
 
 
+async def notify_admin_with_keyboard(
+    settings: Settings,
+    *,
+    title: str,
+    lines: list[str],
+    event_type: str,
+    topic: AdminLogTopic,
+    reply_markup: dict,
+    subject_user: User | None = None,
+    subject_user_id: int | None = None,
+    session: AsyncSession | None = None,
+) -> int | None:
+    """
+    Как notify_admin, но с инлайн-клавиатурой (антифрод: Заблокировать/На учёт/Пропустить,
+    Разблокировать/В админке). В отличие от notify_admin возвращает message_id — чтобы
+    сохранить его (FraudIncident.topic_message_id) и позже отредактировать сообщение по
+    итогам решения администратора. None — если админ-чат не настроен или отправка не удалась.
+    """
+    uid = subject_user.id if subject_user is not None else subject_user_id
+    chunks: list[str] = []
+    if subject_user is not None:
+        chunks.append(format_user_line(settings, subject_user))
+    chunks.append(title)
+    chunks.extend(lines)
+    body = "\n".join(chunks)
+
+    if not _admin_chat_configured(settings):
+        if uid is not None:
+            await _persist_log(
+                user_id=uid,
+                event_type=event_type,
+                message_text=body,
+                status="skipped_no_admin_chat",
+                session=session,
+            )
+        return None
+
+    chat_id = settings.admin_log_chat_id
+    assert chat_id is not None
+    thread = settings.admin_log_thread_for(topic)
+
+    mid = await send_telegram_message(
+        chat_id,
+        body,
+        message_thread_id=thread,
+        parse_mode="MarkdownV2",
+        reply_markup=reply_markup,
+        settings=settings,
+    )
+    ok = mid is not None
+    if not ok:
+        logger.warning("admin notify(keyboard) failed event=%s topic=%s", event_type, topic.value)
+
+    if uid is not None:
+        await _persist_log(
+            user_id=uid,
+            event_type=event_type,
+            message_text=body,
+            status="sent" if ok else "failed",
+            session=session,
+        )
+    return mid
+
+
 async def notify_admin_plain(
     settings: Settings,
     *,

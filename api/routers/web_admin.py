@@ -53,6 +53,8 @@ from shared.models.billing_ledger_entry import BillingLedgerEntry
 from shared.models.billing_usage_event import BillingUsageEvent
 from shared.models.device import Device
 from shared.models.device_history import DeviceHistory
+from shared.models.fraud_detector_state import FraudDetectorState
+from shared.models.fraud_incident import FraudIncident
 from shared.models.plan import Plan
 from shared.models.promo import PromoCode, PromoCodeAllowedUser, PromoUsage
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
@@ -60,6 +62,7 @@ from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
+from shared.models.user_fraud_state import UserFraudState
 from shared.models.web_admin_browser_session import WebAdminBrowserSession
 from shared.services.billing_calculator import (
     estimate_pay_per_use_30d_rub,
@@ -7031,6 +7034,37 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             }
         last_cancelled_id = last_cancelled_sub.id if last_cancelled_sub else None
 
+        fraud_state_row = await session.get(UserFraudState, user_id)
+        fraud_is_watched = bool(fraud_state_row.is_watched) if fraud_state_row else False
+        fraud_watched_reason = fraud_state_row.watched_reason if fraud_state_row else None
+        fraud_incident_rows = list(
+            (
+                await session.execute(
+                    select(FraudIncident)
+                    .where(FraudIncident.user_id == user_id)
+                    .order_by(desc(FraudIncident.event_ts))
+                    .limit(5)
+                )
+            ).scalars()
+        )
+        fraud_incidents_snap = [
+            {
+                "id": fi.id,
+                "detector": fi.detector,
+                "severity": fi.severity,
+                "confidence": fi.confidence,
+                "action_taken": fi.action_taken,
+                "status": fi.status,
+                "event_ts": fi.event_ts,
+            }
+            for fi in fraud_incident_rows
+        ]
+        fraud_detector_stages = dict(
+            (
+                await session.execute(select(FraudDetectorState.detector, FraudDetectorState.stage))
+            ).all()
+        )
+
     dev_bill_preview_rub = ""
     if active_snap:
         dev_bill_preview_rub = str(
@@ -7281,6 +7315,62 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           <i class="fa-solid fa-bell-slash" aria-hidden="true"></i>Сбросить статистику риска
         </button>
       </form>
+    </div>
+    """
+
+    _FRAUD_DETECTOR_LABELS = {
+        "ip_hop": "Смена IP",
+        "hwid_collision": "Мультиаккаунт (HWID)",
+        "traffic_spike": "Шеринг трафика",
+        "blacklist": "Чёрный список",
+    }
+    _FRAUD_STAGE_BADGE = {"learning": "badge-ghost", "advisory": "badge-warning", "autonomous": "badge-success"}
+    _FRAUD_STAGE_LABEL = {"learning": "обучение", "advisory": "предупреждения", "autonomous": "автономный"}
+
+    fraud_stage_badges = " ".join(
+        f'<span class="badge {_FRAUD_STAGE_BADGE.get(stage, "badge-ghost")} badge-sm" '
+        f'title="{_esc_attr(_FRAUD_DETECTOR_LABELS.get(det, det))}">'
+        f'{_esc(_FRAUD_DETECTOR_LABELS.get(det, det))}: {_esc(_FRAUD_STAGE_LABEL.get(stage, stage))}</span>'
+        for det, stage in sorted(fraud_detector_stages.items())
+    )
+    fraud_incidents_rows_html = "".join(
+        f"<tr><td>{_fmt_dt_msk(fi['event_ts'])}</td>"
+        f"<td>{_esc(_FRAUD_DETECTOR_LABELS.get(fi['detector'], fi['detector']))}</td>"
+        f"<td>{_esc(format(fi['confidence'], '.0%'))}</td>"
+        f"<td>{_esc(fi['action_taken'])}</td>"
+        f"<td>{_esc(fi['status'])}</td></tr>"
+        for fi in fraud_incidents_snap
+    )
+    fraud_watch_toggle = (
+        f"""
+        <form method="post" action="/admin/fraud/users/{user_id}/watch" class="inline mt-3">
+          <input type="hidden" name="enabled" value="{'0' if fraud_is_watched else '1'}"/>
+          <button type="submit" class="btn btn-outline {'btn-success' if fraud_is_watched else 'btn-warning'} btn-sm h-9 min-h-9 gap-1.5">
+            <i class="fa-solid fa-eye" aria-hidden="true"></i>{'Снять с учёта' if fraud_is_watched else 'Взять на учёт'}
+          </button>
+        </form>
+        """
+    )
+    fraud_risk_block = f"""
+    <div class="rounded-2xl border border-error/30 bg-base-200/30 p-4">
+      <h3 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Антифрод</h3>
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="badge {'badge-warning' if fraud_is_watched else 'badge-ghost'} badge-sm">
+          {'👁 на учёте' if fraud_is_watched else 'не на учёте'}
+        </span>
+        {fraud_stage_badges}
+      </div>
+      {f'<p class="text-xs opacity-70 mb-2">Причина учёта: {_esc(fraud_watched_reason)}</p>' if fraud_watched_reason else ''}
+      <div class="overflow-x-auto rounded-lg border border-base-content/10">
+        <table class="table table-zebra table-sm">
+          <thead><tr><th>Когда</th><th>Детектор</th><th>Увер.</th><th>Действие</th><th>Статус</th></tr></thead>
+          <tbody>{fraud_incidents_rows_html or '<tr><td colspan="5" class="opacity-50">Инцидентов нет</td></tr>'}</tbody>
+        </table>
+      </div>
+      {fraud_watch_toggle}
+      <a href="/admin/fraud/incidents?user_id={user_id}" class="btn btn-ghost btn-sm h-9 min-h-9 gap-1.5 mt-2">
+        <i class="fa-solid fa-list" aria-hidden="true"></i>Все инциденты пользователя
+      </a>
     </div>
     """
 
@@ -7557,6 +7647,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           </div>
           {personal_pricing_block}
           {negative_risk_block}
+          {fraud_risk_block}
           {billing_detail_block}
           <p>Регистрация: <b>{_fmt_dt_msk(ud.created_at)}</b></p>
           <p>Всего оплатил (без админ-бонусов): <b>{_esc(payments_total)} ₽</b></p>

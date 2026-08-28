@@ -19,6 +19,7 @@ from bot.handlers.channel_events import router as channel_events_router
 from bot.handlers.devices import router as devices_router
 from bot.handlers.family import router as family_router
 from bot.handlers.fallback import router as fallback_router
+from bot.handlers.fraud_admin import router as fraud_admin_router
 from bot.handlers.github_link import router as github_link_router
 from bot.handlers.menu import router as menu_router
 from bot.handlers.promo import router as promo_router
@@ -72,6 +73,7 @@ def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
     dp.update.middleware(UserContextMiddleware())
 
     dp.include_router(admin_router)
+    dp.include_router(fraud_admin_router)
     dp.include_router(admin_promo_router)
     dp.include_router(channel_events_router)
     dp.include_router(subscription_router)

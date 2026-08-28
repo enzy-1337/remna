@@ -744,6 +744,40 @@ class RemnaWaveClient:
             if hwid:
                 await self.delete_user_hwid_device(user_uuid, str(hwid))
 
+    async def list_node_uuids(self) -> list[str]:
+        """UUID всех нод — источник для connections/by-node/* (детектор смены IP)."""
+        if self._s.remnawave_stub:
+            return []
+        try:
+            data = await self._request("GET", "nodes")
+        except RemnaWaveError:
+            return []
+        nodes = self._extract_nodes_list(data)
+        out: list[str] = []
+        for n in nodes:
+            nu = str(n.get("uuid") or n.get("id") or n.get("nodeUuid") or "").strip()
+            if nu:
+                out.append(nu)
+        return out
+
+    async def request_connections_by_node(self, node_uuid: str) -> str | None:
+        """POST /api/connections/by-node/{uuid} → jobId (см. @remnawave/backend-contract,
+        CONNECTIONS_ROUTES.CONNECTIONS_BY_NODE). Модуль появился в панели 3.0.0+ (в 2.x —
+        ip-control); если панель его не поддерживает — RemnaWaveError, вызывающий код это ловит."""
+        if self._s.remnawave_stub:
+            return None
+        data = await self._request("POST", f"connections/by-node/{node_uuid}")
+        root = self._unwrap(data)
+        job_id = root.get("jobId") if isinstance(root, dict) else None
+        return str(job_id) if job_id else None
+
+    async def get_connections_by_node_result(self, job_id: str) -> dict[str, Any]:
+        """GET /api/connections/by-node/{jobId} → {isCompleted, isFailed, result: {nodeUuid,
+        users: [{userId: number, ips: [{ip, lastSeen}]}]}}. userId — числовой id панели, НЕ uuid
+        (см. UsersSchema контракта) — сопоставление с нашим User делает ip_hop_detector.py."""
+        data = await self._request("GET", f"connections/by-node/{job_id}")
+        return self._unwrap(data)
+
     @staticmethod
     def default_expire(days: int) -> datetime:
         return datetime.now(timezone.utc) + timedelta(days=days)

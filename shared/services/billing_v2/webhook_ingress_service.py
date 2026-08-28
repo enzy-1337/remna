@@ -410,6 +410,10 @@ async def process_remnawave_event(session: AsyncSession, *, row: RemnawaveWebhoo
                     day=billing_today(settings),
                     settings=settings,
                 )
+            if is_active and settings.fraud_detection_enabled and settings.fraud_hwid_collision_enabled:
+                from shared.services.fraud.hwid_collision_detector import check_hwid_collision
+
+                await check_hwid_collision(session, settings, user=user, hwid=hwid)
             if is_active:
                 from shared.services.device_telegram_notify import notify_device_attached_replace_message
 
