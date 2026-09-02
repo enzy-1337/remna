@@ -21,11 +21,14 @@ from bot.handlers.family import router as family_router
 from bot.handlers.fallback import router as fallback_router
 from bot.handlers.fraud_admin import router as fraud_admin_router
 from bot.handlers.github_link import router as github_link_router
+from bot.handlers.logs_viewer import router as logs_viewer_router
+from bot.handlers.mass_grant import router as mass_grant_router
 from bot.handlers.menu import router as menu_router
 from bot.handlers.promo import router as promo_router
 from bot.handlers.referrals import router as referrals_router
 from bot.handlers.start import router as start_router
 from bot.handlers.subscription import router as subscription_router
+from bot.handlers.user_activity import router as user_activity_router
 from bot.middlewares.channel_sub import ChannelSubscriptionMiddleware
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.maintenance import MaintenanceMiddleware
@@ -73,6 +76,9 @@ def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
     dp.update.middleware(UserContextMiddleware())
 
     dp.include_router(admin_router)
+    dp.include_router(mass_grant_router)
+    dp.include_router(logs_viewer_router)
+    dp.include_router(user_activity_router)
     dp.include_router(fraud_admin_router)
     dp.include_router(admin_promo_router)
     dp.include_router(channel_events_router)

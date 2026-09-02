@@ -2858,13 +2858,14 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
           <p class="text-sm opacity-70">Введите 6-значный код из Google Authenticator.</p>
           {"<div class='alert alert-error'><span>Неверный код. Попробуйте снова.</span></div>" if totp_err else ""}
           {"<div class='alert alert-error'><span>Слишком много неверных попыток. Попробуйте снова через несколько минут.</span></div>" if totp_locked else ""}
-          <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3">
+          <form method="post" action="/admin/login/2fa" class="flex w-full max-w-xs flex-col gap-3" id="remna-2fa-form">
             <input
               type="text"
               name="code"
+              id="remna-2fa-code"
               inputmode="numeric"
-              pattern="[0-9 ]{{6,8}}"
-              maxlength="8"
+              pattern="[0-9]{{6}}"
+              maxlength="6"
               autocomplete="one-time-code"
               required
               class="input input-bordered text-center text-lg tracking-[0.35em]"
@@ -2878,6 +2879,17 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
       </div>
     </div>
     <script>
+    (function(){{
+      var totpInput=document.getElementById('remna-2fa-code');
+      var totpForm=document.getElementById('remna-2fa-form');
+      if(totpInput&&totpForm){{
+        totpInput.addEventListener('input',function(){{
+          var digits=totpInput.value.replace(/\\D/g,'').slice(0,6);
+          if(digits!==totpInput.value)totpInput.value=digits;
+          if(digits.length===6)totpForm.submit();
+        }});
+      }}
+    }})();
     (function(){{
       var bg=document.getElementById('remna-login-bg');
       if(bg){{
@@ -8614,34 +8626,60 @@ async def admin_profile(request: Request) -> HTMLResponse:
           <img src="{_esc(qr_data)}" alt="QR 2FA" class="max-w-[260px] rounded-xl border border-base-content/15 bg-base-100 p-2 shadow-md" width="260" height="260" loading="lazy" />
           <code class="text-xs opacity-70">{_esc(setup_secret)}</code>
         </div>
-        <form method="post" action="/admin/profile/2fa/enable" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/profile/2fa/enable" class="flex flex-wrap items-end gap-2" id="remna-2fa-enable-form">
           <label class="form-control">
             <span class="label-text text-xs opacity-70">Код подтверждения</span>
-            <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{{6,8}}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
+            <input type="text" name="code" id="remna-2fa-enable-code" required inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
           </label>
           <button type="submit" class="btn btn-info btn-sm h-9 min-h-9 gap-1.5">
             <i class="fa-solid fa-check" aria-hidden="true"></i>Включить 2FA
           </button>
         </form>
       </div>
-    </div>"""
+    </div>
+    <script>
+    (function(){{
+      var i=document.getElementById('remna-2fa-enable-code');
+      var f=document.getElementById('remna-2fa-enable-form');
+      if(i&&f){{
+        i.addEventListener('input',function(){{
+          var digits=i.value.replace(/\\D/g,'').slice(0,6);
+          if(digits!==i.value)i.value=digits;
+          if(digits.length===6)f.submit();
+        }});
+      }}
+    }})();
+    </script>"""
         elif enabled:
             profile_2fa_block = """
     <div class="card bg-base-100 border border-success/30 shadow-lg">
       <div class="card-body gap-3">
         <h3 class="text-lg font-semibold"><i class="fa-solid fa-shield-halved text-success mr-2" aria-hidden="true"></i>Двухэтапная авторизация (2FA)</h3>
         <p class="text-sm opacity-80">2FA включена. При входе в web-admin нужно подтверждение кодом из Google Authenticator.</p>
-        <form method="post" action="/admin/profile/2fa/disable" class="flex flex-wrap items-end gap-2">
+        <form method="post" action="/admin/profile/2fa/disable" class="flex flex-wrap items-end gap-2" id="remna-2fa-disable-form">
           <label class="form-control">
             <span class="label-text text-xs opacity-70">Код для отключения</span>
-            <input type="text" name="code" required inputmode="numeric" pattern="[0-9 ]{6,8}" maxlength="8" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
+            <input type="text" name="code" id="remna-2fa-disable-code" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" class="input input-bordered input-sm h-9 min-h-9 w-36 tracking-[0.2em]" placeholder="123456" />
           </label>
           <button type="submit" class="btn btn-error btn-sm h-9 min-h-9 gap-1.5">
             <i class="fa-solid fa-power-off" aria-hidden="true"></i>Отключить 2FA
           </button>
         </form>
       </div>
-    </div>"""
+    </div>
+    <script>
+    (function(){
+      var i=document.getElementById('remna-2fa-disable-code');
+      var f=document.getElementById('remna-2fa-disable-form');
+      if(i&&f){
+        i.addEventListener('input',function(){
+          var digits=i.value.replace(/\\D/g,'').slice(0,6);
+          if(digits!==i.value)i.value=digits;
+          if(digits.length===6)f.submit();
+        });
+      }
+    })();
+    </script>"""
         else:
             profile_2fa_block = """
     <div class="card bg-base-100 border border-base-content/10 shadow-lg">
@@ -10001,12 +10039,12 @@ async def admin_promos_new_post(
         await session.commit()
         await notify_admin(
             get_settings(),
-            title="🎁 Промокод создан (web-admin)",
+            title=md_esc("🎁 Промокод создан (web-admin)"),
             lines=[
                 f"Код: {md_esc(promo.code)}",
                 f"Тип: {md_esc(_promo_type_ru(promo.type))}",
                 f"Награда: {md_esc(_promo_reward_caption(promo))}",
-                f"Срок (до): {md_esc(_fmt_expires(promo.expires_at))}",
+                md_esc(f"Срок (до): {_fmt_expires(promo.expires_at)}"),
                 f"Лимит: {md_esc('∞' if promo.max_uses is None else str(promo.max_uses))}",
                 f"Активен: {md_esc('да' if promo.is_active else 'нет')}",
                 f"Привязан к: {md_esc(str(len(added)) if added else 'все пользователи')}",
@@ -10222,7 +10260,7 @@ async def admin_promos_edit_post(
         after_allowed = before_allowed.union(added).difference(removed)
         await notify_admin(
             get_settings(),
-            title="✏️ Промокод изменён (web-admin)",
+            title=md_esc("✏️ Промокод изменён (web-admin)"),
             lines=[
                 f"Код: {md_esc(promo.code)}",
                 f"Тип: {md_esc(_promo_type_ru(before_type))} → {md_esc(_promo_type_ru(promo.type))}",
@@ -10257,7 +10295,7 @@ async def admin_promos_delete(request: Request, promo_id: int):
             await session.commit()
             await notify_admin(
                 get_settings(),
-                title="🗑 Промокод удалён (web-admin)",
+                title=md_esc("🗑 Промокод удалён (web-admin)"),
                 lines=[
                     f"Код: {md_esc(deleted_code)}",
                     web_admin_actor_notify_line(),

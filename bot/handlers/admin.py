@@ -178,6 +178,10 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
         ),
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast"),
     )
+    b.row(
+        InlineKeyboardButton(text="🎁 Массовая выдача", callback_data="admin:mass_grant"),
+        InlineKeyboardButton(text="📄 Логи", callback_data="admin:logs"),
+    )
     if not (s.public_site_url or "").strip():
         b.row(
             InlineKeyboardButton(
@@ -1188,6 +1192,9 @@ async def _build_user_card(
             )
         )
 
+    b.row(
+        InlineKeyboardButton(text="📜 Активность", callback_data=f"admin:activity:{u.id}"),
+    )
     b.row(
         InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users:0", style="danger")
     )

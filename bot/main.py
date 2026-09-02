@@ -40,7 +40,7 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     log = logging.getLogger(__name__)
-    install_admin_error_log_handler(settings)
+    install_admin_error_log_handler(settings, service="bot")
 
     if settings.telegram_webhook_enabled:
         log.error(

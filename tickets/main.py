@@ -26,7 +26,7 @@ async def _run() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    install_admin_error_log_handler()
+    install_admin_error_log_handler(service="tickets")
     log = logging.getLogger("tickets")
     log.info(
         "Tickets config loaded: TICKETS_BOT_TOKEN=%s SUPPORT_GROUP_ID=%s REMINDER_HOURS=%s AUTO_CLOSE_DAYS=%s ADMIN_IDS=%s",

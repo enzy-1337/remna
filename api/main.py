@@ -32,6 +32,7 @@ from api.middleware.web_admin_rbac import WebAdminRbacMiddleware
 from api.routers import (
     flux_login,
     fraud_admin_pages,
+    mass_grant_pages,
     miniapp,
     public_pages,
     tickets_api,
@@ -58,7 +59,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-install_admin_error_log_handler()
+install_admin_error_log_handler(service="api")
 
 
 class WebAdminSessionValidationMiddleware(BaseHTTPMiddleware):
@@ -264,6 +265,7 @@ app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(web_admin.router, prefix="/admin")
 app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(fraud_admin_pages.router, prefix="/admin")
+app.include_router(mass_grant_pages.router, prefix="/admin")
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")
 app.include_router(miniapp.router, prefix="/my")

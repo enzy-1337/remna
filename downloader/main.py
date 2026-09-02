@@ -23,7 +23,7 @@ async def _run() -> None:
     settings = get_downloader_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    install_admin_error_log_handler()
+    install_admin_error_log_handler(service="downloader")
     token = (settings.downloader_bot_token or "").strip()
     if not token:
         raise RuntimeError("DOWNLOADER_BOT_TOKEN is empty")

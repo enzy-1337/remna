@@ -9,8 +9,8 @@ from __future__ import annotations
 import html as html_lib
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import desc, func, select
 
 from shared.config import get_settings
@@ -21,6 +21,7 @@ from shared.models.user import User
 from shared.models.user_fraud_state import UserFraudState
 from shared.services.fraud.actions import unblock_user_for_fraud
 from shared.services.fraud.blacklist_action import apply_blacklist_block
+from shared.services.fraud.blacklist_sync import parse_telegram_id_list
 
 router = APIRouter(tags=["web-admin-fraud"])
 
@@ -304,13 +305,19 @@ async def admin_fraud_blocklist(request: Request) -> HTMLResponse:
       <div class="card bg-base-100 border border-base-content/10 shadow">
         <div class="card-body gap-3">
           <h3 class="text-sm font-semibold">Добавить в чёрный список вручную</h3>
-          <p class="text-xs opacity-70">По одному Telegram ID на строку. Уже зарегистрированные — блокируются сразу.</p>
-          <form method="post" action="/admin/fraud/blocklist/bulk" class="flex flex-col gap-3">
+          <p class="text-xs opacity-70">По одному Telegram ID на строку — можно с комментарием через
+            <code>#</code> (например: <code>123456789 # причина</code>), он будет проигнорирован.
+            Повторы схлопываются. Уже зарегистрированные — блокируются сразу.</p>
+          <form method="post" action="/admin/fraud/blocklist/bulk" enctype="multipart/form-data" class="flex flex-col gap-3">
             <textarea name="telegram_ids" rows="4" class="textarea textarea-bordered font-mono text-sm"
-              placeholder="123456789&#10;987654321"></textarea>
+              placeholder="123456789&#10;987654321 # причина"></textarea>
+            <input type="file" name="file" accept=".txt" class="file-input file-input-bordered file-input-sm" />
             <button type="submit" class="btn btn-primary btn-sm w-fit">Добавить и заблокировать</button>
           </form>
         </div>
+      </div>
+      <div class="flex justify-end">
+        <a href="/admin/fraud/blocklist/export" class="btn btn-outline btn-sm">Экспорт в .txt</a>
       </div>
       <div class="overflow-x-auto rounded-lg border border-base-content/10">
         <table class="table table-zebra table-sm">
@@ -323,23 +330,51 @@ async def admin_fraud_blocklist(request: Request) -> HTMLResponse:
     return _layout("Блок-лист", body, request=request)
 
 
-@router.post("/fraud/blocklist/bulk")
-async def admin_fraud_blocklist_bulk(request: Request, telegram_ids: str = Form("")) -> RedirectResponse:
+@router.get("/fraud/blocklist/export")
+async def admin_fraud_blocklist_export(request: Request) -> PlainTextResponse:
     from api.routers.web_admin import _require_login, _session
 
     denied = _require_login(request)
     if denied is not None:
         return denied
 
-    ids: set[int] = set()
-    for raw_line in telegram_ids.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            ids.add(int(line))
-        except ValueError:
-            continue
+    async with await _session() as session:
+        rows = (
+            await session.execute(
+                select(User.telegram_id, User.block_reason)
+                .where(User.is_blocked.is_(True))
+                .order_by(User.telegram_id.asc())
+            )
+        ).all()
+
+    lines = [
+        f"{tg_id} # {reason}" if reason else str(tg_id)
+        for tg_id, reason in rows
+        if tg_id is not None
+    ]
+    text = "\n".join(lines) + ("\n" if lines else "")
+    return PlainTextResponse(
+        text,
+        headers={"Content-Disposition": "attachment; filename=blocklist_export.txt"},
+    )
+
+
+@router.post("/fraud/blocklist/bulk")
+async def admin_fraud_blocklist_bulk(
+    request: Request,
+    telegram_ids: str = Form(""),
+    file: UploadFile | None = File(None),
+) -> RedirectResponse:
+    from api.routers.web_admin import _require_login, _session
+
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+
+    ids = parse_telegram_id_list(telegram_ids)
+    if file is not None and file.filename:
+        raw = (await file.read()).decode("utf-8", errors="ignore")
+        ids |= parse_telegram_id_list(raw)
 
     settings = get_settings()
     async with await _session() as session:
@@ -367,7 +402,7 @@ async def admin_fraud_blocklist_bulk(request: Request, telegram_ids: str = Form(
             for u in users:
                 await apply_blacklist_block(session, settings, u, source="manual")
         await session.commit()
-    return RedirectResponse("/admin/fraud/blocklist?n=added", status_code=303)
+    return RedirectResponse(f"/admin/fraud/blocklist?n=added+{len(ids)}", status_code=303)
 
 
 @router.post("/fraud/blocklist/{user_id}/unblock")

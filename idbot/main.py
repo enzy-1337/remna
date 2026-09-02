@@ -283,7 +283,7 @@ async def _run() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    install_admin_error_log_handler()
+    install_admin_error_log_handler(service="idbot")
     token = (settings.idbot_bot_token or "").strip()
     if not token:
         raise RuntimeError("IDBOT_BOT_TOKEN is empty")

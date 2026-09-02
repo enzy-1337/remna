@@ -2,6 +2,7 @@
 
 from shared.models.admin_role import AdminRole
 from shared.models.admin_user import AdminUser
+from shared.models.app_error_log import AppErrorLog
 from shared.models.base import Base
 from shared.models.family_member import FamilyMember
 from shared.models.subscription_transfer import SubscriptionTransfer
@@ -36,6 +37,7 @@ from shared.models.web_admin_browser_session import WebAdminBrowserSession
 __all__ = [
     "AdminRole",
     "AdminUser",
+    "AppErrorLog",
     "Base",
     "FamilyMember",
     "SubscriptionTransfer",

@@ -25,10 +25,13 @@ SOURCE_EXTERNAL = "bedolaga_dev"
 
 
 def parse_telegram_id_list(text: str) -> set[int]:
+    """Парсит список Telegram ID: по одному на строку, с опциональным `# комментарий`
+    (причина бана, ссылка на сообщение и т.п.) — всё после первого `#` игнорируется.
+    Пустые строки и дубликаты (после схлопывания в set) не мешают."""
     out: set[int] = set()
     for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
             continue
         try:
             out.add(int(line))

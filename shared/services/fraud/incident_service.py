@@ -50,11 +50,20 @@ async def record_incident(
     subscription_id: int | None = None,
     event_ts: datetime | None = None,
     force_auto_block: bool = False,
-) -> FraudIncident:
+) -> FraudIncident | None:
     """
     force_auto_block=True — для событий вне staged rollout (жёсткое IP-правило 10 IP/15с,
-    внешний blacklist): решение всегда "auto_blocked", FraudDetectorState не смотрим.
+    внешний blacklist, повторный HWID): решение всегда "auto_blocked", FraudDetectorState
+    не смотрим.
+
+    Админы бота и lifetime-подписки (см. exemptions.is_fraud_exempt) полностью игнорируются —
+    ни инцидент не создаётся, ни алерт не шлётся; возвращает None.
     """
+    from shared.services.fraud.exemptions import is_fraud_exempt
+
+    if await is_fraud_exempt(session, settings, user=user):
+        return None
+
     stage = "immediate"
     action = "auto_blocked" if force_auto_block else "none"
 
@@ -89,7 +98,7 @@ async def record_incident(
     if action == "none":
         return incident
 
-    title = _DETECTOR_TITLES.get(detector, "🚩 Подозрение антифрода")
+    title = plain(_DETECTOR_TITLES.get(detector, "🚩 Подозрение антифрода"))
     lines = [plain(reason_text), plain(f"Уверенность: {confidence:.0%}")]
     if activity_lines:
         lines.append(bold("Активность:"))

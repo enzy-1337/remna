@@ -36,3 +36,18 @@ class AdminBroadcastStates(StatesGroup):
 
     waiting_text = State()
     waiting_confirm = State()
+
+
+class AdminMassGrantStates(StatesGroup):
+    """Массовая выдача баланса/дней: тип → аудитория → фильтр по подписке → сумма → подтверждение."""
+
+    waiting_audience = State()
+    waiting_filter_days = State()
+    waiting_amount = State()
+    waiting_confirm = State()
+
+
+class AdminLogsStates(StatesGroup):
+    """Поиск по app_error_logs."""
+
+    waiting_query = State()
