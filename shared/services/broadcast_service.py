@@ -233,6 +233,11 @@ async def broadcast_to_users(
                 failed += 1
         except TelegramForbiddenError:
             failed += 1
+        except TelegramBadRequest as e:
+            # Ожидаемые случаи для мёртвых/удалённых аккаунтов — не льём трейсбек в лог на
+            # каждого такого получателя, иначе консоль/Logs тонет в шуме при рассылке на базу.
+            logger.info("broadcast send failed chat=%s: %s", tid, e)
+            failed += 1
         except Exception:
             logger.warning("broadcast send failed chat=%s", tid, exc_info=True)
             failed += 1

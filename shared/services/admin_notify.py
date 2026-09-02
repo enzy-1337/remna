@@ -55,7 +55,7 @@ def _admin_chat_configured(settings: Settings) -> bool:
 
 async def _persist_log(
     *,
-    user_id: int,
+    user_id: int | None,
     event_type: str,
     message_text: str,
     status: str,
@@ -99,14 +99,13 @@ async def notify_admin(
     body = "\n".join(chunks)
 
     if not _admin_chat_configured(settings):
-        if uid is not None:
-            await _persist_log(
-                user_id=uid,
-                event_type=event_type,
-                message_text=body,
-                status="skipped_no_admin_chat",
-                session=session,
-            )
+        await _persist_log(
+            user_id=uid,
+            event_type=event_type,
+            message_text=body,
+            status="skipped_no_admin_chat",
+            session=session,
+        )
         return
 
     chat_id = settings.admin_log_chat_id
@@ -125,14 +124,13 @@ async def notify_admin(
     if not ok:
         logger.warning("admin notify failed event=%s topic=%s", event_type, topic.value)
 
-    if uid is not None:
-        await _persist_log(
-            user_id=uid,
-            event_type=event_type,
-            message_text=body,
-            status=log_status,
-            session=session,
-        )
+    await _persist_log(
+        user_id=uid,
+        event_type=event_type,
+        message_text=body,
+        status=log_status,
+        session=session,
+    )
 
 
 async def notify_admin_with_keyboard(
@@ -162,14 +160,13 @@ async def notify_admin_with_keyboard(
     body = "\n".join(chunks)
 
     if not _admin_chat_configured(settings):
-        if uid is not None:
-            await _persist_log(
-                user_id=uid,
-                event_type=event_type,
-                message_text=body,
-                status="skipped_no_admin_chat",
-                session=session,
-            )
+        await _persist_log(
+            user_id=uid,
+            event_type=event_type,
+            message_text=body,
+            status="skipped_no_admin_chat",
+            session=session,
+        )
         return None
 
     chat_id = settings.admin_log_chat_id
@@ -188,14 +185,13 @@ async def notify_admin_with_keyboard(
     if not ok:
         logger.warning("admin notify(keyboard) failed event=%s topic=%s", event_type, topic.value)
 
-    if uid is not None:
-        await _persist_log(
-            user_id=uid,
-            event_type=event_type,
-            message_text=body,
-            status="sent" if ok else "failed",
-            session=session,
-        )
+    await _persist_log(
+        user_id=uid,
+        event_type=event_type,
+        message_text=body,
+        status="sent" if ok else "failed",
+        session=session,
+    )
     return mid
 
 
@@ -211,6 +207,13 @@ async def notify_admin_plain(
     """
     if not _admin_chat_configured(settings):
         logger.debug("admin plain notify skipped: no chat event=%s", event_type)
+        await _persist_log(
+            user_id=None,
+            event_type=event_type,
+            message_text=text,
+            status="skipped_no_admin_chat",
+            session=None,
+        )
         return False
     chat_id = settings.admin_log_chat_id
     assert chat_id is not None
@@ -222,7 +225,15 @@ async def notify_admin_plain(
         parse_mode=None,
         settings=settings,
     )
-    return mid is not None
+    ok = mid is not None
+    await _persist_log(
+        user_id=None,
+        event_type=event_type,
+        message_text=text,
+        status="sent" if ok else "failed",
+        session=None,
+    )
+    return ok
 
 
 async def notify_admin_document(
@@ -235,14 +246,29 @@ async def notify_admin_document(
 ) -> bool:
     if not _admin_chat_configured(settings):
         logger.debug("admin document notify skipped: no chat event=%s", event_type)
+        await _persist_log(
+            user_id=None,
+            event_type=event_type,
+            message_text=caption or document_path,
+            status="skipped_no_admin_chat",
+            session=None,
+        )
         return False
     chat_id = settings.admin_log_chat_id
     assert chat_id is not None
     thread = settings.admin_log_thread_for(topic)
-    return await send_telegram_document(
+    ok = await send_telegram_document(
         chat_id,
         document_path,
         caption=caption,
         message_thread_id=thread,
         settings=settings,
     )
+    await _persist_log(
+        user_id=None,
+        event_type=event_type,
+        message_text=caption or document_path,
+        status="sent" if ok else "failed",
+        session=None,
+    )
+    return ok

@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,17 @@ from shared.services.subscription_service import grant_subscription_extra_days
 from shared.services.topup_service import apply_balance_credit_followups
 
 GrantType = Literal["balance", "days"]
+
+_MSK_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _midnight_cutoff_utc(days: int) -> datetime:
+    """Полночь (00:00 МСК) N дней назад, а не ровно N*24ч от текущего момента —
+    иначе пользователь, чья подписка истекла сегодня утром, но фильтр запускают
+    вечером, несправедливо вылетает из окна "N дней назад". Например, для N=14
+    и сегодняшней даты это будет 00:00 МСК числа (сегодня - 14)."""
+    cutoff_date = (datetime.now(_MSK_TZ) - timedelta(days=days)).date()
+    return datetime.combine(cutoff_date, time.min, tzinfo=_MSK_TZ).astimezone(timezone.utc)
 
 
 @dataclass
@@ -50,8 +62,9 @@ async def resolve_candidate_users(
 async def _had_subscription_within_days(
     session: AsyncSession, *, user_id: int, days: int
 ) -> bool:
-    """Была ли у пользователя подписка (любой статус), действовавшая после cutoff = now - days."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    """Была ли у пользователя подписка (любой статус), действовавшая после cutoff =
+    полночь МСК N дней назад (см. _midnight_cutoff_utc)."""
+    cutoff = _midnight_cutoff_utc(days)
     row = (
         await session.execute(
             select(Subscription.id)

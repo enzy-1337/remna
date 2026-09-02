@@ -48,6 +48,6 @@ class AdminMassGrantStates(StatesGroup):
 
 
 class AdminLogsStates(StatesGroup):
-    """Поиск по app_error_logs."""
+    """Поиск по вкладке "Логи" (app_error_logs или notifications_log — см. logs_tab в FSM data)."""
 
     waiting_query = State()
