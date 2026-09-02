@@ -32,6 +32,25 @@ def admin_user_ref(settings: Settings, user: User) -> str:
     return bold(label)
 
 
+def admin_device_hwid_url(settings: Settings, hwid: str) -> str:
+    """Ссылка на веб-админку «Устройства» с поиском по HWID и active=0 (вся история,
+    не только активные) — чтобы из фрод-алерта сразу увидеть, где ещё засветился этот HWID."""
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    from urllib.parse import quote
+
+    return f"{base}/admin/devices?q={quote(hwid)}&active=0"
+
+
+def admin_device_hwid_ref(settings: Settings, hwid: str) -> str:
+    url = admin_device_hwid_url(settings, hwid)
+    label = code(hwid)
+    if url:
+        return link(hwid, url)
+    return label
+
+
 def format_user_line(settings: Settings, user: User) -> str:
     un = esc(f"@{user.username}") if user.username else "—"
     return join_lines(

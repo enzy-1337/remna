@@ -68,8 +68,22 @@ def _resolve_miniapp_url(settings: Settings) -> str:
     return f"{site}/my" if site else ""
 
 
+def _admin_log_chat_ids(settings: Settings) -> set[int]:
+    """ADMIN_LOG_CHAT_ID должен быть в allowed_chat_ids PrivateChatOnlyMiddleware — иначе
+    callback-кнопки, которые бот сам постит в темы этого чата (антифрод Заблокировать/На
+    учёт/Пропустить/Разблокировать, и любые будущие), молча дропаются на входе: клиент
+    показывает крутилку, хендлер вообще не вызывается, cq.answer() не шлётся."""
+    raw = settings.admin_log_chat_id
+    if raw is None:
+        return set()
+    try:
+        return {int(raw)}
+    except (TypeError, ValueError):
+        return set()
+
+
 def _mount_dispatcher(dp: Dispatcher, settings: Settings) -> None:
-    dp.update.middleware(PrivateChatOnlyMiddleware())
+    dp.update.middleware(PrivateChatOnlyMiddleware(allowed_chat_ids=_admin_log_chat_ids(settings)))
     dp.update.middleware(MaintenanceMiddleware(settings))
     dp.update.middleware(ChannelSubscriptionMiddleware(settings))
     dp.update.middleware(DbSessionMiddleware())

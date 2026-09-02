@@ -1308,7 +1308,11 @@ def _layout(
       var href=(nav.getAttribute('href')||'').trim();
       var htmxNav=nav.hasAttribute('hx-get')||nav.hasAttribute('hx-post')||nav.hasAttribute('hx-put')||nav.hasAttribute('hx-patch')||nav.hasAttribute('hx-delete');
         var isExternalScheme=/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && !/^https?:/i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href);
-      if(href && !href.startsWith('#') && !nav.hasAttribute('data-no-loading')){
+      // Ссылки с [download] не переходят на новую страницу — браузер просто сохраняет файл,
+      // поэтому 'load' на этой же странице больше не срабатывает и remnaHideLoading() никогда
+      // не вызывается: крутилка "Загрузка…" висит вечно. То же и для ссылок вида /export,
+      // отдающих Content-Disposition: attachment без [download] — им нужен явный data-no-loading.
+      if(href && !href.startsWith('#') && !nav.hasAttribute('data-no-loading') && !nav.hasAttribute('download')){
         if(!(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) && nav.getAttribute('target')!=='_blank'){
           if(!htmxNav){window.remnaShowLoading&&window.remnaShowLoading();}
             if(isExternalScheme){

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import extract_traffic_gb_from_rw_user
+from shared.md2 import plain
 from shared.models.traffic_sample import TrafficSample
 from shared.models.user import User
 from shared.services.fraud.incident_service import record_incident
@@ -95,7 +96,7 @@ async def check_user_traffic_spike(
         detector="traffic_spike",
         severity="suspicious",
         confidence=confidence,
-        reason_text=(
+        reason_text=plain(
             f"Темп трафика ~{gb_rate:.2f} ГБ/{window}с — выше порога "
             f"{settings.fraud_traffic_spike_gb_threshold:.2f} ГБ/{window}с."
         ),

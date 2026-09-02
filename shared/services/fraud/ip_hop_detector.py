@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
+from shared.md2 import plain
 from shared.models.fraud_incident import FraudIncident
 from shared.models.ip_connection_sample import IpConnectionSample
 from shared.models.user import User
@@ -215,7 +216,7 @@ async def check_ip_hop_rules(session: AsyncSession, settings: Settings, *, touch
                 detector="ip_hop",
                 severity="hard_violation",
                 confidence=1.0,
-                reason_text=(
+                reason_text=plain(
                     f"{cnt} разных IP за {settings.fraud_ip_hop_hard_block_window_sec} сек — "
                     "явный признак шеринга/компрометации подписки."
                 ),
@@ -236,7 +237,7 @@ async def check_ip_hop_rules(session: AsyncSession, settings: Settings, *, touch
                 detector="ip_hop",
                 severity="suspicious",
                 confidence=confidence,
-                reason_text=(
+                reason_text=plain(
                     f"{cnt} разных IP за {settings.fraud_ip_hop_suspicious_window_sec} сек — "
                     "подозрительно частая смена адреса."
                 ),

@@ -13,9 +13,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import Settings
+from shared.md2 import plain
 from shared.models.device_history import DeviceHistory
 from shared.models.fraud_incident import FraudIncident
 from shared.models.user import User
+from shared.services.admin_notify import admin_device_hwid_ref, admin_user_ref
 from shared.services.family_service import resolve_account_user_id
 from shared.services.fraud.confidence import hwid_collision_confidence
 from shared.services.fraud.incident_service import record_incident
@@ -84,6 +86,12 @@ async def check_hwid_collision(
 
     now = datetime.now(timezone.utc)
     other_established = other_first_ts is not None and (now - other_first_ts).total_seconds() >= 86400
+    # ВАЖНО: other_established/is_repeat_offender НЕ форсируют автоблок мимо confidence-gate
+    # (в отличие от жёсткого IP-правила 10 IP/15с и внешнего blacklist, которые действительно
+    # однозначны). Живой пример бага: HWID «устоявшийся» сутки назад давало confidence 0.75,
+    # но force_auto_block=True всё равно молча блокировало пользователя, игнорируя порог
+    # auto_block_confidence_threshold — только помечаем событие как severity="hard_violation"
+    # для истории/приоритета в списке, решение остаётся за staged rollout в record_incident.
 
     prior_dismissed = (
         await session.execute(
@@ -107,11 +115,19 @@ async def check_hwid_collision(
     activity = await _recent_activity_lines(session, user_id=user.id, hwid=hwid)
     activity += await _recent_activity_lines(session, user_id=other_user_id, hwid=hwid)
 
-    # Жёсткое правило (аналог IP-hop 10/15с): HWID уже устоявшийся (сутки+) у другого аккаунта,
-    # или уже засветился на 3+ аккаунтах за всю историю — мгновенный автобан мимо staged rollout.
-    # Так как "устоявшийся" HWID остаётся таковым и дальше, следующее новое появление на любом
-    # ином аккаунте тоже попадёт под это правило — без отдельного персистентного флага.
+    # "Жёстче" по маркировке (severity), но НЕ мгновенный автобан мимо confidence-gate — см.
+    # комментарий выше про force_auto_block. HWID устоявшийся сутки+ у другого аккаунта или
+    # засветившийся на 3+ аккаунтах — более тревожный случай, чем обычная коллизия, но
+    # семейные/поддержка/легитимная перепродажа устройства всё ещё могут его объяснить,
+    # поэтому решение остаётся за stage/confidence как у всех остальных суспишенов.
     hard_violation = other_established or is_repeat_offender
+
+    reason_text = (
+        plain("HWID ") + admin_device_hwid_ref(settings, hwid)
+        + plain(" уже привязан к аккаунту ") + admin_user_ref(settings, other_user)
+        + plain(f" (tg {other_user.telegram_id}), теперь активен и у ")
+        + admin_user_ref(settings, user) + plain(".")
+    )
 
     await record_incident(
         session,
@@ -120,10 +136,7 @@ async def check_hwid_collision(
         detector="hwid_collision",
         severity="hard_violation" if hard_violation else "suspicious",
         confidence=confidence,
-        reason_text=(
-            f"HWID {hwid} уже привязан к аккаунту #{other_user.id} "
-            f"(tg {other_user.telegram_id}), теперь активен и у #{user.id}."
-        ),
+        reason_text=reason_text,
         evidence={
             "hwid": hwid,
             "other_user_id": other_user_id,
@@ -134,5 +147,4 @@ async def check_hwid_collision(
             "confidence_breakdown": breakdown,
         },
         activity_lines=activity,
-        force_auto_block=hard_violation,
     )

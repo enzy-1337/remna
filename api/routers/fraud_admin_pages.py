@@ -317,7 +317,7 @@ async def admin_fraud_blocklist(request: Request) -> HTMLResponse:
         </div>
       </div>
       <div class="flex justify-end">
-        <a href="/admin/fraud/blocklist/export" class="btn btn-outline btn-sm">Экспорт в .txt</a>
+        <a href="/admin/fraud/blocklist/export" class="btn btn-outline btn-sm" data-no-loading>Экспорт в .txt</a>
       </div>
       <div class="overflow-x-auto rounded-lg border border-base-content/10">
         <table class="table table-zebra table-sm">

@@ -53,8 +53,14 @@ async def record_incident(
 ) -> FraudIncident | None:
     """
     force_auto_block=True — для событий вне staged rollout (жёсткое IP-правило 10 IP/15с,
-    внешний blacklist, повторный HWID): решение всегда "auto_blocked", FraudDetectorState
-    не смотрим.
+    внешний blacklist): решение всегда "auto_blocked", FraudDetectorState не смотрим.
+    HWID-коллизия сюда не входит — даже «устоявшийся» чужой HWID лишь поднимает severity/
+    confidence, но всегда идёт через обычный staged/confidence-gate ниже (иначе уверенность
+    75% могла бы автоблокировать живого пользователя, что и было основной жалобой).
+
+    reason_text — уже готовый MarkdownV2-фрагмент (собранный через plain()/link()/bold() и
+    т.д. из shared.md2), а не сырой текст: вызывающий код сам оборачивает свои plain-куски
+    и вставляет ссылки на пользователей (admin_user_ref) там, где упоминает чей-то id.
 
     Админы бота и lifetime-подписки (см. exemptions.is_fraud_exempt) полностью игнорируются —
     ни инцидент не создаётся, ни алерт не шлётся; возвращает None.
@@ -99,7 +105,7 @@ async def record_incident(
         return incident
 
     title = plain(_DETECTOR_TITLES.get(detector, "🚩 Подозрение антифрода"))
-    lines = [plain(reason_text), plain(f"Уверенность: {confidence:.0%}")]
+    lines = [reason_text, plain(f"Уверенность: {confidence:.0%}")]
     if activity_lines:
         lines.append(bold("Активность:"))
         lines.extend(plain(line) for line in activity_lines[:10])
