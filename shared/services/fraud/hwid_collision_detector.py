@@ -107,12 +107,18 @@ async def check_hwid_collision(
     activity = await _recent_activity_lines(session, user_id=user.id, hwid=hwid)
     activity += await _recent_activity_lines(session, user_id=other_user_id, hwid=hwid)
 
+    # Жёсткое правило (аналог IP-hop 10/15с): HWID уже устоявшийся (сутки+) у другого аккаунта,
+    # или уже засветился на 3+ аккаунтах за всю историю — мгновенный автобан мимо staged rollout.
+    # Так как "устоявшийся" HWID остаётся таковым и дальше, следующее новое появление на любом
+    # ином аккаунте тоже попадёт под это правило — без отдельного персистентного флага.
+    hard_violation = other_established or is_repeat_offender
+
     await record_incident(
         session,
         settings,
         user=user,
         detector="hwid_collision",
-        severity="hard_violation" if is_repeat_offender else "suspicious",
+        severity="hard_violation" if hard_violation else "suspicious",
         confidence=confidence,
         reason_text=(
             f"HWID {hwid} уже привязан к аккаунту #{other_user.id} "
@@ -123,8 +129,10 @@ async def check_hwid_collision(
             "other_user_id": other_user_id,
             "other_telegram_id": other_user.telegram_id,
             "is_repeat_offender": is_repeat_offender,
+            "other_account_established": other_established,
             "distinct_accounts_ever": int(distinct_accounts or 0),
             "confidence_breakdown": breakdown,
         },
         activity_lines=activity,
+        force_auto_block=hard_violation,
     )

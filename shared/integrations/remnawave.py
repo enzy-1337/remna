@@ -760,22 +760,24 @@ class RemnaWaveClient:
                 out.append(nu)
         return out
 
-    async def request_connections_by_node(self, node_uuid: str) -> str | None:
-        """POST /api/connections/by-node/{uuid} → jobId (см. @remnawave/backend-contract,
-        CONNECTIONS_ROUTES.CONNECTIONS_BY_NODE). Модуль появился в панели 3.0.0+ (в 2.x —
-        ip-control); если панель его не поддерживает — RemnaWaveError, вызывающий код это ловит."""
+    async def request_users_ips_by_node(self, node_uuid: str) -> str | None:
+        """POST /api/ip-control/fetch-users-ips/{nodeUuid} → jobId. Эндпоинт модуля ip-control —
+        актуален для панели 2.x (подтверждено исходниками remnawave/backend тега 2.8.1);
+        в 3.0.0+ модуль переименован в connections с тем же паттерном job/result, но другим
+        путём — если понадобится поддержать обе версии, здесь потребуется fallback."""
         if self._s.remnawave_stub:
             return None
-        data = await self._request("POST", f"connections/by-node/{node_uuid}")
+        data = await self._request("POST", f"ip-control/fetch-users-ips/{node_uuid}")
         root = self._unwrap(data)
         job_id = root.get("jobId") if isinstance(root, dict) else None
         return str(job_id) if job_id else None
 
-    async def get_connections_by_node_result(self, job_id: str) -> dict[str, Any]:
-        """GET /api/connections/by-node/{jobId} → {isCompleted, isFailed, result: {nodeUuid,
-        users: [{userId: number, ips: [{ip, lastSeen}]}]}}. userId — числовой id панели, НЕ uuid
-        (см. UsersSchema контракта) — сопоставление с нашим User делает ip_hop_detector.py."""
-        data = await self._request("GET", f"connections/by-node/{job_id}")
+    async def get_users_ips_by_node_result(self, job_id: str) -> dict[str, Any]:
+        """GET /api/ip-control/fetch-users-ips/result/{jobId} → {isCompleted, isFailed,
+        result: {success, nodeUuid, users: [{userId: string, ips: [{ip, lastSeen}]}]}}.
+        userId здесь строковый (числовой id панели как строка, не uuid) — сопоставление
+        с нашим User делает ip_hop_detector.py."""
+        data = await self._request("GET", f"ip-control/fetch-users-ips/result/{job_id}")
         return self._unwrap(data)
 
     @staticmethod

@@ -1,16 +1,16 @@
-"""Детектор смены IP: опрашивает Remnawave connections API (панель 3.0.0+, модуль
-`connections`, в 2.x — `ip-control`) по нодам, копит IpConnectionSample и реагирует на
-всплеск различных IP у одного пользователя за короткое окно.
+"""Детектор смены IP: опрашивает Remnawave ip-control API (панель 2.x; в 3.0.0+ модуль
+переименован в `connections` с тем же паттерном job/result, но другим путём — см.
+remnawave.py:request_users_ips_by_node) по нодам, копит IpConnectionSample и реагирует
+на всплеск различных IP у одного пользователя за короткое окно.
 
 Асинхронный job-паттерн панели (POST запускает задачу, GET по jobId её опрашивает) и то,
-что connections API адресует пользователей ЧИСЛОВЫМ id, а не uuid (в отличие от остальной
-части этого клиента, работающей через uuid) — подтверждено официальным пакетом
-@remnawave/backend-contract. Однако мы не знаем заранее, отдаёт ли конкретная версия панели
-пользователя этот числовой id в ответе users-API (это могло появиться позже, чем сам модуль
-connections) — поэтому сопоставление user_id строится ЭМПИРИЧЕСКИ из фактического ответа
-list_all_users() (см. build_panel_id_to_user_map), а не жёстко зашито. Если числового id там
-нет — сопоставление просто получится пустым и детектор тихо ничего не найдёт (см. лог),
-вместо падения или ложных срабатываний.
+что ip-control API адресует пользователей ЧИСЛОВЫМ id панели (переданным строкой в JSON —
+подтверждено Zod-схемой `userId: z.string()` в исходниках remnawave/backend тега 2.8.1),
+а не uuid (в отличие от остальной части этого клиента, работающей через uuid) —
+подтверждено официальным исходным кодом. Сопоставление panel numeric id -> наш User.id
+строится ЭМПИРИЧЕСКИ из фактического ответа list_all_users() (см. build_panel_id_to_user_map),
+а не жёстко зашито — если числового id там нет, сопоставление получится пустым и детектор
+тихо ничего не найдёт (см. лог), вместо падения или ложных срабатываний.
 """
 
 from __future__ import annotations
@@ -74,20 +74,20 @@ async def build_panel_id_to_user_map(session: AsyncSession, rw: RemnaWaveClient)
 
 async def poll_node_connections(rw: RemnaWaveClient, node_uuid: str) -> dict | None:
     """Запускает job и ждёт его завершения (до _JOB_POLL_ATTEMPTS попыток) — возвращает
-    result.users (см. get_connections_by_node_result) или None при ошибке/таймауте/незавершении."""
+    result.users (см. get_users_ips_by_node_result) или None при ошибке/таймауте/незавершении."""
     try:
-        job_id = await rw.request_connections_by_node(node_uuid)
+        job_id = await rw.request_users_ips_by_node(node_uuid)
     except RemnaWaveError as e:
-        logger.debug("ip_hop: request_connections_by_node node=%s failed: %s", node_uuid, e)
+        logger.debug("ip_hop: request_users_ips_by_node node=%s failed: %s", node_uuid, e)
         return None
     if not job_id:
         return None
 
     for _ in range(_JOB_POLL_ATTEMPTS):
         try:
-            data = await rw.get_connections_by_node_result(job_id)
+            data = await rw.get_users_ips_by_node_result(job_id)
         except RemnaWaveError as e:
-            logger.debug("ip_hop: get_connections_by_node_result node=%s failed: %s", node_uuid, e)
+            logger.debug("ip_hop: get_users_ips_by_node_result node=%s failed: %s", node_uuid, e)
             return None
         if data.get("isFailed"):
             return None
@@ -124,8 +124,14 @@ async def ingest_node_result(
     for entry in users:
         if not isinstance(entry, dict):
             continue
-        panel_id = entry.get("userId")
-        user_id = panel_id_to_user_id.get(int(panel_id)) if isinstance(panel_id, (int, float)) else None
+        raw_panel_id = entry.get("userId")
+        try:
+            # ip-control отдаёт userId строкой (Zod: z.string()), а не числом — приводим явно,
+            # иначе сопоставление всегда будет пустым и детектор молча ничего не найдёт.
+            panel_id = int(raw_panel_id) if raw_panel_id is not None else None
+        except (TypeError, ValueError):
+            panel_id = None
+        user_id = panel_id_to_user_id.get(panel_id) if panel_id is not None else None
         if user_id is None:
             continue
         ips = entry.get("ips")
