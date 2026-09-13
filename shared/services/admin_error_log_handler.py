@@ -37,6 +37,24 @@ _SUPPRESSED_LOGGERS = {
     "shared.database",
 }
 
+# aiogram.dispatcher логирует эти как logger.error(), хотя сам же polling-луп их и лечит —
+# ретраит с бэкоффом на следующей итерации без вмешательства. Особенно часто вылезают пачкой
+# сразу после перезапуска процесса/хоста (обрыв TLS-сессии, недо-отпущенный getUpdates от
+# прошлого инстанса → flood control, кратковременный 502 у Telegram) и сами закрываются за
+# секунды — пересылка каждой такой в админ-чат/Логи только шумит без всякого действия админа.
+# Настоящий сбой (токен невалиден, Telegram недоступен часами) продолжит валиться в docker logs
+# как обычно (aiogram сам это логирует), просто не будет дублироваться сюда.
+_TRANSIENT_POLLING_PREFIX = "Failed to fetch updates"
+_TRANSIENT_POLLING_MARKERS = ("TelegramNetworkError", "TelegramRetryAfter", "TelegramServerError")
+
+
+def _is_transient_polling_hiccup(record: logging.LogRecord, message: str) -> bool:
+    return (
+        record.name == "aiogram.dispatcher"
+        and message.startswith(_TRANSIENT_POLLING_PREFIX)
+        and any(marker in message for marker in _TRANSIENT_POLLING_MARKERS)
+    )
+
 
 class AdminErrorTelegramHandler(logging.Handler):
     def __init__(self, settings: Settings, service: str = "app") -> None:
@@ -60,6 +78,8 @@ class AdminErrorTelegramHandler(logging.Handler):
             tb = "".join(traceback.format_exception(*record.exc_info)) if record.exc_info else None
             body = f"{message}\n\n{tb}" if (message and tb) else (tb or message)
         except Exception:
+            return
+        if _is_transient_polling_hiccup(record, message):
             return
         loop.create_task(self._send(record.name, body))
         loop.create_task(self._persist(record.name, message, tb))
