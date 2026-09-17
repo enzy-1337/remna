@@ -73,7 +73,12 @@ from shared.services.admin_user_delete import delete_user_from_app
 from shared.services.factory_reset_service import wipe_all_application_data
 from shared.services.backup_service import run_backup_once
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.referral_service import count_invited_users, list_invited_users
+from shared.services.referral_service import (
+    count_invited_users,
+    grant_referrer_rewards_for_past_topups,
+    list_invited_users,
+    set_referrer,
+)
 from shared.services.billing_v2.billing_calendar import (
     billing_local_day_end_utc_exclusive,
     billing_local_day_start_utc,
@@ -1623,18 +1628,23 @@ def _layout(
         var c=u.searchParams.get('c');
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',saved:'Изменения сохранены.'};
+        var cnt=u.searchParams.get('cnt');
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',ref_set_ok:'Пригласитель сохранён.',ref_unset_ok:'Пользователь отвязан от пригласителя.',saved:'Изменения сохранены.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
         }
+        if(n==='ref_grant_ok'){
+          window.remnaToast('success','Рефереру начислено '+(amt||'0')+' ₽ за '+(cnt||'0')+' пополнение(й).');
+        }
         if(err)window.remnaToast('error',err);
-        if(n||err||c||rw||amt){
+        if(n||err||c||rw||amt||cnt){
           u.searchParams.delete('n');
           u.searchParams.delete('err');
           u.searchParams.delete('c');
           u.searchParams.delete('rw');
           u.searchParams.delete('amt');
+          u.searchParams.delete('cnt');
           var qs=u.searchParams.toString();
           window.history.replaceState({},'',u.pathname+(qs?'?'+qs:''));
         }
@@ -7519,9 +7529,51 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     ref_by_block = ""
     if referrer_sn is not None:
         r_disp = referrer_sn.first_name or referrer_sn.username or f"#{referrer_sn.id}"
-        ref_by_block = f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer_sn.id}'>{_esc(r_disp)}</a> <span class='opacity-60'>(id {referrer_sn.id})</span></p>"
+        ref_by_block = (
+            f"<p>Пригласил: <a class='link link-primary font-medium' href='/admin/users/{referrer_sn.id}'>{_esc(r_disp)}</a> "
+            f"<span class='opacity-60'>(id {referrer_sn.id})</span></p>"
+        )
     else:
         ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
+
+    ref_rebind_block = f"""
+    <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3 flex flex-wrap items-end gap-3">
+      <form method="post" action="/admin/users/{user_id}/referral/set" class="flex items-end gap-2"
+        data-remna-confirm-msg="{_esc_attr('Изменить пригласителя пользователя #' + str(user_id) + '?')}">
+        <label class="form-control">
+          <span class="label-text text-xs opacity-70">{'Перепривязать к' if referrer_sn is not None else 'Привязать к'}: ID в боте / Telegram ID / @username</span>
+          <input type="text" name="referrer" required placeholder="123 или @username" class="input input-bordered input-sm h-10 min-h-10 w-56" />
+        </label>
+        <button type="submit" class="btn btn-secondary btn-sm h-10 min-h-10 gap-1.5">
+          <i class="fa-solid fa-link" aria-hidden="true"></i>{'Перепривязать' if referrer_sn is not None else 'Привязать'}
+        </button>
+      </form>
+      {f'''<form method="post" action="/admin/users/{user_id}/referral/unset" class="inline"
+        data-remna-confirm-msg="{_esc_attr('Отвязать пользователя #' + str(user_id) + ' от пригласителя?')}">
+        <button type="submit" class="btn btn-outline btn-error btn-sm h-10 min-h-10 gap-1.5">
+          <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отвязать
+        </button>
+      </form>''' if referrer_sn is not None else ''}
+    </div>
+    {f'''<div class="rounded-xl border border-warning/30 bg-warning/5 p-3 flex flex-wrap items-end gap-3 mt-2">
+      <form method="post" action="/admin/users/{user_id}/referral/grant-percent" class="flex items-end gap-2 flex-wrap"
+        data-remna-confirm-msg="{_esc_attr('Начислить рефереру #' + str(referrer_sn.id) + ' % с пополнений этого пользователя за выбранный период? Уже начисленные пополнения не задвоятся.')}">
+        <label class="form-control">
+          <span class="label-text text-xs opacity-70">Догнать % рефереру за пополнения этого пользователя (если привязка сделана позже пополнений)</span>
+          <select name="period" class="select select-bordered select-sm h-10 min-h-10 w-48">
+            <option value="7">За последние 7 дней</option>
+            <option value="30" selected>За последние 30 дней</option>
+            <option value="90">За последние 90 дней</option>
+            <option value="180">За последние 180 дней</option>
+            <option value="365">За последний год</option>
+            <option value="all">За всё время</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn-warning btn-sm h-10 min-h-10 gap-1.5">
+          <i class="fa-solid fa-sack-dollar" aria-hidden="true"></i>Начислить %
+        </button>
+      </form>
+    </div>''' if referrer_sn is not None else ''}"""
 
     invited_rows = "".join(
         f"<tr><td>{iid}</td><td><a class='link link-primary font-medium' href='/admin/users/{iid}'>{_esc(str(ifn or '').strip() or (str(iun).strip() if iun is not None else '') or '-')}</a></td>"
@@ -7534,6 +7586,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
     <div class="divider my-0"></div>
     <h3 class="text-lg font-semibold"><i class="fa-solid fa-user-group text-primary mr-2" aria-hidden="true"></i>Рефералы</h3>
     {ref_by_block}
+    {ref_rebind_block}
     <p>Привели по реф-ссылке: <b class="text-primary">{invited_count}</b></p>
     <div class="overflow-x-auto rounded-lg border border-base-content/10"><table class="table table-zebra table-sm"><thead><tr><th>ID</th><th>Имя</th><th>Username</th><th>Telegram</th><th>Регистрация</th></tr></thead>
     <tbody>{invited_rows or '<tr><td colspan="5" class="opacity-50">Пока никого</td></tr>'}</tbody></table></div>
@@ -8136,6 +8189,136 @@ async def admin_user_manual_bind_subscription(
         await session.commit()
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=manual_bind_ok", status_code=303)
+
+
+async def _resolve_user_by_identifier(session: AsyncSession, raw: str) -> User | None:
+    """Находит пользователя по ID в боте, Telegram ID или @username (для привязки реферала)."""
+    cleaned = raw.strip().lstrip("@").strip()
+    if not cleaned:
+        return None
+    if cleaned.isdigit():
+        n = int(cleaned)
+        user = await session.get(User, n)
+        if user is not None:
+            return user
+        return (
+            await session.execute(select(User).where(User.telegram_id == n).limit(1))
+        ).scalar_one_or_none()
+    return (
+        await session.execute(
+            select(User).where(func.lower(User.username) == cleaned.lower()).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+@router.post("/users/{user_id}/referral/set")
+async def admin_user_referral_set(
+    request: Request,
+    user_id: int,
+    referrer: str = Form(""),
+) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    raw = (referrer or "").strip()
+    if not raw:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Укажите ID в боте, Telegram ID или @username реферера')}",
+            status_code=303,
+        )
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        new_referrer = await _resolve_user_by_identifier(session, raw)
+        if new_referrer is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('Пользователь-реферер не найден: ' + raw)}",
+                status_code=303,
+            )
+        try:
+            await set_referrer(session, user=user, new_referrer=new_referrer)
+        except ValueError as e:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus(str(e))}",
+                status_code=303,
+            )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=ref_set_ok", status_code=303)
+
+
+@router.post("/users/{user_id}/referral/unset")
+async def admin_user_referral_unset(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        await set_referrer(session, user=user, new_referrer=None)
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=ref_unset_ok", status_code=303)
+
+
+_REF_GRANT_PERIOD_DAYS: dict[str, int | None] = {
+    "7": 7,
+    "30": 30,
+    "90": 90,
+    "180": 180,
+    "365": 365,
+    "all": None,
+}
+
+
+@router.post("/users/{user_id}/referral/grant-percent")
+async def admin_user_referral_grant_percent(
+    request: Request,
+    user_id: int,
+    period: str = Form("all"),
+) -> RedirectResponse:
+    """Выдать рефереру % с пополнений приглашённого задним числом — например, если привязку
+    сделали в админке позже, чем эти пополнения прошли (и авто-начисление их пропустило)."""
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    period_key = (period or "all").strip()
+    if period_key not in _REF_GRANT_PERIOD_DAYS:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Некорректный период')}",
+            status_code=303,
+        )
+    settings = get_settings()
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        if user.referred_by is None:
+            return RedirectResponse(
+                f"/admin/users/{user_id}?err={quote_plus('У пользователя не задан пригласитель — сначала привяжите реферера')}",
+                status_code=303,
+            )
+        days = _REF_GRANT_PERIOD_DAYS[period_key]
+        since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+        total, count = await grant_referrer_rewards_for_past_topups(
+            session,
+            referred_user=user,
+            settings=settings,
+            since=since,
+        )
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    if count == 0:
+        return RedirectResponse(
+            f"/admin/users/{user_id}?err={quote_plus('Нечего начислять: за выбранный период нет пополнений без уже выданной реферальной награды')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/admin/users/{user_id}?n=ref_grant_ok&amt={quote_plus(str(total))}&cnt={count}",
+        status_code=303,
+    )
 
 
 @router.post("/users/{user_id}/risk-notify/reset")

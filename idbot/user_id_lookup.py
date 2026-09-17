@@ -10,11 +10,14 @@ from aiogram.enums import ChatType, MessageEntityType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Chat, Message, User as TgUser
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from idbot.config import get_idbot_settings
 from idbot.group_id_prompt import send_group_id_destination_prompt
 from idbot.id_card import cta_keyboard, format_group_chat_peer_card, format_user_telegram_card
 from shared.md2 import code, esc, join_lines, plain
+from shared.models.user import User
 
 logger = logging.getLogger("idbot.id_lookup")
 
@@ -115,7 +118,28 @@ async def _answer_from_chat(message: Message, chat: Chat) -> None:
     await message.answer(cap, reply_markup=_reply_markup())
 
 
-async def _lookup_username(message: Message, bot: Bot, username_without_at: str) -> None:
+async def _lookup_username_in_db(session: AsyncSession, username_without_at: str) -> User | None:
+    """Фолбэк, если Telegram не отдал профиль по username (бот не «видел» пользователя):
+    ищем в общей БД сервиса — вдруг он уже регистрировался в другом боте семьи."""
+    return (
+        await session.execute(
+            select(User).where(func.lower(User.username) == username_without_at.lower()).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _answer_from_db_user(message: Message, user: User) -> None:
+    name = " ".join(p for p in [user.first_name or "", user.last_name or ""] if p).strip() or "—"
+    cap = format_user_telegram_card(
+        name=name,
+        username=user.username,
+        user_id=user.telegram_id,
+        note="ℹ️ Найдено по базе сервиса (пользователь мог сменить username или закрыть профиль).",
+    )
+    await message.answer(cap, reply_markup=_reply_markup())
+
+
+async def _lookup_username(message: Message, bot: Bot, session: AsyncSession, username_without_at: str) -> None:
     username_without_at = username_without_at.strip().lstrip("@")
     if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{4,31}", username_without_at):
         await message.answer(
@@ -126,6 +150,10 @@ async def _lookup_username(message: Message, bot: Bot, username_without_at: str)
         chat = await bot.get_chat(f"@{username_without_at}")
     except TelegramBadRequest as e:
         logger.debug("get_chat @%s: %s", username_without_at, e)
+        db_user = await _lookup_username_in_db(session, username_without_at)
+        if db_user is not None:
+            await _answer_from_db_user(message, db_user)
+            return
         await message.answer(
             join_lines(
                 plain("Не удалось найти ")
@@ -138,7 +166,7 @@ async def _lookup_username(message: Message, bot: Bot, username_without_at: str)
 
 
 @router.message(Command("id"))
-async def cmd_id(message: Message, command: CommandObject) -> None:
+async def cmd_id(message: Message, command: CommandObject, session: AsyncSession) -> None:
     bot = message.bot
     assert bot is not None
 
@@ -155,7 +183,7 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
         if arg.startswith("@"):
             arg = arg[1:]
         if arg.strip():
-            await _lookup_username(message, bot, arg)
+            await _lookup_username(message, bot, session, arg)
             return
         await send_group_id_destination_prompt(message)
         return
@@ -172,7 +200,7 @@ async def cmd_id(message: Message, command: CommandObject) -> None:
     arg = arg.strip()
 
     if arg:
-        await _lookup_username(message, bot, arg)
+        await _lookup_username(message, bot, session, arg)
         return
 
     if message.from_user:
@@ -201,7 +229,7 @@ async def private_lookup_by_forward(message: Message) -> None:
 
 
 @router.message(UsernameLookupFilter())
-async def private_lookup_by_mention(message: Message) -> None:
+async def private_lookup_by_mention(message: Message, session: AsyncSession) -> None:
     assert message.text is not None
     text = message.text.strip()
 
@@ -212,4 +240,4 @@ async def private_lookup_by_mention(message: Message) -> None:
 
     m = _USERNAME_RE.match(text)
     if m:
-        await _lookup_username(message, message.bot, m.group(1))
+        await _lookup_username(message, message.bot, session, m.group(1))

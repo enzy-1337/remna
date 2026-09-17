@@ -23,6 +23,7 @@ def format_user_telegram_card(
     username: str | None,
     user_id: int,
     chat_id: int | None = None,
+    note: str | None = None,
 ) -> str:
     """Текст как у /start в личке: заголовок, имя, кликабельный тэг, ID в `code`, подсказка."""
     has_chat = chat_id is not None
@@ -41,6 +42,8 @@ def format_user_telegram_card(
     lines.append(plain("🆔 ") + bold("Юзер ID") + plain(": ") + code(str(user_id)))
     if has_chat and chat_id is not None:
         lines.append(plain("💬 ") + bold("Чат ID") + plain(": ") + code(str(chat_id)))
+    if note:
+        lines.extend(["", italic(note)])
     lines.extend(["", italic("Тапните по ID, чтобы скопировать.")])
     return join_lines(*lines)
 

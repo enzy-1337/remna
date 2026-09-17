@@ -47,6 +47,7 @@ from idbot.group_id_prompt import (  # noqa: E402
     send_group_id_destination_prompt,
 )
 from idbot.id_card import cta_keyboard, format_user_telegram_card  # noqa: E402
+from idbot.middlewares.db_session import IdBotDbSessionMiddleware  # noqa: E402
 from idbot.user_id_lookup import router as id_lookup_router  # noqa: E402
 from shared.md2 import bold, join_lines, plain  # noqa: E402
 from shared.services.admin_error_log_handler import install_admin_error_log_handler  # noqa: E402
@@ -293,6 +294,7 @@ async def _run() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    dp.update.middleware(IdBotDbSessionMiddleware())
     dp.include_router(router)
     dp.include_router(id_lookup_router)
 

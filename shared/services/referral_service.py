@@ -46,6 +46,19 @@ async def replace_referrer_bonus_telegram_message(
     await session.flush()
 
 
+async def set_referrer(
+    session: AsyncSession,
+    *,
+    user: User,
+    new_referrer: User | None,
+) -> None:
+    """Меняет пригласителя пользователя: привязка, перепривязка или отвязка (``new_referrer=None``)."""
+    if new_referrer is not None and new_referrer.id == user.id:
+        raise ValueError("Пользователь не может быть реферером самому себе")
+    user.referred_by = new_referrer.id if new_referrer is not None else None
+    await session.flush()
+
+
 async def count_invited_users(session: AsyncSession, referrer_user_id: int) -> int:
     r = await session.execute(
         select(func.count()).select_from(User).where(User.referred_by == referrer_user_id)
@@ -202,6 +215,57 @@ async def grant_referrer_percent_of_referred_payment(
     )
     await replace_referrer_bonus_telegram_message(session, referrer, msg, settings)
     return bonus
+
+
+async def grant_referrer_rewards_for_past_topups(
+    session: AsyncSession,
+    *,
+    referred_user: User,
+    settings: Settings,
+    since: datetime | None = None,
+    limit: int = 300,
+) -> tuple[Decimal, int]:
+    """
+    Ретроактивное начисление % рефереру за уже прошедшие пополнения приглашённого — на случай,
+    если привязку «кто кого пригласил» сделали в админке позже, чем эти пополнения прошли
+    (автоматическое начисление в момент пополнения их тогда пропустило).
+
+    ``since`` — с какой даты учитывать пополнения (``None`` — за всё время).
+    Идемпотентно: как и при обычном начислении, повторный вызов не задвоит уже начисленное
+    (ключ идемпотентности — id транзакции пополнения).
+    """
+    if referred_user.referred_by is None:
+        return Decimal("0"), 0
+
+    stmt = (
+        select(Transaction)
+        .where(
+            Transaction.user_id == referred_user.id,
+            Transaction.type == "topup",
+            Transaction.status == "completed",
+        )
+        .order_by(Transaction.id.asc())
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(Transaction.created_at >= since)
+    txns = list((await session.execute(stmt)).scalars().all())
+
+    total = Decimal("0")
+    count = 0
+    for t in txns:
+        bonus = await grant_referrer_percent_of_referred_payment(
+            session,
+            referred_user=referred_user,
+            payment_amount_rub=t.amount,
+            settings=settings,
+            idempotency_key=f"referral_pct:topup:{t.id}",
+            reward_source="payment_pct_topup",
+        )
+        if bonus > 0:
+            total += bonus
+            count += 1
+    return total, count
 
 
 async def grant_referrer_reward_from_topup(
