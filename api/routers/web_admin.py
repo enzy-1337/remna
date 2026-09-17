@@ -7537,38 +7537,84 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
         ref_by_block = "<p class='opacity-60'>Пригласитель: не указан (прямая регистрация).</p>"
 
     ref_rebind_block = f"""
-    <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3 flex flex-wrap items-end gap-3">
-      <form method="post" action="/admin/users/{user_id}/referral/set" class="flex items-end gap-2"
-        data-remna-confirm-msg="{_esc_attr('Изменить пригласителя пользователя #' + str(user_id) + '?')}">
-        <label class="form-control">
-          <span class="label-text text-xs opacity-70">{'Перепривязать к' if referrer_sn is not None else 'Привязать к'}: ID в боте / Telegram ID / @username</span>
-          <input type="text" name="referrer" required placeholder="123 или @username" class="input input-bordered input-sm h-10 min-h-10 w-56" />
-        </label>
-        <button type="submit" class="btn btn-secondary btn-sm h-10 min-h-10 gap-1.5">
-          <i class="fa-solid fa-link" aria-hidden="true"></i>{'Перепривязать' if referrer_sn is not None else 'Привязать'}
-        </button>
-      </form>
-      {f'''<form method="post" action="/admin/users/{user_id}/referral/unset" class="inline"
-        data-remna-confirm-msg="{_esc_attr('Отвязать пользователя #' + str(user_id) + ' от пригласителя?')}">
-        <button type="submit" class="btn btn-outline btn-error btn-sm h-10 min-h-10 gap-1.5">
-          <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отвязать
-        </button>
-      </form>''' if referrer_sn is not None else ''}
+    <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3 flex flex-col gap-2">
+      <span class="label-text text-xs opacity-70">{'Перепривязать к' if referrer_sn is not None else 'Привязать к'}: ID в боте / Telegram ID / @username — введите или выберите из списка</span>
+      <div class="flex flex-wrap items-center gap-2">
+        <form method="post" action="/admin/users/{user_id}/referral/set" class="flex flex-wrap items-center gap-2"
+          data-remna-confirm-msg="{_esc_attr('Изменить пригласителя пользователя #' + str(user_id) + '?')}">
+          <div class="relative">
+            <input type="text" id="referral-picker-input" name="referrer" required autocomplete="off" placeholder="123, @username или имя" class="input input-bordered input-sm h-10 min-h-10 w-64" />
+            <div id="referral-picker-dropdown" class="absolute left-0 right-0 top-full mt-1 z-[120] hidden max-h-72 overflow-auto rounded-lg border border-base-content/10 bg-base-100 shadow-xl"></div>
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm h-10 min-h-10 gap-1.5">
+            <i class="fa-solid fa-link" aria-hidden="true"></i>{'Перепривязать' if referrer_sn is not None else 'Привязать'}
+          </button>
+        </form>
+        {f'''<form method="post" action="/admin/users/{user_id}/referral/unset"
+          data-remna-confirm-msg="{_esc_attr('Отвязать пользователя #' + str(user_id) + ' от пригласителя?')}">
+          <button type="submit" class="btn btn-outline btn-error btn-sm h-10 min-h-10 gap-1.5">
+            <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отвязать
+          </button>
+        </form>''' if referrer_sn is not None else ''}
+      </div>
     </div>
-    {f'''<div class="rounded-xl border border-warning/30 bg-warning/5 p-3 flex flex-wrap items-end gap-3 mt-2">
-      <form method="post" action="/admin/users/{user_id}/referral/grant-percent" class="flex items-end gap-2 flex-wrap"
+    <script>(function(){{
+      var inp = document.getElementById('referral-picker-input');
+      var dd = document.getElementById('referral-picker-dropdown');
+      if (!inp || !dd) return;
+      function closeDd() {{ dd.classList.add('hidden'); dd.innerHTML = ''; }}
+      function renderResults(items) {{
+        if (!items || !items.length) {{
+          dd.innerHTML = "<div class='px-3 py-2 text-xs opacity-60'>Ничего не найдено</div>";
+          dd.classList.remove('hidden');
+          return;
+        }}
+        var html = '';
+        for (var i = 0; i < items.length; i++) {{
+          var u = items[i];
+          html += "<button type='button' class='block w-full text-left px-3 py-2 hover:bg-base-200 text-sm' data-pick-id='" + u.id + "'>" + (u.label_html || u.label || ('#' + u.id)) + "</button>";
+        }}
+        dd.innerHTML = html;
+        dd.classList.remove('hidden');
+        dd.querySelectorAll('button[data-pick-id]').forEach(function(b){{
+          b.addEventListener('click', function(){{
+            inp.value = b.getAttribute('data-pick-id');
+            closeDd();
+            inp.focus();
+          }});
+        }});
+      }}
+      var timer = null, activeReq = 0;
+      function runSearch(q) {{
+        var myReq = ++activeReq;
+        fetch('/admin/api/users-search?q=' + encodeURIComponent(q || '') + '&limit=20', {{credentials: 'same-origin'}})
+          .then(function(r){{ return r.json(); }})
+          .then(function(d){{ if (myReq === activeReq) renderResults(d.users || []); }})
+          .catch(function(){{}});
+      }}
+      inp.addEventListener('input', function(){{
+        var q = inp.value.trim();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function(){{ runSearch(q); }}, 180);
+      }});
+      inp.addEventListener('focus', function(){{ runSearch(inp.value.trim()); }});
+      document.addEventListener('click', function(ev){{
+        if (ev.target === inp || dd.contains(ev.target)) return;
+        closeDd();
+      }});
+    }})();</script>
+    {f'''<div class="rounded-xl border border-warning/30 bg-warning/5 p-3 flex flex-col gap-2 mt-2">
+      <p class="text-xs opacity-70 m-0">Догнать % рефереру за пополнения этого пользователя (если привязка сделана позже пополнений)</p>
+      <form method="post" action="/admin/users/{user_id}/referral/grant-percent" class="flex flex-wrap items-center gap-2"
         data-remna-confirm-msg="{_esc_attr('Начислить рефереру #' + str(referrer_sn.id) + ' % с пополнений этого пользователя за выбранный период? Уже начисленные пополнения не задвоятся.')}">
-        <label class="form-control">
-          <span class="label-text text-xs opacity-70">Догнать % рефереру за пополнения этого пользователя (если привязка сделана позже пополнений)</span>
-          <select name="period" class="select select-bordered select-sm h-10 min-h-10 w-48">
+        <select name="period" class="select select-bordered select-sm h-10 min-h-10 w-48">
             <option value="7">За последние 7 дней</option>
             <option value="30" selected>За последние 30 дней</option>
             <option value="90">За последние 90 дней</option>
             <option value="180">За последние 180 дней</option>
             <option value="365">За последний год</option>
             <option value="all">За всё время</option>
-          </select>
-        </label>
+        </select>
         <button type="submit" class="btn btn-warning btn-sm h-10 min-h-10 gap-1.5">
           <i class="fa-solid fa-sack-dollar" aria-hidden="true"></i>Начислить %
         </button>
