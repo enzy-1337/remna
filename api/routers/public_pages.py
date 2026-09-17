@@ -947,8 +947,16 @@ def render_not_found_page(path: str) -> HTMLResponse:
 
 
 @router.get("/")
-async def public_stub(_request: Request) -> HTMLResponse:
-    return render_public_stub_page()
+async def public_stub(request: Request) -> HTMLResponse:
+    from api.routers.site_landing import REF_COOKIE, REF_COOKIE_MAX_AGE, render_landing_page
+
+    ref = (request.query_params.get("ref") or "").strip()
+    resp = HTMLResponse(render_landing_page(ref_code=ref))
+    if ref:
+        resp.set_cookie(
+            REF_COOKIE, ref[:32], max_age=REF_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"
+        )
+    return resp
 
 
 @router.get("/payment/success")

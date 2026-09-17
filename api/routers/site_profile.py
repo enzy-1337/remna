@@ -1,0 +1,357 @@
+"""Профиль: привязанные аккаунты, безопасность (2FA + сессии), выход."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+from shared.config import get_settings
+from shared.database import get_session_factory
+from shared.services.site_session_service import (
+    list_user_sessions,
+    load_site_user,
+    revoke_all_user_sessions,
+    revoke_session_by_id,
+    touch_session,
+)
+from shared.services.site_totp_service import (
+    count_unused_backup_codes,
+    generate_backup_codes,
+    generate_totp_secret,
+    totp_qr_data_uri,
+    verify_totp_code,
+)
+
+from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg
+
+router = APIRouter()
+
+
+def _ua_label(ua: str | None) -> str:
+    ua = ua or ""
+    if "iPhone" in ua or "iOS" in ua:
+        plat = "iPhone"
+    elif "Android" in ua:
+        plat = "Android"
+    elif "Macintosh" in ua:
+        plat = "macOS"
+    elif "Windows" in ua:
+        plat = "Windows"
+    elif "Linux" in ua:
+        plat = "Linux"
+    else:
+        plat = "Устройство"
+    if "Chrome" in ua:
+        browser = "Chrome"
+    elif "Firefox" in ua:
+        browser = "Firefox"
+    elif "Safari" in ua and "Chrome" not in ua:
+        browser = "Safari"
+    elif "Edg" in ua:
+        browser = "Edge"
+    else:
+        browser = "браузер"
+    return f"{plat} · {browser}"
+
+
+@router.get("/app/profile")
+async def profile_page(request: Request) -> HTMLResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await touch_session(session, sess_row)
+        sessions = await list_user_sessions(session, user.id)
+
+    initial = (user.first_name or user.username or "U")[:1].upper()
+    name_display = esc(user.first_name or (f"@{user.username}" if user.username else f"#{user.id}"))
+    join_date = user.created_at.strftime("%d %B %Y г.") if user.created_at else "—"
+    days_with_us = 0
+    if user.created_at is not None:
+        created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
+        days_with_us = max(0, (datetime.now(timezone.utc) - created).days)
+
+    totp_on = bool(user.site_totp_enabled)
+    backup_left = count_unused_backup_codes(user.site_totp_backup_codes) if totp_on else 0
+
+    sessions_html = "".join(
+        f"""
+        <div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);">
+          {icon('monitor', size=15, color='var(--text-3)')}
+          <div style="flex:1;min-width:0;">
+            <div style="font:700 13px Manrope;color:var(--text-1);">{esc(_ua_label(s.user_agent))}{' · <span style="color:var(--success);">эта сессия</span>' if s.session_token == sess_row.session_token else ''}</div>
+            <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">Активна {esc(s.last_seen_at.strftime('%d.%m.%Y %H:%M') if s.last_seen_at else '')}</div>
+          </div>
+          {f'''<form method="post" action="/app/profile/sessions/revoke"><input type="hidden" name="session_id" value="{s.id}"/><button type="submit" class="link-btn" style="color:var(--danger-soft);">Завершить</button></form>''' if s.session_token != sess_row.session_token else ''}
+        </div>"""
+        for s in sessions
+    ) or '<div style="opacity:.5;font:500 13px Manrope;padding:10px 0;">Нет активных сессий</div>'
+
+    n = request.query_params.get("n") or ""
+    notice_map = {
+        "2fa_on": ("success", "Двухфакторная аутентификация включена."),
+        "2fa_off": ("success", "Двухфакторная аутентификация выключена."),
+        "2fa_err": ("danger", "Неверный код — попробуйте ещё раз."),
+        "sessions_revoked": ("success", "Сессии завершены."),
+    }
+    notice_html = ""
+    if n in notice_map:
+        kind, msg = notice_map[n]
+        cls = "card-soft" if kind == "success" else "card-danger"
+        color = "var(--success)" if kind == "success" else "var(--danger-soft)"
+        notice_html = f'<div class="{cls}" style="padding:12px 16px;border-radius:12px;font:600 13px Manrope;color:{color};margin-top:14px;">{esc(msg)}</div>'
+
+    body = f"""
+<div class="cabinet-bg" style="min-height:100vh;">
+  <div class="shell-wide">
+    {app_topbar(active="", balance_rub=fmt_money(user.balance), unread_tickets=0, initial=initial)}
+    {notice_html}
+
+    <div class="card card-accent fade-up" style="margin-top:16px;display:flex;align-items:center;gap:22px;flex-wrap:wrap;">
+      <div class="avatar-circle" style="width:96px;height:96px;border-radius:22px;font-size:32px;position:relative;flex-shrink:0;">
+        {esc(initial)}
+        <div style="position:absolute;bottom:2px;right:2px;width:16px;height:16px;border-radius:50%;background:var(--success);border:3px solid var(--card-1);"></div>
+      </div>
+      <div style="flex:1;min-width:220px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font:800 24px Manrope;color:var(--text-1);">{name_display}</span>
+          <span class="badge badge-purple">{icon('star', size=11)} Участник</span></div>
+        <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">{f'@{esc(user.username)} · ' if user.username else ''}<span class="mono">ID: {user.id}</span> · с {esc(join_date)}</div>
+      </div>
+      <div style="display:flex;gap:28px;">
+        <div style="text-align:center;"><div class="mono" style="font:800 18px 'JetBrains Mono';color:var(--accent-soft);">{fmt_money(user.balance)} ₽</div><div style="font:600 10px Manrope;color:var(--text-4);margin-top:3px;">БАЛАНС</div></div>
+        <div style="text-align:center;"><div class="mono" style="font:800 18px 'JetBrains Mono';color:var(--text-1);">{days_with_us}</div><div style="font:600 10px Manrope;color:var(--text-4);margin-top:3px;">ДНЕЙ С НАМИ</div></div>
+      </div>
+    </div>
+
+    <div class="grid-auto fade-up d1 cols-2" style="grid-template-columns:1fr 440px;margin-top:20px;">
+      <div style="display:flex;flex-direction:column;gap:16px;min-width:0;">
+        <div class="card">
+          <div class="section-label">{icon('link', size=14)}<span>Привязанные аккаунты</span></div>
+          <div style="font:500 12px Manrope;color:var(--text-4);margin-top:4px;">Аккаунт, бот и приложения используют одну базу данных</div>
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:2px;">
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
+              <div style="width:34px;height:34px;border-radius:10px;background:linear-gradient(140deg,#2AABEE,#229ED9);display:flex;align-items:center;justify-content:center;">{tg_logo_svg(16,'#fff')}</div>
+              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Telegram</div></div>
+              <span class="badge badge-success">{icon('check-circle', size=12)} Привязан{f' · @{esc(user.username)}' if user.username else ''}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
+              <div style="width:34px;height:34px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;">{google_logo_svg(17)}</div>
+              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Google</div></div>
+              <span class="badge badge-neutral">Скоро</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
+              <div style="width:34px;height:34px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;">{icon('devices', size=16, color='var(--text-3)')}</div>
+              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Почта для входа по коду</div></div>
+              <span class="badge badge-neutral">Скоро</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">{icon('shield-check', size=14)}<span>Безопасность</span></div>
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:2px;">
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
+              <div style="width:34px;height:34px;border-radius:10px;background:{'rgba(79,210,160,.12)' if totp_on else 'var(--card-3)'};display:flex;align-items:center;justify-content:center;">{icon('lock', size=16, color='#4FD2A0' if totp_on else 'var(--text-3)')}</div>
+              <div style="flex:1;">
+                <div style="font:700 13px Manrope;color:var(--text-1);">Двухфакторная аутентификация</div>
+                <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">{('Google Authenticator · осталось ' + str(backup_left) + ' резервных кодов') if totp_on else 'Не подключена'}</div>
+              </div>
+              <a href="/app/profile/2fa/{'disable' if totp_on else 'enable'}" class="toggle{' on' if totp_on else ''}" title="{'Отключить' if totp_on else 'Включить'}"><span class="knob"></span></a>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
+              <div style="width:34px;height:34px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;">{icon('monitor', size=16, color='var(--text-3)')}</div>
+              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Активные сессии</div><div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">{len(sessions)} устройств</div></div>
+              <form method="post" action="/app/profile/sessions/revoke-all"><button type="submit" class="btn btn-outline btn-sm">Завершить все</button></form>
+            </div>
+          </div>
+          <div style="margin-top:6px;">{sessions_html}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px;min-width:0;">
+        <div class="card card-danger" style="cursor:pointer;" onclick="document.getElementById('logout-form').requestSubmit();">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <div style="width:38px;height:38px;border-radius:11px;background:rgba(255,107,107,.14);display:flex;align-items:center;justify-content:center;">{icon('logout', size=17, color='#FF8A8A')}</div>
+            <div style="flex:1;"><div style="font:700 14px Manrope;color:var(--danger-soft);">Выйти из аккаунта</div><div style="font:500 11px Manrope;color:var(--danger-mut);margin-top:2px;">Завершить текущую сессию на этом устройстве</div></div>
+            {icon('chevron-right', size=15, color='var(--danger-mut)')}
+          </div>
+        </div>
+        <form id="logout-form" method="post" action="/logout" hidden></form>
+      </div>
+    </div>
+    {site_footer()}
+  </div>
+</div>
+"""
+    return HTMLResponse(page(title="Профиль — Flux Network", body=body))
+
+
+@router.get("/app/profile/2fa/enable")
+async def totp_enable_page(request: Request) -> HTMLResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        if user.site_totp_enabled:
+            return RedirectResponse("/app/profile", status_code=303)
+        secret = generate_totp_secret()
+        await touch_session(session, sess_row)
+        # Временный секрет — фиксируем в подписанной cookie-подобной ссылке, а не в БД, до подтверждения кода.
+        ser = URLSafeTimedSerializer(str(get_settings().web_admin_session_secret), salt="flux-site-2fa-setup")
+        token = ser.dumps({"user_id": user.id, "secret": secret})
+        account_name = f"@{user.username}" if user.username else f"user#{user.id}"
+        qr = totp_qr_data_uri(secret=secret, account_name=account_name)
+
+    err = request.query_params.get("err") or ""
+    err_html = (
+        '<div class="card-danger" style="padding:10px 14px;margin-top:14px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">Неверный код, попробуйте ещё раз.</div>'
+        if err
+        else ""
+    )
+    body = f"""
+<div class="hero-bg" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div class="fade-up card" style="width:440px;padding:32px;">
+    <div style="text-align:center;">
+      <div style="font:800 19px Manrope;color:var(--text-1);">Подключить 2FA</div>
+      <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Отсканируйте QR в Google Authenticator (или любом TOTP-приложении)</div>
+    </div>
+    <div style="display:flex;justify-content:center;margin-top:18px;"><img src="{qr}" width="200" height="200" style="border-radius:12px;"/></div>
+    <form method="post" action="/app/profile/2fa/enable" style="margin-top:18px;">
+      <input type="hidden" name="setup_token" value="{token}"/>
+      <input class="input mono" name="code" placeholder="000000" maxlength="6" autocomplete="off" style="text-align:center;font-size:20px;letter-spacing:.2em;" required/>
+      {err_html}
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Подтвердить и включить</button>
+    </form>
+    <a href="/app/profile" class="btn btn-outline btn-block" style="margin-top:10px;">Отмена</a>
+  </div>
+</div>
+"""
+    return HTMLResponse(page(title="Включить 2FA — Flux Network", body=body))
+
+
+@router.post("/app/profile/2fa/enable")
+async def totp_enable_submit(request: Request, setup_token: str = Form(""), code: str = Form("")) -> HTMLResponse:
+    ser = URLSafeTimedSerializer(str(get_settings().web_admin_session_secret), salt="flux-site-2fa-setup")
+    try:
+        data = ser.loads(setup_token, max_age=600)
+    except (BadSignature, SignatureExpired):
+        return RedirectResponse("/app/profile/2fa/enable", status_code=303)
+    secret = str(data.get("secret") or "")
+    uid = int(data.get("user_id") or 0)
+    if not secret or not uid or not verify_totp_code(secret, code):
+        return RedirectResponse("/app/profile/2fa/enable?err=1", status_code=303)
+
+    plain_codes, stored = generate_backup_codes()
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None or auth[0].id != uid:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        user.site_totp_secret = secret
+        user.site_totp_enabled = True
+        user.site_totp_backup_codes = stored
+        await touch_session(session, sess_row)
+        await session.commit()
+
+    codes_html = "".join(f'<div class="mono" style="padding:8px;background:var(--card-4);border-radius:8px;text-align:center;">{esc(c)}</div>' for c in plain_codes)
+    body = f"""
+<div class="hero-bg" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div class="fade-up card" style="width:460px;padding:32px;">
+    <div style="text-align:center;">{icon('shield-check', size=30, color='var(--success)')}<div style="font:800 19px Manrope;color:var(--text-1);margin-top:10px;">2FA включена</div>
+      <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Сохраните резервные коды — каждый работает один раз, если потеряете доступ к приложению-аутентификатору</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px;font-size:13px;">{codes_html}</div>
+    <a href="/app/profile" class="btn btn-primary btn-block" style="margin-top:20px;">Готово</a>
+  </div>
+</div>
+"""
+    return HTMLResponse(page(title="2FA включена — Flux Network", body=body))
+
+
+@router.get("/app/profile/2fa/disable")
+async def totp_disable_page(request: Request) -> HTMLResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        if not user.site_totp_enabled:
+            return RedirectResponse("/app/profile", status_code=303)
+        await touch_session(session, sess_row)
+    err = request.query_params.get("err") or ""
+    err_html = (
+        '<div class="card-danger" style="padding:10px 14px;margin-top:14px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">Неверный код.</div>'
+        if err
+        else ""
+    )
+    body = f"""
+<div class="hero-bg" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div class="fade-up card" style="width:400px;padding:32px;">
+    <div style="text-align:center;">
+      <div style="font:800 19px Manrope;color:var(--text-1);">Отключить 2FA</div>
+      <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Введите текущий код из приложения-аутентификатора, чтобы подтвердить отключение</div>
+    </div>
+    <form method="post" action="/app/profile/2fa/disable" style="margin-top:18px;">
+      <input class="input mono" name="code" placeholder="000000" maxlength="6" autocomplete="off" style="text-align:center;font-size:20px;letter-spacing:.2em;" required/>
+      {err_html}
+      <button type="submit" class="btn btn-danger-outline btn-block" style="margin-top:16px;">Отключить</button>
+    </form>
+    <a href="/app/profile" class="btn btn-outline btn-block" style="margin-top:10px;">Отмена</a>
+  </div>
+</div>
+"""
+    return HTMLResponse(page(title="Отключить 2FA — Flux Network", body=body))
+
+
+@router.post("/app/profile/2fa/disable")
+async def totp_disable_submit(request: Request, code: str = Form("")) -> RedirectResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        if not user.site_totp_enabled or not user.site_totp_secret:
+            return RedirectResponse("/app/profile", status_code=303)
+        if not verify_totp_code(user.site_totp_secret, code):
+            return RedirectResponse("/app/profile/2fa/disable?err=1", status_code=303)
+        user.site_totp_enabled = False
+        user.site_totp_secret = None
+        user.site_totp_backup_codes = None
+        await touch_session(session, sess_row)
+        await session.commit()
+    return RedirectResponse("/app/profile?n=2fa_off", status_code=303)
+
+
+@router.post("/app/profile/sessions/revoke")
+async def revoke_one_session(request: Request, session_id: int = Form(...)) -> RedirectResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await revoke_session_by_id(session, user_id=user.id, session_row_id=session_id)
+        await touch_session(session, sess_row)
+    return RedirectResponse("/app/profile?n=sessions_revoked", status_code=303)
+
+
+@router.post("/app/profile/sessions/revoke-all")
+async def revoke_all_sessions(request: Request) -> RedirectResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await revoke_all_user_sessions(session, user.id, except_token=sess_row.session_token)
+        await touch_session(session, sess_row)
+    return RedirectResponse("/app/profile?n=sessions_revoked", status_code=303)

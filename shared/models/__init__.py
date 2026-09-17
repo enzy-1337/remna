@@ -32,6 +32,7 @@ from shared.models.traffic_sample import TrafficSample
 from shared.models.transaction import Transaction
 from shared.models.user import User
 from shared.models.user_fraud_state import UserFraudState
+from shared.models.user_web_session import UserWebSession
 from shared.models.web_admin_browser_session import WebAdminBrowserSession
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "TrafficSample",
     "User",
     "UserFraudState",
+    "UserWebSession",
     "WebAdminBrowserSession",
     "Plan",
     "Subscription",

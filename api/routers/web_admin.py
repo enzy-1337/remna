@@ -99,7 +99,7 @@ from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter
 from shared.services.billing_v2.hwid_panel_reconcile_service import reconcile_hwid_devices_from_panel
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
-from shared.services.admin_notify import notify_admin
+from shared.services.admin_notify import admin_user_ref, notify_admin
 from shared.services.web_admin_notify import (
     web_admin_actor_notify_line,
     web_admin_target_user_line,
@@ -8272,6 +8272,7 @@ async def admin_user_referral_set(
             f"/admin/users/{user_id}?err={quote_plus('Укажите ID в боте, Telegram ID или @username реферера')}",
             status_code=303,
         )
+    settings = get_settings()
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
@@ -8282,6 +8283,7 @@ async def admin_user_referral_set(
                 f"/admin/users/{user_id}?err={quote_plus('Пользователь-реферер не найден: ' + raw)}",
                 status_code=303,
             )
+        old_referrer_id = user.referred_by
         try:
             await set_referrer(session, user=user, new_referrer=new_referrer)
         except ValueError as e:
@@ -8290,6 +8292,23 @@ async def admin_user_referral_set(
                 status_code=303,
             )
         await session.commit()
+        was_rebind = old_referrer_id is not None and old_referrer_id != new_referrer.id
+        notify_lines = [web_admin_target_user_line(settings, user)]
+        if was_rebind:
+            old_ref = await session.get(User, old_referrer_id)
+            if old_ref is not None:
+                notify_lines.append(plain("Было: ") + admin_user_ref(settings, old_ref))
+        notify_lines.append(plain("Стало: ") + admin_user_ref(settings, new_referrer))
+        notify_lines.append(web_admin_actor_notify_line())
+        await notify_admin(
+            settings,
+            title=("🔀 " if was_rebind else "🔗 ")
+            + bold("Реферал перепривязан (web-admin)" if was_rebind else "Реферал привязан (web-admin)"),
+            lines=notify_lines,
+            event_type="referral_set_web",
+            topic=AdminLogTopic.USERS,
+            session=session,
+        )
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=ref_set_ok", status_code=303)
 
@@ -8299,12 +8318,28 @@ async def admin_user_referral_unset(request: Request, user_id: int) -> RedirectR
     denied = _require_login(request)
     if denied is not None:
         return denied
+    settings = get_settings()
     async with await _session() as session:
         user = await session.get(User, user_id)
         if user is None:
             return RedirectResponse("/admin/users", status_code=303)
+        old_referrer_id = user.referred_by
         await set_referrer(session, user=user, new_referrer=None)
         await session.commit()
+        if old_referrer_id is not None:
+            old_ref = await session.get(User, old_referrer_id)
+            notify_lines = [web_admin_target_user_line(settings, user)]
+            if old_ref is not None:
+                notify_lines.append(plain("Было: ") + admin_user_ref(settings, old_ref))
+            notify_lines.append(web_admin_actor_notify_line())
+            await notify_admin(
+                settings,
+                title="✂️ " + bold("Реферал отвязан (web-admin)"),
+                lines=notify_lines,
+                event_type="referral_unset_web",
+                topic=AdminLogTopic.USERS,
+                session=session,
+            )
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=ref_unset_ok", status_code=303)
 
@@ -8316,6 +8351,14 @@ _REF_GRANT_PERIOD_DAYS: dict[str, int | None] = {
     "180": 180,
     "365": 365,
     "all": None,
+}
+_REF_GRANT_PERIOD_LABELS: dict[str, str] = {
+    "7": "7 дней",
+    "30": "30 дней",
+    "90": "90 дней",
+    "180": "180 дней",
+    "365": "год",
+    "all": "всё время",
 }
 
 
@@ -8348,6 +8391,7 @@ async def admin_user_referral_grant_percent(
             )
         days = _REF_GRANT_PERIOD_DAYS[period_key]
         since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+        referrer = await session.get(User, user.referred_by)
         total, count = await grant_referrer_rewards_for_past_topups(
             session,
             referred_user=user,
@@ -8355,6 +8399,21 @@ async def admin_user_referral_grant_percent(
             since=since,
         )
         await session.commit()
+        if count > 0 and referrer is not None:
+            await notify_admin(
+                settings,
+                title="💸 " + bold("Реферальный % начислен задним числом (web-admin)"),
+                lines=[
+                    plain("Рефереру: ") + admin_user_ref(settings, referrer),
+                    plain("За пользователя: ") + admin_user_ref(settings, user),
+                    plain("Начислено: ") + bold(f"{total} ₽") + plain(f" за {count} пополнение(й)"),
+                    plain("Период: ") + bold(_REF_GRANT_PERIOD_LABELS.get(period_key, period_key)),
+                    web_admin_actor_notify_line(),
+                ],
+                event_type="referral_grant_percent_web",
+                topic=AdminLogTopic.BONUSES,
+                session=session,
+            )
     _USERS_HTML_CACHE.clear()
     if count == 0:
         return RedirectResponse(

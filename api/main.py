@@ -36,6 +36,13 @@ from api.routers import (
     mass_grant_pages,
     miniapp,
     public_pages,
+    site_auth,
+    site_dashboard,
+    site_help,
+    site_landing,
+    site_profile,
+    site_referral,
+    site_tickets,
     tickets_api,
     web_admin,
     web_admin_rbac_pages,
@@ -268,6 +275,13 @@ app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(fraud_admin_pages.router, prefix="/admin")
 app.include_router(mass_grant_pages.router, prefix="/admin")
 app.include_router(logs_pages.router, prefix="/admin")
+app.include_router(site_auth.router)
+app.include_router(site_dashboard.router)
+app.include_router(site_referral.router)
+app.include_router(site_tickets.router)
+app.include_router(site_help.router)
+app.include_router(site_profile.router)
+app.include_router(site_landing.router)
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")
 app.include_router(miniapp.router, prefix="/my")

@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,10 @@ class User(Base):
     web_admin_totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     web_admin_session_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     web_admin_session_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    site_totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    site_totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    site_totp_backup_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
