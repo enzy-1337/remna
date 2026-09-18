@@ -547,6 +547,8 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
     }});
     document.querySelectorAll('[data-close-notifs]').forEach(function(b){{ b.addEventListener('click', function(){{ notifsDd.hidden = true; }}); }});
     document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && e.target !== notifsBtn) notifsDd.hidden = true; }});
+    window.addEventListener('scroll', function(){{ if (!notifsDd.hidden) notifsDd.hidden = true; }}, {{passive: true, capture: true}});
+    window.addEventListener('resize', function(){{ if (!notifsDd.hidden) notifsDd.hidden = true; }});
   }}
 }})();
 </script>"""

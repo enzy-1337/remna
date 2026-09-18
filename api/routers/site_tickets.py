@@ -204,10 +204,24 @@ document.querySelectorAll('[data-submit-new-ticket]').forEach(function(b){{b.add
 
 
 def _empty_detail_html() -> str:
+    tips = [
+        "Опишите проблему как можно точнее — что вы делали и что пошло не так",
+        "Укажите устройство и приложение, если вопрос про подключение",
+        "Прикрепить скриншот можно прямо в чате с ботом — он попадёт в этот же тикет",
+    ]
+    tips_html = "".join(
+        f'<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;">'
+        f'<span style="width:20px;height:20px;border-radius:7px;background:rgba(123,92,255,.14);color:var(--accent-soft);'
+        f'font:800 11px Manrope;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">{i + 1}</span>'
+        f'<span style="font:500 12.5px Manrope;color:var(--text-3);line-height:1.5;">{esc(tip)}</span></div>'
+        for i, tip in enumerate(tips)
+    )
     return f"""
-    <div class="card" style="text-align:center;padding:60px 20px;">
+    <div class="card" style="text-align:center;padding:40px 20px 28px;">
       {icon('tickets', size=32, color='var(--text-4)')}
-      <div style="font:700 15px Manrope;color:var(--text-3);margin-top:12px;">Выберите тикет или создайте новый</div>
+      <div style="font:700 15px Manrope;color:var(--text-3);margin-top:12px;">Выберите тикет слева или создайте новый</div>
+      <div style="font:500 12px Manrope;color:var(--text-4);margin-top:4px;">Сообщения синхронизированы с панелью поддержки — отвечаем в этом же тикете</div>
+      <div style="text-align:left;max-width:360px;margin:18px auto 0;border-top:1px solid var(--line);padding-top:6px;">{tips_html}</div>
     </div>"""
 
 
