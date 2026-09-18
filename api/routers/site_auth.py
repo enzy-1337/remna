@@ -62,20 +62,35 @@ def _read_pending_2fa_user_id(request: Request) -> int | None:
         return None
 
 
+def _telegram_oauth_url(settings) -> str:
+    """Прямая ссылка на Telegram OAuth (тот же механизм, что дёргает telegram-widget.js изнутри,
+    без устаревшего виджет-скрипта — так кнопка стилизуется как остальные, без чужого iframe)."""
+    from urllib.parse import quote
+
+    bot_id = (settings.bot_token or "").split(":", 1)[0].strip()
+    origin = (settings.public_site_url or "").strip().rstrip("/")
+    if not bot_id or not origin:
+        return ""
+    return_to = f"{origin}/login/telegram/callback"
+    return (
+        "https://oauth.telegram.org/auth?"
+        f"bot_id={quote(bot_id)}&origin={quote(origin, safe='')}"
+        f"&request_access=write&return_to={quote(return_to, safe='')}"
+    )
+
+
 def _login_page_html(*, error: str = "") -> str:
     settings = get_settings()
-    bot_username = (settings.bot_username or "").strip().lstrip("@")
+    tg_oauth_url = _telegram_oauth_url(settings)
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
         else ""
     )
     widget = (
-        f"""<script async src="https://telegram.org/js/telegram-widget.js?22"
-      data-telegram-login="{esc_attr(bot_username)}" data-size="large" data-radius="13"
-      data-auth-url="/login/telegram/callback" data-request-access="write"></script>"""
-        if bot_username
-        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_USERNAME не настроен</div>'
+        f'<a href="{esc_attr(tg_oauth_url)}" class="btn btn-tg btn-block">{tg_logo_svg(20, "#fff")}<span>Войти через Telegram</span></a>'
+        if tg_oauth_url
+        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_TOKEN / PUBLIC_SITE_URL не настроены</div>'
     )
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">
