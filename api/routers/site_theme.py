@@ -210,7 +210,7 @@ img{max-width:100%;}
   animation:shine 1.4s ease infinite;border-radius:8px;}
 @keyframes shine{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
 
-footer.site-footer{border-top:1px solid var(--line);padding:26px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;}
+footer.site-footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;}
 .footer-links{display:flex;gap:24px;font:500 13px Manrope;color:var(--text-4);flex-wrap:wrap;}
 
 @media (max-width:900px){
@@ -232,7 +232,6 @@ footer.site-footer{border-top:1px solid var(--line);padding:26px 0;display:flex;
   .balance-chip span{font-size:12px;}
   h1,[style*="font:800 clamp"]{line-height:1.15;}
   .modal-overlay>div{max-width:100% !important;}
-  #notifs-dropdown{right:8px !important;left:8px;width:auto !important;}
 }
 """
 
@@ -419,17 +418,24 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
     {brand_mark()}
     <div class="topbar-links">{links}</div>
     <div class="topbar-sep hide-mobile"></div>
-    <div style="display:flex;align-items:center;gap:6px;position:relative;">
+    <div style="display:flex;align-items:center;gap:6px;">
       <button type="button" class="balance-chip" style="border:0;cursor:pointer;" data-open-topup title="Пополнить баланс">{icon('wallet', size=14, color='var(--accent-soft)')}<span>{esc(balance_rub)} ₽</span><span style="color:var(--accent);font-weight:800;">+</span></button>
-      <button type="button" class="icon-btn" style="position:relative;" data-open-notifs title="Уведомления">{icon('bell', size=15)}</button>
-      <div id="notifs-dropdown" hidden style="position:absolute;top:calc(100% + 10px);right:96px;width:300px;background:var(--card-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 30px 60px -20px rgba(0,0,0,.7);z-index:70;overflow:hidden;">
-        <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;">
-          <span style="font:800 14px Manrope;color:var(--text-1);">Уведомления</span>
-          <button type="button" class="icon-btn" style="width:24px;height:24px;" data-close-notifs>{icon('x', size=12)}</button>
-        </div>
-        <div style="padding:32px 16px;text-align:center;">
-          <div style="width:36px;height:36px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;margin:0 auto;">{icon('bell', size=16, color='var(--text-4)')}</div>
-          <div style="font:600 12.5px Manrope;color:var(--text-4);margin-top:10px;">Пока нет уведомлений</div>
+      <div style="position:relative;">
+        <button type="button" class="icon-btn" style="position:relative;" data-open-notifs title="Уведомления">
+          {icon('bell', size=15)}
+          <span id="notifs-badge" hidden style="position:absolute;top:-2px;right:-2px;min-width:15px;height:15px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;font:800 9px Manrope;color:#fff;padding:0 4px;"></span>
+        </button>
+        <div id="notifs-dropdown" hidden style="position:absolute;top:calc(100% + 10px);right:0;width:320px;max-width:calc(100vw - 40px);background:var(--card-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 30px 60px -20px rgba(0,0,0,.7);z-index:70;overflow:hidden;">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;">
+            <span style="font:800 14px Manrope;color:var(--text-1);">Уведомления</span>
+            <button type="button" class="icon-btn" style="width:24px;height:24px;" data-close-notifs>{icon('x', size=12)}</button>
+          </div>
+          <div id="notifs-list" style="max-height:360px;overflow-y:auto;">
+            <div style="padding:32px 16px;text-align:center;">
+              <div style="width:36px;height:36px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;margin:0 auto;">{icon('bell', size=16, color='var(--text-4)')}</div>
+              <div style="font:600 12.5px Manrope;color:var(--text-4);margin-top:10px;">Загрузка…</div>
+            </div>
+          </div>
         </div>
       </div>
       <a class="avatar-circle" href="/app/profile" style="width:30px;height:30px;" title="Профиль">{esc(initial)}</a>
@@ -495,8 +501,49 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
   }});
   var notifsBtn = document.querySelector('[data-open-notifs]');
   var notifsDd = document.getElementById('notifs-dropdown');
+  var notifsBadge = document.getElementById('notifs-badge');
+  var notifsList = document.getElementById('notifs-list');
+  function escHtml(s){{ var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }}
+  function renderNotifs(items){{
+    if (!items || !items.length) {{
+      notifsList.innerHTML = '<div style="padding:32px 16px;text-align:center;">'
+        + '<div style="width:36px;height:36px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;margin:0 auto;">{icon('bell', size=16, color='var(--text-4)')}</div>'
+        + '<div style="font:600 12.5px Manrope;color:var(--text-4);margin-top:10px;">Пока нет уведомлений</div></div>';
+      return;
+    }}
+    notifsList.innerHTML = items.map(function(n){{
+      return '<div style="padding:12px 16px;border-bottom:1px solid var(--line);">'
+        + '<div style="font:700 12.5px Manrope;color:var(--text-1);">' + escHtml(n.title) + '</div>'
+        + '<div style="font:500 12px Manrope;color:var(--text-3);margin-top:4px;line-height:1.5;">' + n.body_html + '</div>'
+        + '<div style="font:600 10.5px Manrope;color:var(--text-4);margin-top:6px;">' + escHtml(n.sent_at) + '</div>'
+        + '</div>';
+    }}).join('');
+  }}
   if (notifsBtn && notifsDd) {{
-    notifsBtn.addEventListener('click', function(e){{ e.stopPropagation(); notifsDd.hidden = !notifsDd.hidden; }});
+    fetch('/app/api/notifications', {{credentials:'same-origin'}})
+      .then(function(r){{ return r.json(); }})
+      .then(function(d){{
+        if (d.unread > 0) {{ notifsBadge.hidden = false; notifsBadge.textContent = d.unread > 9 ? '9+' : String(d.unread); }}
+        renderNotifs(d.items || []);
+      }})
+      .catch(function(){{ notifsList.innerHTML = '<div style="padding:20px 16px;text-align:center;font:500 12px Manrope;color:var(--text-4);">Не удалось загрузить</div>'; }});
+    function positionNotifsDd(){{
+      var btnRect = notifsBtn.getBoundingClientRect();
+      var ddWidth = Math.min(320, window.innerWidth - 24);
+      var left = Math.min(btnRect.right - ddWidth, window.innerWidth - ddWidth - 12);
+      left = Math.max(12, left);
+      notifsDd.style.position = 'fixed';
+      notifsDd.style.top = (btnRect.bottom + 10) + 'px';
+      notifsDd.style.left = left + 'px';
+      notifsDd.style.right = 'auto';
+      notifsDd.style.width = ddWidth + 'px';
+    }}
+    notifsBtn.addEventListener('click', function(e){{
+      e.stopPropagation();
+      if (notifsDd.hidden) positionNotifsDd();
+      notifsDd.hidden = !notifsDd.hidden;
+      if (!notifsDd.hidden) notifsBadge.hidden = true;
+    }});
     document.querySelectorAll('[data-close-notifs]').forEach(function(b){{ b.addEventListener('click', function(){{ notifsDd.hidden = true; }}); }});
     document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && e.target !== notifsBtn) notifsDd.hidden = true; }});
   }}

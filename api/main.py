@@ -40,6 +40,7 @@ from api.routers import (
     site_dashboard,
     site_help,
     site_landing,
+    site_notifications,
     site_profile,
     site_referral,
     site_tickets,
@@ -281,6 +282,7 @@ app.include_router(site_referral.router)
 app.include_router(site_tickets.router)
 app.include_router(site_help.router)
 app.include_router(site_profile.router)
+app.include_router(site_notifications.router)
 app.include_router(site_landing.router)
 app.include_router(public_pages.router)
 app.include_router(tickets_api.router, prefix="/api")

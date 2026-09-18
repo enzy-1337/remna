@@ -241,6 +241,16 @@ async def _resolve_or_register_by_tid(
     existing = await get_user_by_telegram_id(session, tid)
     if existing is not None:
         await _apply_pending_referrer(session, existing, ref_code)
+        changed = False
+        new_username = username or None
+        if new_username and existing.username != new_username:
+            existing.username = new_username
+            changed = True
+        if label and existing.first_name != label:
+            existing.first_name = label
+            changed = True
+        if changed:
+            await session.flush()
         return existing
     tg_user = TgUser(
         id=tid,

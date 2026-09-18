@@ -57,13 +57,33 @@ async def _ticket_messages(session: AsyncSession, ticket_id: int, user_id: int) 
     rows = (
         await session.execute(
             text(
-                "SELECT id, sender_role, text, created_at FROM ticket_messages "
+                "SELECT id, sender_role, text, created_at, photo_file_id, video_file_id, "
+                "document_file_id, document_file_name, voice_file_id, video_note_file_id, "
+                "audio_file_id, audio_file_name FROM ticket_messages "
                 "WHERE ticket_id=:tid AND COALESCE(is_internal,false)=false ORDER BY id ASC"
             ),
             {"tid": ticket_id},
         )
     ).mappings().all()
     return [dict(r) for r in rows]
+
+
+def _media_label(m: dict) -> str | None:
+    if m.get("photo_file_id"):
+        return "📷 Фото"
+    if m.get("video_file_id"):
+        return "🎥 Видео"
+    if m.get("voice_file_id"):
+        return "🎤 Голосовое сообщение"
+    if m.get("video_note_file_id"):
+        return "⭕ Видеосообщение"
+    if m.get("audio_file_id"):
+        name = (m.get("audio_file_name") or "").strip()
+        return f"🎵 Аудио: {name}" if name else "🎵 Аудио"
+    if m.get("document_file_id"):
+        name = (m.get("document_file_name") or "").strip()
+        return f"📎 Документ: {name}" if name else "📎 Документ"
+    return None
 
 
 def _relative_time(dt: datetime | None) -> str:
@@ -177,7 +197,7 @@ document.querySelectorAll('[data-submit-new-ticket]').forEach(function(b){{b.add
   fetch('/app/tickets/0/send',{{method:'POST',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'text='+encodeURIComponent(val)}})
     .then(function(r){{return r.json();}}).then(function(d){{ if(d.ticket_id) window.location.href='/app/tickets?ticket='+d.ticket_id; }});
 }});}});
-{_chat_js()}
+{_chat_js(initial)}
 </script>
 """
     return HTMLResponse(page(title="Тикеты — Flux Network", body=body))
@@ -225,36 +245,78 @@ def _msg_bubble(m: dict, initial: str) -> str:
     ts = m.get("created_at")
     ts_label = ts.strftime("%H:%M") if ts else ""
     who = f'<div class="avatar-circle" style="width:28px;height:28px;font-size:11px;flex-shrink:0;">{esc(initial if is_me else "S")}</div>'
+    body = (m.get("text") or "").strip()
+    media_label = _media_label(m)
+    if media_label:
+        bubble_content = f'<span style="opacity:.8;">{esc(media_label)}</span>' + (f'<br>{esc(body)}' if body else "")
+    else:
+        bubble_content = esc(body) if body else '<span style="opacity:.5;">Пустое сообщение</span>'
     return f"""
     <div class="msg-row{' me' if is_me else ''}">
       {who}
       <div>
-        <div class="msg-bubble">{esc((m.get('text') or '').strip())}</div>
+        <div class="msg-bubble">{bubble_content}</div>
         <div class="msg-meta" style="text-align:{'right' if is_me else 'left'};">{esc(ts_label)}</div>
       </div>
     </div>"""
 
 
-def _chat_js() -> str:
+def _chat_js(initial: str) -> str:
     return """
 (function(){
   var scroll = document.getElementById('chat-scroll');
+  var composer = document.querySelector('[data-ticket-id]');
   if(scroll) scroll.scrollTop = scroll.scrollHeight;
+  if(!composer) return;
+  var tid = composer.getAttribute('data-ticket-id');
+  var meInitial = """ + repr(initial) + """;
+  var lastSig = '';
+  function esc(s){ var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+  function render(msgs){
+    var sig = JSON.stringify(msgs.map(function(m){ return [m.id, m.text, m.media_label]; }));
+    if (sig === lastSig) return;
+    lastSig = sig;
+    if (!msgs.length) { scroll.innerHTML = '<div style="opacity:.5;font:500 13px Manrope;padding:20px;text-align:center;">Нет сообщений</div>'; return; }
+    scroll.innerHTML = msgs.map(function(m){
+      var isMe = m.sender_role === 'user';
+      var who = '<div class="avatar-circle" style="width:28px;height:28px;font-size:11px;flex-shrink:0;">' + esc(isMe ? meInitial : 'S') + '</div>';
+      var body = (m.text || '').trim();
+      var content;
+      if (m.media_label) {
+        content = '<span style="opacity:.8;">' + esc(m.media_label) + '</span>' + (body ? '<br>' + esc(body) : '');
+      } else if (body) {
+        content = esc(body);
+      } else {
+        content = '<span style="opacity:.5;">Пустое сообщение</span>';
+      }
+      return '<div class="msg-row' + (isMe ? ' me' : '') + '">' + who
+        + '<div><div class="msg-bubble">' + content + '</div>'
+        + '<div class="msg-meta" style="text-align:' + (isMe ? 'right' : 'left') + ';">' + esc(m.created_at) + '</div></div></div>';
+    }).join('');
+    scroll.scrollTop = scroll.scrollHeight;
+  }
+  function load(){
+    fetch('/app/tickets/' + tid + '/messages', {credentials:'same-origin'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if (d) render(d.messages || []); })
+      .catch(function(){});
+  }
   document.addEventListener('click', function(e){
     var btn = e.target.closest('[data-chat-send]');
     if(!btn) return;
-    var composer = btn.closest('[data-ticket-id]');
-    var tid = composer.getAttribute('data-ticket-id');
     var input = composer.querySelector('[data-chat-input]');
     var val = input.value.trim();
     if(!val) return;
     input.value = '';
+    btn.disabled = true;
     fetch('/app/tickets/'+tid+'/send', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'text='+encodeURIComponent(val)})
-      .then(function(){ window.location.reload(); });
+      .then(function(){ btn.disabled = false; load(); })
+      .catch(function(){ btn.disabled = false; });
   });
   document.querySelectorAll('[data-chat-input]').forEach(function(inp){
     inp.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); var btn=inp.closest('[data-ticket-id]').querySelector('[data-chat-send]'); btn.click(); } });
   });
+  setInterval(load, 2500);
 })();
 """
 
@@ -277,7 +339,8 @@ async def ticket_messages_poll(ticket_id: int, request: Request) -> JSONResponse
                     "id": m["id"],
                     "sender_role": m["sender_role"],
                     "text": m.get("text"),
-                    "created_at": m["created_at"].isoformat() if m.get("created_at") else None,
+                    "created_at": m["created_at"].strftime("%H:%M") if m.get("created_at") else "",
+                    "media_label": _media_label(m),
                 }
                 for m in msgs
             ]

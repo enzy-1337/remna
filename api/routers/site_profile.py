@@ -78,7 +78,7 @@ async def profile_page(request: Request) -> HTMLResponse:
       <div style="flex:1;min-width:220px;">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="font:800 24px Manrope;color:var(--text-1);">{name_display}</span>
           <span class="badge badge-purple">{icon('star', size=11)} Участник</span></div>
-        <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">{f'@{esc(user.username)} · ' if user.username else ''}<span class="mono">ID: {user.id}</span> · с {esc(join_date)}</div>
+        <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">{f'@{esc(user.username)} · ' if user.username else ''}<span class="mono">ID: {user.id}</span> · <span class="mono">TG ID: {user.telegram_id}</span> · с {esc(join_date)}</div>
       </div>
       <div style="display:flex;gap:28px;">
         <div style="text-align:center;"><div class="mono" style="font:800 18px 'JetBrains Mono';color:var(--accent-soft);">{fmt_money(user.balance)} ₽</div><div style="font:600 10px Manrope;color:var(--text-4);margin-top:3px;">БАЛАНС</div></div>
@@ -94,8 +94,11 @@ async def profile_page(request: Request) -> HTMLResponse:
           <div style="margin-top:14px;display:flex;flex-direction:column;gap:2px;">
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
               <div style="width:34px;height:34px;border-radius:10px;background:linear-gradient(140deg,#2AABEE,#229ED9);display:flex;align-items:center;justify-content:center;">{tg_logo_svg(16,'#fff')}</div>
-              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Telegram</div></div>
-              <span class="badge badge-success">{icon('check-circle', size=12)} Привязан{f' · @{esc(user.username)}' if user.username else ''}</span>
+              <div style="flex:1;">
+                <div style="font:700 13px Manrope;color:var(--text-1);">Telegram</div>
+                <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">{f'@{esc(user.username)} · ' if user.username else ''}<span class="mono">ID: {user.telegram_id}</span></div>
+              </div>
+              <span class="badge badge-success">{icon('check-circle', size=12)} Привязан</span>
             </div>
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
               <div style="width:34px;height:34px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;">{google_logo_svg(17)}</div>

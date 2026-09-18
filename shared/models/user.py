@@ -47,6 +47,7 @@ class User(Base):
     risk_notified_24h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     risk_notified_1h_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     low_balance_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notifications_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     referral_bonus_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     device_notify_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

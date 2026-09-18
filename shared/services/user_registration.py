@@ -51,6 +51,18 @@ async def register_user(
     """
     existing = await get_user_by_telegram_id(session, tg_user.id)
     if existing:
+        changed = False
+        if existing.username != tg_user.username:
+            existing.username = tg_user.username
+            changed = True
+        if existing.first_name != tg_user.first_name:
+            existing.first_name = tg_user.first_name
+            changed = True
+        if existing.last_name != tg_user.last_name:
+            existing.last_name = tg_user.last_name
+            changed = True
+        if changed:
+            await session.flush()
         return existing, False, None
 
     is_blacklisted = (
