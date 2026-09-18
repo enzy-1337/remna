@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
+from secrets import token_urlsafe
 
+import httpx
 from aiogram.types import User as TgUser
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -104,22 +108,33 @@ _TG_BOT_LOGIN_JS = """
 def _login_page_html(*, error: str = "") -> str:
     settings = get_settings()
     bot_username = (settings.bot_username or "").strip().lstrip("@")
+    oidc_ready = bool(
+        (settings.web_admin_telegram_client_id or "").strip()
+        and (settings.web_admin_telegram_client_secret or "").strip()
+    )
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
         else ""
     )
-    # Вход через бота (диплинк + код), а не Telegram Login Widget — у Telegram сейчас отключён
-    # oauth.telegram.org/auth (проверено: отвечает "deprecated" на любой запрос, включая popup от
-    # Telegram.Login.auth() из их же официального telegram-widget.js). Тот же принцип, что уже
-    # работает у десктоп-клиента (shared/services/flux_login_service.py).
-    widget = (
-        f"""<button type="button" id="tg-login-btn" class="btn btn-tg btn-block">{tg_logo_svg(20, '#fff')}<span>Войти через Telegram</span></button>
+    # Основной способ — тот же Telegram OAuth/OIDC (oauth.tg.dev), что уже настроен и работает
+    # для входа в web-admin (WEB_ADMIN_TELEGRAM_CLIENT_ID/SECRET, тот же бот). Обычный top-level
+    # редирект, без JS и без сломанного у Telegram Login Widget (oauth.telegram.org/auth сейчас
+    # отвечает "deprecated" на любой запрос — проверено).
+    primary_btn = (
+        f'<a href="/login/telegram/oauth-start" class="btn btn-tg btn-block">{tg_logo_svg(20, "#fff")}<span>Войти через Telegram</span></a>'
+        if oidc_ready
+        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">Telegram OAuth не настроен (WEB_ADMIN_TELEGRAM_CLIENT_ID/SECRET)</div>'
+    )
+    # Альтернатива — вход через бота (диплинк + код), на случай проблем с OAuth-редиректом.
+    alt_btn = (
+        f"""<button type="button" id="tg-login-btn" class="btn btn-outline btn-block">{icon('send-tg', size=16)}<span>Не получилось? Войти через бота</span></button>
       <div id="tg-login-wait" hidden style="text-align:center;font:600 12px Manrope;color:var(--text-3);margin-top:-4px;">Открыли бота? Нажмите Start и подождите — страница обновится сама…</div>
       <script>{_TG_BOT_LOGIN_JS}</script>"""
         if bot_username
-        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_USERNAME не настроен</div>'
+        else ""
     )
+    widget = f'{primary_btn}\n{alt_btn}'
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">
   <div class="shell" style="padding-top:20px;">
@@ -171,6 +186,8 @@ async def login_page(request: Request) -> HTMLResponse:
     err_map = {
         "widget": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз.",
         "expired": "Ссылка входа устарела, попробуйте снова.",
+        "oauth": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз или войдите через бота.",
+        "oauth_config": "Вход через Telegram временно недоступен. Попробуйте через бота.",
     }
     return HTMLResponse(_login_page_html(error=err_map.get(err, "")))
 
@@ -184,6 +201,160 @@ async def _finish_login(request: Request, user: User, *, login_kind: str) -> Red
     resp.delete_cookie(_PENDING_2FA_COOKIE, path="/")
     resp.delete_cookie(REF_COOKIE, path="/")
     return resp
+
+
+def _jwt_payload_unverified(token: str) -> dict:
+    """Payload id_token без проверки подписи — это нормально: id_token получен напрямую от Telegram
+    HTTPS-запросом с нашим client_secret, доверие уже установлено на уровне обмена кода на токен
+    (тот же подход, что в api/routers/web_admin.py для входа в веб-админку)."""
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    payload_b64 = parts[1]
+    padding = "=" * ((4 - len(payload_b64) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((payload_b64 + padding).encode("ascii"))
+        obj = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+async def _apply_pending_referrer(session, user: User, ref_code: str) -> None:
+    if not ref_code or user.referred_by is not None:
+        return
+    r = await session.execute(select(User).where(User.referral_code == ref_code.upper()))
+    ref_user = r.scalar_one_or_none()
+    if ref_user is not None and ref_user.id != user.id:
+        try:
+            await set_referrer(session, user=user, new_referrer=ref_user)
+            await session.commit()
+        except ValueError:
+            pass
+
+
+async def _resolve_or_register_by_tid(
+    session, *, tid: int, label: str, username: str, ref_code: str
+) -> User:
+    existing = await get_user_by_telegram_id(session, tid)
+    if existing is not None:
+        await _apply_pending_referrer(session, existing, ref_code)
+        return existing
+    tg_user = TgUser(
+        id=tid,
+        is_bot=False,
+        first_name=label or username or "Пользователь",
+        last_name=None,
+        username=username or None,
+    )
+    start_args = f"ref_{ref_code}" if ref_code else None
+    user, _created, _bonus = await register_user(session, tg_user, start_args)
+    return user
+
+
+@router.get("/login/telegram/oauth-start")
+async def telegram_oauth_start(request: Request) -> RedirectResponse:
+    """Тот же Telegram OAuth/OIDC (oauth.tg.dev), что уже работает для входа в web-admin —
+    просто без ограничения по списку администраторов."""
+    settings = get_settings()
+    client_id = (settings.web_admin_telegram_client_id or "").strip()
+    if not client_id:
+        return RedirectResponse("/login?err=oauth_config", status_code=303)
+    state = base64.urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["site_tg_oauth_state"] = state
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    redirect_uri = (settings.site_telegram_redirect_uri or "").strip() or f"{base}/login/telegram/oauth-callback"
+    from urllib.parse import quote_plus
+
+    url = (
+        "https://oauth.tg.dev/auth"
+        f"?client_id={quote_plus(client_id)}"
+        f"&redirect_uri={quote_plus(redirect_uri)}"
+        "&response_type=code"
+        "&scope=openid%20profile"
+        f"&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/login/telegram/oauth-callback")
+async def telegram_oauth_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+    settings = get_settings()
+    if not code.strip() or state != request.session.get("site_tg_oauth_state"):
+        return RedirectResponse("/login?err=oauth", status_code=303)
+    request.session.pop("site_tg_oauth_state", None)
+
+    client_id = (settings.web_admin_telegram_client_id or "").strip()
+    client_secret = (settings.web_admin_telegram_client_secret or "").strip()
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    redirect_uri = (settings.site_telegram_redirect_uri or "").strip() or f"{base}/login/telegram/oauth-callback"
+    if not client_id or not client_secret or not redirect_uri:
+        return RedirectResponse("/login?err=oauth_config", status_code=303)
+
+    t_data: dict | None = None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for token_url in ("https://oauth.tg.dev/token", "https://oauth.telegram.org/token"):
+                try:
+                    t_resp = await client.post(
+                        token_url,
+                        headers={"Accept": "application/json"},
+                        data={
+                            "grant_type": "authorization_code",
+                            "code": code.strip(),
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "redirect_uri": redirect_uri,
+                        },
+                    )
+                    t_resp.raise_for_status()
+                    payload = t_resp.json()
+                    if isinstance(payload, dict):
+                        t_data = payload
+                        break
+                except Exception:
+                    continue
+    except Exception:
+        t_data = None
+    if t_data is None:
+        return RedirectResponse("/login?err=oauth", status_code=303)
+
+    tid = 0
+    tg_username = ""
+    tg_label = ""
+    id_token = str(t_data.get("id_token") or "").strip()
+    if id_token:
+        claims = _jwt_payload_unverified(id_token)
+        try:
+            tid = int(claims.get("id") or claims.get("sub") or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        tg_username = str(claims.get("preferred_username") or "").strip()
+        tg_label = str(claims.get("name") or "").strip()
+    if not tid:
+        uobj = t_data.get("user")
+        src = uobj if isinstance(uobj, dict) else t_data
+        try:
+            tid = int(src.get("id") or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        tg_username = tg_username or str(src.get("username") or "").strip()
+        tg_label = tg_label or str(src.get("first_name") or "").strip()
+    if not tid:
+        return RedirectResponse("/login?err=oauth", status_code=303)
+
+    ref_code = (request.cookies.get(REF_COOKIE) or "").strip()
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await _resolve_or_register_by_tid(
+            session, tid=tid, label=tg_label, username=tg_username, ref_code=ref_code
+        )
+        if bool(user.site_totp_enabled):
+            resp = RedirectResponse("/login/2fa", status_code=303)
+            _set_pending_2fa_cookie(resp, user.id)
+            return resp
+        user_for_session = user
+    return await _finish_login(request, user_for_session, login_kind="telegram_oauth")
 
 
 @router.get("/login/telegram/callback")

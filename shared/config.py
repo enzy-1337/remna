@@ -658,6 +658,16 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_TELEGRAM_REDIRECT_URI",
         description="Callback URL Telegram OAuth/OpenID (например https://admin.example.com/admin/login/telegram/widget).",
     )
+    site_telegram_redirect_uri: str = Field(
+        default="",
+        validation_alias="SITE_TELEGRAM_REDIRECT_URI",
+        description=(
+            "Callback URL Telegram OAuth/OpenID для входа на клиентский сайт (например "
+            "https://vpn.example.com/login/telegram/oauth-callback). Тот же client_id/secret, что у "
+            "web-admin (WEB_ADMIN_TELEGRAM_CLIENT_ID/SECRET) — в BotFather Web Login этот redirect_uri "
+            "нужно добавить как ещё один разрешённый, если провайдер требует точное совпадение."
+        ),
+    )
     public_site_url: str | None = Field(
         default=None,
         validation_alias="PUBLIC_SITE_URL",
