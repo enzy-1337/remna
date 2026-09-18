@@ -27,7 +27,7 @@ from shared.services.user_registration import get_user_by_telegram_id, register_
 from shared.models.user import User
 
 from api.routers.site_landing import REF_COOKIE
-from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, tg_logo_svg, google_logo_svg
+from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, google_logo_svg
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -62,35 +62,23 @@ def _read_pending_2fa_user_id(request: Request) -> int | None:
         return None
 
 
-def _telegram_oauth_url(settings) -> str:
-    """Прямая ссылка на Telegram OAuth (тот же механизм, что дёргает telegram-widget.js изнутри,
-    без устаревшего виджет-скрипта — так кнопка стилизуется как остальные, без чужого iframe)."""
-    from urllib.parse import quote
-
-    bot_id = (settings.bot_token or "").split(":", 1)[0].strip()
-    origin = (settings.public_site_url or "").strip().rstrip("/")
-    if not bot_id or not origin:
-        return ""
-    return_to = f"{origin}/login/telegram/callback"
-    return (
-        "https://oauth.telegram.org/auth?"
-        f"bot_id={quote(bot_id)}&origin={quote(origin, safe='')}"
-        f"&request_access=write&return_to={quote(return_to, safe='')}"
-    )
-
-
 def _login_page_html(*, error: str = "") -> str:
     settings = get_settings()
-    tg_oauth_url = _telegram_oauth_url(settings)
+    bot_username = (settings.bot_username or "").strip().lstrip("@")
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
         else ""
     )
+    # Официальный виджет Telegram — единственный поддерживаемый способ входа для сайта без
+    # отдельно зарегистрированного OAuth-приложения (oauth.telegram.org/auth напрямую отключён
+    # Telegram — проверено; oauth.tg.dev используется в web-admin, но требует свой client_id/secret).
     widget = (
-        f'<a href="{esc_attr(tg_oauth_url)}" class="btn btn-tg btn-block">{tg_logo_svg(20, "#fff")}<span>Войти через Telegram</span></a>'
-        if tg_oauth_url
-        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_TOKEN / PUBLIC_SITE_URL не настроены</div>'
+        f"""<script async src="https://telegram.org/js/telegram-widget.js?22"
+      data-telegram-login="{esc_attr(bot_username)}" data-size="large" data-radius="13"
+      data-auth-url="/login/telegram/callback" data-request-access="write"></script>"""
+        if bot_username
+        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_USERNAME не настроен</div>'
     )
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">

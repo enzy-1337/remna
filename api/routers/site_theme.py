@@ -52,7 +52,7 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 a{color:var(--accent-soft);text-decoration:none;transition:color .15s ease;}
-a:hover{color:var(--accent-softer);}
+a:not(.btn):hover{color:var(--accent-softer);}
 .mono{font-family:'JetBrains Mono',monospace;}
 img{max-width:100%;}
 ::selection{background:rgba(123,92,255,.35);}
