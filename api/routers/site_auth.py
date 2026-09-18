@@ -27,7 +27,7 @@ from shared.services.user_registration import get_user_by_telegram_id, register_
 from shared.models.user import User
 
 from api.routers.site_landing import REF_COOKIE
-from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, google_logo_svg
+from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, tg_logo_svg, google_logo_svg
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,21 +64,30 @@ def _read_pending_2fa_user_id(request: Request) -> int | None:
 
 def _login_page_html(*, error: str = "") -> str:
     settings = get_settings()
-    bot_username = (settings.bot_username or "").strip().lstrip("@")
+    bot_id = (settings.bot_token or "").split(":", 1)[0].strip()
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
         else ""
     )
-    # Официальный виджет Telegram — единственный поддерживаемый способ входа для сайта без
-    # отдельно зарегистрированного OAuth-приложения (oauth.telegram.org/auth напрямую отключён
-    # Telegram — проверено; oauth.tg.dev используется в web-admin, но требует свой client_id/secret).
+    # Кастомная кнопка + JS-метод Telegram.Login.auth() из официального telegram-widget.js —
+    # документированный способ для своей кнопки (в отличие от редиректа на oauth.telegram.org/auth,
+    # который Telegram отключил: проверено напрямую, отвечает "deprecated" на любой запрос).
     widget = (
-        f"""<script async src="https://telegram.org/js/telegram-widget.js?22"
-      data-telegram-login="{esc_attr(bot_username)}" data-size="large" data-radius="13"
-      data-auth-url="/login/telegram/callback" data-request-access="write"></script>"""
-        if bot_username
-        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_USERNAME не настроен</div>'
+        f"""<script src="https://telegram.org/js/telegram-widget.js?22"></script>
+      <button type="button" id="tg-login-btn" class="btn btn-tg btn-block">{tg_logo_svg(20, '#fff')}<span>Войти через Telegram</span></button>
+      <script>
+      document.getElementById('tg-login-btn').addEventListener('click', function(){{
+        if (typeof Telegram === 'undefined' || !Telegram.Login) return;
+        Telegram.Login.auth({{bot_id: {bot_id}, request_access: 'write'}}, function(user){{
+          if (!user) return;
+          var qs = Object.keys(user).map(function(k){{ return encodeURIComponent(k) + '=' + encodeURIComponent(user[k]); }}).join('&');
+          window.location.href = '/login/telegram/callback?' + qs;
+        }});
+      }});
+      </script>"""
+        if bot_id.isdigit()
+        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_TOKEN не настроен</div>'
     )
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">
