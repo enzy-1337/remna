@@ -951,7 +951,10 @@ async def public_stub(request: Request) -> HTMLResponse:
     from api.routers.site_landing import REF_COOKIE, REF_COOKIE_MAX_AGE, render_landing_page
 
     ref = (request.query_params.get("ref") or "").strip()
-    resp = HTMLResponse(render_landing_page(ref_code=ref))
+    factory = get_session_factory()
+    async with factory() as session:
+        plans = await list_paid_plans(session)
+    resp = HTMLResponse(render_landing_page(ref_code=ref, plans=plans))
     if ref:
         resp.set_cookie(
             REF_COOKIE, ref[:32], max_age=REF_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"

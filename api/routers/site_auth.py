@@ -90,9 +90,9 @@ def _login_page_html(*, error: str = "") -> str:
           <span style="font:800 17px Manrope;color:var(--text-1);">Flux Network</span>
         </div>
         <div style="font:800 27px Manrope;color:var(--text-1);margin-top:30px;line-height:1.2;">Безопасный доступ<br>к интернету</div>
-        <div style="font:500 13px Manrope;color:var(--text-3);margin-top:12px;line-height:1.55;">64 локации, WireGuard и одна подписка на все ваши устройства</div>
+        <div style="font:500 13px Manrope;color:var(--text-3);margin-top:12px;line-height:1.55;">Одна подписка на все ваши устройства — без логов и слежки</div>
         <div style="display:flex;flex-direction:column;gap:9px;margin-top:26px;">
-          {"".join(f'''<div style="display:flex;align-items:center;gap:11px;background:var(--card-3);border:1px solid var(--line);border-radius:12px;padding:13px 14px;">{icon(ic, size=17, color="#7B5CFF")}<span style="font:600 13px Manrope;color:var(--text-2);">{esc(t)}</span></div>''' for ic, t in [("globe","64 локации по всему миру"),("bolt","Скорость до 1 Гбит/с"),("lock","Шифрование и отсутствие логов"),("devices","Все устройства и платформы")])}
+          {"".join(f'''<div style="display:flex;align-items:center;gap:11px;background:var(--card-3);border:1px solid var(--line);border-radius:12px;padding:13px 14px;">{icon(ic, size=17, color="#7B5CFF")}<span style="font:600 13px Manrope;color:var(--text-2);">{esc(t)}</span></div>''' for ic, t in [("bolt","Быстрое подключение"),("lock","Шифрование и отсутствие логов"),("devices","iOS, Android, Windows, macOS, Linux"),("wallet","Карта, СБП или криптовалюта")])}
         </div>
       </div>
       <div style="flex:1.1;min-width:300px;padding:36px 40px;">

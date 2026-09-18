@@ -27,9 +27,8 @@ _FAQ = [
     (
         "shield",
         "Безопасно ли пользоваться вашим сервисом?",
-        "Да. Трафик шифруется по протоколу WireGuard, мы не ведём логи подключений и не передаём данные "
-        "третьим лицам. Вход в личный кабинет можно дополнительно защитить двухфакторной аутентификацией "
-        "(Google Authenticator) в разделе «Профиль».",
+        "Да. Мы не ведём логи подключений и не передаём данные третьим лицам. Вход в личный кабинет можно "
+        "дополнительно защитить двухфакторной аутентификацией (Google Authenticator) в разделе «Профиль».",
     ),
     (
         "link",
@@ -41,30 +40,30 @@ _FAQ = [
         "devices",
         "Какое приложение использовать?",
         "iOS, Android, Windows, macOS и Linux — для каждой платформы есть отдельное приложение Flux Network "
-        "с единым интерфейсом. Ссылки на загрузку доступны в боте после активации подписки.",
+        "с единым интерфейсом, плюс Telegram Mini App. Ссылки на загрузку доступны в боте после активации подписки.",
     ),
     (
         "wallet",
         "Как пополнить баланс?",
         "В личном кабинете нажмите на баланс в шапке сайта или откройте бота — доступна оплата картой, СБП "
-        "и криптовалютой (USDT).",
+        "или криптовалютой.",
     ),
     (
         "people",
         "Сколько устройств поддерживает подписка?",
-        "Базово — до 5 устройств одновременно на одну подписку. Дополнительные слоты можно докупить в боте.",
+        "По умолчанию — 2 устройства одновременно на одну подписку, слоты можно докупить в боте вплоть до 15.",
     ),
     (
         "wifi",
         "Можно ли настроить на роутер?",
-        "Да, при поддержке роутером WireGuard-клиента. Конфигурацию для роутера можно получить в разделе "
-        "подписки — обратитесь в тикет поддержки, если нужна помощь с настройкой конкретной модели.",
+        "Да, если роутер поддерживает клиент для соответствующего протокола. Конфигурацию можно получить в "
+        "разделе подписки — обратитесь в тикет поддержки, если нужна помощь с настройкой конкретной модели.",
     ),
     (
         "clock",
-        "Что такое заморозка подписки?",
-        "Если вы не планируете пользоваться VPN какое-то время, можно приостановить отсчёт срока подписки — "
-        "дни не будут списываться до возобновления. Управляется из карточки подписки в личном кабинете.",
+        "Как отключить автопродление?",
+        "В карточке подписки в личном кабинете или в боте — переключатель автопродления отключает списание "
+        "за следующий период, доступ сохраняется до конца уже оплаченного срока.",
     ),
     (
         "coupon",
@@ -92,16 +91,18 @@ def _faq_accordion() -> str:
 
 
 def _contact_cards(settings) -> str:
-    support = (settings.bot_username or "fluxvpn_support").strip().lstrip("@")
-    channel = (settings.required_channel_username or "fluxvpn").strip().lstrip("@")
+    support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
+    channel = (settings.required_channel_username or "").strip().lstrip("@")
+    support_href = f"https://t.me/{support}" if support else "/app/tickets"
+    channel_href = f"https://t.me/{channel}" if channel else "#"
     return f"""
     <div class="grid-auto" style="grid-template-columns:1fr 1fr;">
-      <a href="https://t.me/{esc(support)}" class="card" style="display:flex;align-items:center;gap:14px;">
+      <a href="{esc(support_href)}" class="card" style="display:flex;align-items:center;gap:14px;">
         <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;flex-shrink:0;">{icon('headset', size=20, color='#fff')}</div>
-        <div style="flex:1;"><div style="font:700 14px Manrope;color:var(--text-1);">Техподдержка</div><div style="font:500 12px Manrope;color:var(--text-4);margin-top:2px;">@{esc(support)}</div></div>
+        <div style="flex:1;"><div style="font:700 14px Manrope;color:var(--text-1);">Техподдержка</div><div style="font:500 12px Manrope;color:var(--text-4);margin-top:2px;">{('@' + esc(support)) if support else 'Тикет в кабинете'}</div></div>
         {icon('chevron-right', size=15, color='var(--text-4)')}
       </a>
-      <a href="https://t.me/{esc(channel)}" class="card" style="display:flex;align-items:center;gap:14px;">
+      <a href="{esc(channel_href)}" class="card" style="display:flex;align-items:center;gap:14px;">
         <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,#2AABEE,#229ED9);display:flex;align-items:center;justify-content:center;flex-shrink:0;">{tg_logo_svg(20,'#fff')}</div>
         <div style="flex:1;"><div style="font:700 14px Manrope;color:var(--text-1);">Чат Flux</div><div style="font:500 12px Manrope;color:var(--text-4);margin-top:2px;">Обсуждения и новости</div></div>
         {icon('chevron-right', size=15, color='var(--text-4)')}
