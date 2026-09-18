@@ -14,6 +14,7 @@ from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_traffic import is_rw_hwid_devices_unlimited
 from shared.models.user import User
+from shared.services.admin_notify import admin_site_base_url
 from shared.services.subscription_service import get_active_subscription
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ async def build_ticket_user_info(
             devices_line = f"0/{sub.devices_count}"
 
     profile_url = ""
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if base:
         profile_url = f"{base}/admin/users/{int(db_user.id)}"
 

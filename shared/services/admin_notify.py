@@ -17,8 +17,14 @@ from shared.services.telegram_notify import send_telegram_document, send_telegra
 logger = logging.getLogger(__name__)
 
 
+def admin_site_base_url(settings: Settings) -> str:
+    """Origin веб-админки для ссылок в админ-логе/темах тикетов: ADMIN_SITE_URL, иначе PUBLIC_SITE_URL."""
+    base = (settings.admin_site_url or settings.public_site_url or "").strip()
+    return base.rstrip("/")
+
+
 def admin_user_profile_url(settings: Settings, user: User) -> str:
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if not base:
         return ""
     return f"{base}/admin/users/{int(user.id)}"
@@ -35,7 +41,7 @@ def admin_user_ref(settings: Settings, user: User) -> str:
 def admin_device_hwid_url(settings: Settings, hwid: str) -> str:
     """Ссылка на веб-админку «Устройства» с поиском по HWID и active=0 (вся история,
     не только активные) — чтобы из фрод-алерта сразу увидеть, где ещё засветился этот HWID."""
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if not base:
         return ""
     from urllib.parse import quote

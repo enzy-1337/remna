@@ -33,7 +33,7 @@ from tickets.services import (
 from tickets.config import config
 from shared.config import get_settings
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin_plain
+from shared.services.admin_notify import admin_site_base_url, notify_admin_plain
 router = Router(name="tickets_user")
 
 
@@ -214,7 +214,7 @@ async def msg_problem_text(message: Message, session: AsyncSession, state: FSMCo
         settings=settings,
     )
     profile_url = ""
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if base:
         profile_url = f"{base}/admin/users/{int(db_user.id)}"
     who = (message.from_user.full_name or "Пользователь").strip()

@@ -38,9 +38,15 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
             ),
             (
                 "PUBLIC_SITE_URL",
-                "Публичный URL",
+                "Публичный URL сайта",
                 lambda s: s.public_site_url or "",
-                "HTTPS-origin без слэша в конце — тот же домен, что в nginx для API. Нужен для Telegram OAuth/OpenID и абсолютных ссылок; в BotFather Web Login — тот же хост.",
+                "HTTPS-origin клиентского сайта без слэша в конце (лендинг/вход/личный кабинет, Mini App, реферальные ссылки). Один backend может отвечать сразу на нескольких доменах через nginx — этот адрес идёт в ссылки, которые видят клиенты.",
+            ),
+            (
+                "ADMIN_SITE_URL",
+                "Публичный URL админки",
+                lambda s: s.admin_site_url or "",
+                "HTTPS-origin веб-админки без слэша в конце (например https://weba.example.com) — используется для ссылок на /admin/... в админ-логе Telegram и темах тикетов. Пусто — берётся PUBLIC_SITE_URL.",
             ),
             (
                 "BOT_USERNAME",

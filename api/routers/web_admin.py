@@ -99,7 +99,7 @@ from shared.services.billing_v2.traffic_meter_poll_service import baseline_meter
 from shared.services.billing_v2.hwid_panel_reconcile_service import reconcile_hwid_devices_from_panel
 from shared.services.admin_purchase_refund_service import admin_refund_purchase_transaction, txn_row_refund_eligible
 from shared.services.feature_flags import set_tariff_purchases_enabled, tariff_purchases_enabled
-from shared.services.admin_notify import admin_user_ref, notify_admin
+from shared.services.admin_notify import admin_site_base_url, admin_user_ref, notify_admin
 from shared.services.web_admin_notify import (
     web_admin_actor_notify_line,
     web_admin_target_user_line,
@@ -1815,7 +1815,7 @@ def _login_method_label(kind: str, *, used_totp: bool) -> str:
 
 
 def _admin_profile_link_for_notify(settings: Settings, user: User) -> str:
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if not base:
         return ""
     return f"{base}/admin/users/{int(user.id)}"
@@ -3079,7 +3079,7 @@ async def admin_login_telegram_widget(
             return RedirectResponse("/admin/login", status_code=303)
         client_id = (settings.web_admin_telegram_client_id or "").strip()
         client_secret = (settings.web_admin_telegram_client_secret or "").strip()
-        base = (settings.public_site_url or "").strip().rstrip("/")
+        base = admin_site_base_url(settings)
         redirect_uri = (settings.web_admin_telegram_redirect_uri or "").strip() or f"{base}/admin/login/telegram/widget"
         if not client_id or not client_secret or not redirect_uri:
             return RedirectResponse("/admin/login?err=telegram_login_config", status_code=303)

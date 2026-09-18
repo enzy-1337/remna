@@ -16,7 +16,7 @@ from shared.models.device_history import DeviceHistory
 from shared.models.remnawave_webhook_event import RemnawaveWebhookEvent
 from shared.models.user import User
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin
+from shared.services.admin_notify import admin_site_base_url, notify_admin
 from shared.services.billing_v2.charging_policy import applies_pay_per_use_charges
 from shared.services.billing_v2.device_service import add_device_history_event
 from shared.services.billing_v2.billing_calendar import billing_today
@@ -167,7 +167,7 @@ def device_identity_meta_from_payload(payload: dict) -> dict[str, str]:
 
 
 def _web_admin_user_profile_url(settings: Settings, user: User) -> str:
-    base = (settings.public_site_url or "").strip().rstrip("/")
+    base = admin_site_base_url(settings)
     if not base:
         return ""
     return f"{base}/admin/users/{int(user.id)}"

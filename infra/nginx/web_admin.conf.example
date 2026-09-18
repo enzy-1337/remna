@@ -1,24 +1,32 @@
-# Пример nginx-конфига для web-admin бота.
-# Используйте отдельный поддомен (рекомендуется): admin.example.com
+# Пример nginx-конфига для веб-админки.
+# Используйте отдельный поддомен (рекомендуется): weba.example.com
+#
+# Это тот же backend, что и клиентский сайт (infra/nginx/vpn_site.conf.example) — один API-контейнер,
+# два домена (weba.example.com для админки, vpn.example.com для клиентов), проксируемые на один upstream.
+# После добавления второго домена задайте в .env: ADMIN_SITE_URL=https://weba.example.com
+# (иначе ссылки на /admin/... в Telegram-уведомлениях продолжат вести на PUBLIC_SITE_URL).
+#
+# Третий домен — для «ссылки подписки», которую видит клиент в VPN-приложении (REMNAWAVE_PUBLIC_URL) —
+# принадлежит отдельному серверу с панелью Remnawave, этим конфигом не управляется.
 #
 # Предполагается, что API контейнер уже запущен и доступен на хосте:
 #   http://127.0.0.1:8000
 #
 # SSL-сертификат можно выпускать certbot'ом:
-#   certbot --nginx -d admin.example.com
+#   certbot --nginx -d weba.example.com
 
 server {
     listen 80;
-    server_name admin.example.com;
+    server_name weba.example.com;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name admin.example.com;
+    server_name weba.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/admin.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/admin.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/weba.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/weba.example.com/privkey.pem;
 
     # Базовые безопасные настройки (опционально усиливайте под свои требования)
     ssl_session_timeout 1d;

@@ -662,8 +662,17 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="PUBLIC_SITE_URL",
         description=(
-            "Публичный HTTPS-origin сайта (например https://admin.example.com) для Telegram Login/OAuth "
-            "и абсолютных ссылок; без слэша на конце"
+            "Публичный HTTPS-origin клиентского сайта (например https://vpn.example.com) — лендинг, вход, "
+            "личный кабинет, реферальные ссылки, кнопка Mini App в боте; без слэша на конце"
+        ),
+    )
+    admin_site_url: str | None = Field(
+        default=None,
+        validation_alias="ADMIN_SITE_URL",
+        description=(
+            "Публичный HTTPS-origin веб-админки (например https://weba.example.com) — используется для "
+            "ссылок на /admin/... в админ-логе Telegram и темах тикетов. Если не задан — берётся PUBLIC_SITE_URL "
+            "(для обратной совместимости, если сайт и админка на одном домене). Без слэша на конце."
         ),
     )
     miniapp_url: str | None = Field(
@@ -877,7 +886,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("bot_section_photo_path", "bot_section_photo_url", "remnawave_public_url", "public_site_url", mode="before")
+    @field_validator("bot_section_photo_path", "bot_section_photo_url", "remnawave_public_url", "public_site_url", "admin_site_url", mode="before")
     @classmethod
     def _empty_photo_fields(cls, v: object) -> object:
         if v is None or v == "":

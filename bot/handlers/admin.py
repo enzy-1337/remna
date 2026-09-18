@@ -51,7 +51,7 @@ from shared.services.topup_service import apply_balance_credit_followups
 
 _MSK_TZ = ZoneInfo("Europe/Moscow")
 from shared.services.admin_log_topics import AdminLogTopic
-from shared.services.admin_notify import notify_admin
+from shared.services.admin_notify import admin_site_base_url, notify_admin
 from shared.services.broadcast_service import (
     MAX_MESSAGE_LEN,
     broadcast_to_users,
@@ -182,7 +182,7 @@ def _admin_analytics_section_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🎁 Массовая выдача", callback_data="admin:mass_grant"),
         InlineKeyboardButton(text="📄 Логи", callback_data="admin:logs"),
     )
-    if not (s.public_site_url or "").strip():
+    if not admin_site_base_url(s):
         b.row(
             InlineKeyboardButton(
                 text="ℹ️ Web-Admin не настроен", callback_data="admin:noop"
@@ -241,7 +241,7 @@ def _admin_profile_section_keyboard(user: User) -> InlineKeyboardMarkup:
 
 def _admin_web_keyboard() -> InlineKeyboardMarkup:
     s = get_settings()
-    root = (s.public_site_url or "").rstrip("/")
+    root = admin_site_base_url(s)
     admin_url = f"{root}/admin" if root else ""
     b = InlineKeyboardBuilder()
     if admin_url:
@@ -1063,7 +1063,7 @@ async def _build_user_card(
             )
         )
 
-    root = (get_settings().public_site_url or "").strip().rstrip("/")
+    root = admin_site_base_url(get_settings())
     if root:
         b.row(
             InlineKeyboardButton(
@@ -1347,7 +1347,7 @@ async def cb_admin_transition_calc(
             s, remaining_days=d, base_month_rub=base
         )
         lines.append(plain(f"{d} → ") + bold(str(c)) + plain(" ₽"))
-    root = (s.public_site_url or "").strip().rstrip("/")
+    root = admin_site_base_url(s)
     if root:
         lines.append(
             plain("Любое значение: раздел ")
@@ -1356,7 +1356,7 @@ async def cb_admin_transition_calc(
         )
     else:
         lines.append(
-            plain("Задайте PUBLIC_SITE_URL — там же калькулятор с полем «остаток срока».")
+            plain("Задайте ADMIN_SITE_URL (или PUBLIC_SITE_URL) — там же калькулятор с полем «остаток срока».")
         )
     await cq.answer()
     kb = InlineKeyboardBuilder()
@@ -1383,8 +1383,8 @@ async def cb_admin_web_links(cq: CallbackQuery, db_user: User | None, is_bot_adm
         await cq.answer("Сначала /start", show_alert=True)
         return
     s = get_settings()
-    if not (s.public_site_url or "").strip():
-        await cq.answer("Не задан PUBLIC_SITE_URL", show_alert=True)
+    if not admin_site_base_url(s):
+        await cq.answer("Не задан ADMIN_SITE_URL (или PUBLIC_SITE_URL)", show_alert=True)
         return
     cap = join_lines(
         "🌐 " + bold("Web-admin"),
