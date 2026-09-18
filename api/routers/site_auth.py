@@ -6,7 +6,7 @@ import logging
 
 from aiogram.types import User as TgUser
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
@@ -20,6 +20,12 @@ from shared.services.site_session_service import (
     read_session_cookie,
     revoke_session,
     set_session_cookie,
+)
+from shared.services.site_telegram_login_service import (
+    new_login_code,
+    pop_login_result,
+    save_pending_ref,
+    site_bot_deeplink,
 )
 from shared.services.site_totp_service import verify_totp_code, verify_and_consume_backup_code
 from shared.services.telegram_login_verify import verify_telegram_login
@@ -62,32 +68,57 @@ def _read_pending_2fa_user_id(request: Request) -> int | None:
         return None
 
 
+_TG_BOT_LOGIN_JS = """
+(function(){
+  var btn = document.getElementById('tg-login-btn');
+  var waitBox = document.getElementById('tg-login-wait');
+  if (!btn) return;
+  var poll = null;
+  function stopPoll(){ if (poll) { clearInterval(poll); poll = null; } }
+  btn.addEventListener('click', function(){
+    if (btn.disabled) return;
+    btn.disabled = true;
+    fetch('/login/telegram/bot-start', {method:'POST', credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d.ok) { btn.disabled = false; return; }
+        window.open(d.bot_url, '_blank', 'noopener');
+        if (waitBox) waitBox.hidden = false;
+        poll = setInterval(function(){
+          fetch('/login/telegram/bot-poll?code=' + encodeURIComponent(d.code), {credentials:'same-origin'})
+            .then(function(r){ return r.json(); })
+            .then(function(p){
+              if (p.status === 'done') { stopPoll(); window.location.href = '/app'; }
+              else if (p.status === '2fa') { stopPoll(); window.location.href = '/login/2fa'; }
+              else if (p.status === 'error') { stopPoll(); btn.disabled = false; if (waitBox) waitBox.hidden = true; }
+            })
+            .catch(function(){});
+        }, 2000);
+      })
+      .catch(function(){ btn.disabled = false; });
+  });
+})();
+"""
+
+
 def _login_page_html(*, error: str = "") -> str:
     settings = get_settings()
-    bot_id = (settings.bot_token or "").split(":", 1)[0].strip()
+    bot_username = (settings.bot_username or "").strip().lstrip("@")
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
         else ""
     )
-    # Кастомная кнопка + JS-метод Telegram.Login.auth() из официального telegram-widget.js —
-    # документированный способ для своей кнопки (в отличие от редиректа на oauth.telegram.org/auth,
-    # который Telegram отключил: проверено напрямую, отвечает "deprecated" на любой запрос).
+    # Вход через бота (диплинк + код), а не Telegram Login Widget — у Telegram сейчас отключён
+    # oauth.telegram.org/auth (проверено: отвечает "deprecated" на любой запрос, включая popup от
+    # Telegram.Login.auth() из их же официального telegram-widget.js). Тот же принцип, что уже
+    # работает у десктоп-клиента (shared/services/flux_login_service.py).
     widget = (
-        f"""<script src="https://telegram.org/js/telegram-widget.js?22"></script>
-      <button type="button" id="tg-login-btn" class="btn btn-tg btn-block">{tg_logo_svg(20, '#fff')}<span>Войти через Telegram</span></button>
-      <script>
-      document.getElementById('tg-login-btn').addEventListener('click', function(){{
-        if (typeof Telegram === 'undefined' || !Telegram.Login) return;
-        Telegram.Login.auth({{bot_id: {bot_id}, request_access: 'write'}}, function(user){{
-          if (!user) return;
-          var qs = Object.keys(user).map(function(k){{ return encodeURIComponent(k) + '=' + encodeURIComponent(user[k]); }}).join('&');
-          window.location.href = '/login/telegram/callback?' + qs;
-        }});
-      }});
-      </script>"""
-        if bot_id.isdigit()
-        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_TOKEN не настроен</div>'
+        f"""<button type="button" id="tg-login-btn" class="btn btn-tg btn-block">{tg_logo_svg(20, '#fff')}<span>Войти через Telegram</span></button>
+      <div id="tg-login-wait" hidden style="text-align:center;font:600 12px Manrope;color:var(--text-3);margin-top:-4px;">Открыли бота? Нажмите Start и подождите — страница обновится сама…</div>
+      <script>{_TG_BOT_LOGIN_JS}</script>"""
+        if bot_username
+        else '<div style="font:600 13px Manrope;color:var(--danger-soft);">BOT_USERNAME не настроен</div>'
     )
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">
@@ -114,7 +145,7 @@ def _login_page_html(*, error: str = "") -> str:
         </div>
         {err_html}
         <div style="display:flex;flex-direction:column;gap:11px;margin-top:24px;align-items:center;">
-          <div style="width:100%;display:flex;justify-content:center;">{widget}</div>
+          <div style="width:100%;display:flex;flex-direction:column;gap:8px;">{widget}</div>
           <button type="button" class="btn btn-google btn-block" disabled title="Скоро">{google_logo_svg(19)}<span>Продолжить через Google</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>
           <button type="button" class="btn btn-outline btn-block" disabled title="Скоро">{icon('devices', size=18)}<span>Войти по почте — код на e-mail</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>
         </div>
@@ -200,6 +231,43 @@ async def telegram_login_callback(request: Request) -> RedirectResponse:
             return resp
 
     return await _finish_login(request, user, login_kind="telegram")
+
+
+@router.post("/login/telegram/bot-start")
+async def telegram_bot_login_start(request: Request) -> JSONResponse:
+    """Выдаёт одноразовый код + диплинк на бота — фронт открывает бот в новой вкладке и поллит
+    /login/telegram/bot-poll, пока пользователь не нажмёт Start."""
+    settings = get_settings()
+    code = new_login_code()
+    bot_url = site_bot_deeplink(code, settings)
+    if not bot_url:
+        return JSONResponse({"ok": False, "error": "bot_unconfigured"}, status_code=503)
+    ref_code = (request.cookies.get(REF_COOKIE) or "").strip()
+    if ref_code:
+        await save_pending_ref(code, ref_code, settings=settings)
+    return JSONResponse({"ok": True, "code": code, "bot_url": bot_url})
+
+
+@router.get("/login/telegram/bot-poll")
+async def telegram_bot_login_poll(request: Request, code: str = "") -> JSONResponse:
+    settings = get_settings()
+    tg_id = await pop_login_result(code, settings=settings)
+    if tg_id is None:
+        return JSONResponse({"status": "pending"})
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await get_user_by_telegram_id(session, tg_id)
+        if user is None:
+            return JSONResponse({"status": "error"})
+        if bool(user.site_totp_enabled):
+            resp = JSONResponse({"status": "2fa"})
+            _set_pending_2fa_cookie(resp, user.id)
+            return resp
+        row = await create_session(session, user=user, request=request, login_kind="telegram_bot")
+    resp = JSONResponse({"status": "done"})
+    set_session_cookie(resp, row.session_token)
+    resp.delete_cookie(REF_COOKIE, path="/")
+    return resp
 
 
 def _otp_boxes_html() -> str:

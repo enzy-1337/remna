@@ -36,6 +36,11 @@ from shared.integrations.remnawave import (
     subscription_url_for_telegram,
 )
 from shared.services.flux_login_service import parse_login_code, save_login_url
+from shared.services.site_telegram_login_service import (
+    mark_login_done,
+    parse_site_login_code,
+    pop_pending_ref,
+)
 
 router = Router(name="start")
 
@@ -157,6 +162,29 @@ async def _handle_flux_login(
     )
 
 
+async def _handle_site_login(
+    message: Message,
+    session: AsyncSession,
+    code: str,
+    settings: Settings,
+) -> None:
+    """Вход на сайт через бота: /start sitelogin_<code>. Регистрирует нового пользователя
+    (с учётом реферального кода, сохранённого сайтом до перехода в бота), затем подтверждает код —
+    сайт получит telegram_id поллингом и продолжит вход/регистрацию сессии сам."""
+    tg_user = message.from_user
+    if tg_user is None:
+        return
+    existing = await get_user_by_telegram_id(session, tg_user.id)
+    if existing is None:
+        ref_code = await pop_pending_ref(code, settings=settings)
+        start_args = f"ref_{ref_code}" if ref_code else None
+        await register_user(session, tg_user, start_args)
+    await mark_login_done(code, tg_user.id, settings=settings)
+    await message.answer(
+        esc("✅ Вход на сайт подтверждён. Вернитесь на сайт — он продолжит автоматически.")
+    )
+
+
 @router.message(CommandStart())
 async def cmd_start(
     message: Message,
@@ -176,6 +204,13 @@ async def cmd_start(
         if existing is not None:
             await _handle_flux_login(message, session, existing, flux_code, settings)
             return
+
+    # Вход на сайт: `sitelogin_<code>` — регистрирует при необходимости и подтверждает код,
+    # который поллит сайт (см. shared/services/site_telegram_login_service.py).
+    site_code = parse_site_login_code(payload)
+    if site_code and message.from_user is not None:
+        await _handle_site_login(message, session, site_code, settings)
+        return
 
     if not is_channel_member:
         if message.from_user is not None:
