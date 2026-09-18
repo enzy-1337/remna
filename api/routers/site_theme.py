@@ -403,6 +403,7 @@ def public_topbar(*, active: str = "") -> str:
 def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: str) -> str:
     items = [
         ("Главная", "/app", "home", "home"),
+        ("Подписка", "/app/subscription", "shield", "subscription"),
         ("Рефералка", "/app/referrals", "people", "referrals"),
         ("Тикеты", "/app/tickets", "tickets", "tickets"),
         ("Помощь", "/app/help", "help", "help"),

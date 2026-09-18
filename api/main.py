@@ -43,6 +43,7 @@ from api.routers import (
     site_notifications,
     site_profile,
     site_referral,
+    site_subscription,
     site_tickets,
     tickets_api,
     web_admin,
@@ -278,6 +279,7 @@ app.include_router(mass_grant_pages.router, prefix="/admin")
 app.include_router(logs_pages.router, prefix="/admin")
 app.include_router(site_auth.router)
 app.include_router(site_dashboard.router)
+app.include_router(site_subscription.router)
 app.include_router(site_referral.router)
 app.include_router(site_tickets.router)
 app.include_router(site_help.router)

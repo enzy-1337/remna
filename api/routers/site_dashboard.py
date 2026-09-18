@@ -164,8 +164,8 @@ async def dashboard(request: Request) -> HTMLResponse:
               <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Продление {esc(sub.expires_at.strftime('%-d %B %Y') if sub.expires_at else '—')} · автоплатёж {'включён' if sub.auto_renew else 'выключен'}</div>
               {traffic_html}
               <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;">
-                <a href="{bot_deep_link(settings)}" class="btn btn-primary btn-sm">Продлить</a>
-                <a href="{bot_deep_link(settings)}" class="btn btn-outline btn-sm">Открыть в боте</a>
+                <a href="/app/subscription" class="btn btn-primary btn-sm">Продлить</a>
+                <a href="/app/subscription" class="btn btn-outline btn-sm">Ключ и устройства</a>
               </div>
             </div>
           </div>
@@ -175,8 +175,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         <div class="card card-accent" style="text-align:center;">
           <div style="width:44px;height:44px;border-radius:13px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;margin:0 auto;">{icon('shield', size=20, color='#7B5CFF')}</div>
           <div style="font:800 17px Manrope;color:var(--text-1);margin-top:14px;">Подписки нет</div>
-          <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Оформите тариф в боте, чтобы открыть доступ ко всем локациям</div>
-          <a href="{bot_deep_link(settings)}" class="btn btn-primary" style="margin-top:16px;">Выбрать тариф</a>
+          <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Выберите тариф, чтобы открыть доступ ко всем локациям</div>
+          <a href="/app/subscription" class="btn btn-primary" style="margin-top:16px;">Выбрать тариф</a>
         </div>"""
 
     txns_html = "".join(_txn_row_html(t) for t in txns) or '<div style="opacity:.5;font:500 13px Manrope;padding:12px 0;">Пока нет операций</div>'
