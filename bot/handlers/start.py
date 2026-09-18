@@ -6,7 +6,13 @@ from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
-from aiogram.types import CallbackQuery, Message, User as TgUser
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    User as TgUser,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,8 +41,13 @@ from shared.integrations.remnawave import (
     RemnaWaveError,
     subscription_url_for_telegram,
 )
-from shared.services.flux_login_service import parse_login_code, save_login_url
+from shared.services.flux_login_service import (
+    mark_login_declined as mark_flux_login_declined,
+    parse_login_code,
+    save_login_url,
+)
 from shared.services.site_telegram_login_service import (
+    mark_login_declined as mark_site_login_declined,
     mark_login_done,
     parse_site_login_code,
     pop_pending_ref,
@@ -127,6 +138,17 @@ def extract_start_payload(message: Message) -> str | None:
     return parts[1].strip() if len(parts) > 1 else None
 
 
+def _login_confirm_keyboard(kind: str, code: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить вход", callback_data=f"{kind}:ok:{code}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"{kind}:no:{code}"),
+            ]
+        ]
+    )
+
+
 async def _handle_flux_login(
     message: Message,
     session: AsyncSession,
@@ -134,8 +156,8 @@ async def _handle_flux_login(
     code: str,
     settings: Settings,
 ) -> None:
-    """Resolve the user's subscription URL and bind it to the login code so the
-    Flux desktop client (polling the API) can pick it up."""
+    """/start fluxlogin_<code>: показывает запрос на подтверждение входа в приложение Flux Client —
+    саму ссылку подписки резолвим только после нажатия «Подтвердить» (см. cb_flux_login_decision)."""
     if user.remnawave_uuid is None:
         await message.answer(
             esc(
@@ -144,21 +166,9 @@ async def _handle_flux_login(
             )
         )
         return
-    rw = RemnaWaveClient(settings)
-    uinf: dict | None = None
-    try:
-        uinf = await rw.get_user(str(user.remnawave_uuid))
-    except RemnaWaveError:
-        uinf = None
-    url = subscription_url_for_telegram((uinf or {}).get("subscriptionUrl"), settings) if uinf else None
-    if not url:
-        await message.answer(
-            esc("Не удалось получить ссылку подписки. Продлите подписку и повторите вход.")
-        )
-        return
-    await save_login_url(code, url, settings=settings)
     await message.answer(
-        esc("✅ Вход в приложение Flux подтверждён. Вернитесь в приложение — оно продолжит автоматически.")
+        esc("🔐 Кто-то пытается войти в приложение Flux Client с вашим аккаунтом. Это вы?"),
+        reply_markup=_login_confirm_keyboard("fl", code),
     )
 
 
@@ -168,21 +178,95 @@ async def _handle_site_login(
     code: str,
     settings: Settings,
 ) -> None:
-    """Вход на сайт через бота: /start sitelogin_<code>. Регистрирует нового пользователя
-    (с учётом реферального кода, сохранённого сайтом до перехода в бота), затем подтверждает код —
-    сайт получит telegram_id поллингом и продолжит вход/регистрацию сессии сам."""
-    tg_user = message.from_user
-    if tg_user is None:
+    """/start sitelogin_<code>: показывает запрос на подтверждение входа на сайт — регистрация
+    и создание сессии сайта происходят только после нажатия «Подтвердить» (cb_site_login_decision)."""
+    if message.from_user is None:
         return
-    existing = await get_user_by_telegram_id(session, tg_user.id)
+    await message.answer(
+        esc("🔐 Кто-то пытается войти в личный кабинет на сайте Flux Network с вашим аккаунтом. Это вы?"),
+        reply_markup=_login_confirm_keyboard("sl", code),
+    )
+
+
+def _parse_login_callback(data: str | None) -> tuple[str, str] | None:
+    parts = (data or "").split(":", 2)
+    if len(parts) != 3:
+        return None
+    _kind, action, code = parts
+    if action not in ("ok", "no") or not code:
+        return None
+    return action, code
+
+
+@router.callback_query(F.data.startswith("fl:"))
+async def cb_flux_login_decision(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None or cq.message is None:
+        await cq.answer()
+        return
+    parsed = _parse_login_callback(cq.data)
+    if parsed is None:
+        await cq.answer()
+        return
+    action, code = parsed
+    settings = get_settings()
+    if action == "no":
+        await mark_flux_login_declined(code, settings=settings)
+        await cq.message.edit_text(esc("Вход в приложение Flux Client отклонён."))
+        await cq.answer()
+        return
+    user = await get_user_by_telegram_id(session, cq.from_user.id)
+    if user is None or user.remnawave_uuid is None:
+        await cq.message.edit_text(
+            esc("У вас пока нет активной подписки. Оформите её в боте и повторите вход.")
+        )
+        await cq.answer()
+        return
+    rw = RemnaWaveClient(settings)
+    uinf: dict | None = None
+    try:
+        uinf = await rw.get_user(str(user.remnawave_uuid))
+    except RemnaWaveError:
+        uinf = None
+    url = subscription_url_for_telegram((uinf or {}).get("subscriptionUrl"), settings) if uinf else None
+    if not url:
+        await cq.message.edit_text(
+            esc("Не удалось получить ссылку подписки. Продлите подписку и повторите вход.")
+        )
+        await cq.answer()
+        return
+    await save_login_url(code, url, settings=settings)
+    await cq.message.edit_text(
+        esc("✅ Вход в приложение Flux подтверждён. Вернитесь в приложение — оно продолжит автоматически.")
+    )
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("sl:"))
+async def cb_site_login_decision(cq: CallbackQuery, session: AsyncSession) -> None:
+    if cq.from_user is None or cq.message is None:
+        await cq.answer()
+        return
+    parsed = _parse_login_callback(cq.data)
+    if parsed is None:
+        await cq.answer()
+        return
+    action, code = parsed
+    settings = get_settings()
+    if action == "no":
+        await mark_site_login_declined(code, settings=settings)
+        await cq.message.edit_text(esc("Вход на сайт отклонён."))
+        await cq.answer()
+        return
+    existing = await get_user_by_telegram_id(session, cq.from_user.id)
     if existing is None:
         ref_code = await pop_pending_ref(code, settings=settings)
         start_args = f"ref_{ref_code}" if ref_code else None
-        await register_user(session, tg_user, start_args)
-    await mark_login_done(code, tg_user.id, settings=settings)
-    await message.answer(
+        await register_user(session, cq.from_user, start_args)
+    await mark_login_done(code, cq.from_user.id, settings=settings)
+    await cq.message.edit_text(
         esc("✅ Вход на сайт подтверждён. Вернитесь на сайт — он продолжит автоматически.")
     )
+    await cq.answer()
 
 
 @router.message(CommandStart())

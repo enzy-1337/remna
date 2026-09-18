@@ -157,7 +157,7 @@ async def tickets_page(request: Request, ticket: int = 0) -> HTMLResponse:
     {site_footer()}
   </div>
 </div>
-<div id="new-ticket-modal" hidden style="position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:16px;">
+<div id="new-ticket-modal" class="modal-overlay">
   <div class="fade-in" style="width:100%;max-width:420px;background:var(--card-2);border:1px solid var(--line-2);border-radius:18px;padding:24px;">
     <div style="font:800 17px Manrope;color:var(--text-1);">Новый тикет</div>
     <textarea id="new-ticket-text" class="input" rows="4" placeholder="Опишите проблему…" style="margin-top:14px;resize:vertical;"></textarea>
@@ -168,8 +168,9 @@ async def tickets_page(request: Request, ticket: int = 0) -> HTMLResponse:
   </div>
 </div>
 <script>
-document.querySelectorAll('[data-new-ticket]').forEach(function(b){{b.addEventListener('click',function(){{document.getElementById('new-ticket-modal').hidden=false;}});}});
-document.querySelectorAll('[data-close-new-ticket]').forEach(function(b){{b.addEventListener('click',function(){{document.getElementById('new-ticket-modal').hidden=true;}});}});
+document.querySelectorAll('[data-new-ticket]').forEach(function(b){{b.addEventListener('click',function(){{document.getElementById('new-ticket-modal').classList.add('open');}});}});
+document.querySelectorAll('[data-close-new-ticket]').forEach(function(b){{b.addEventListener('click',function(){{document.getElementById('new-ticket-modal').classList.remove('open');}});}});
+document.getElementById('new-ticket-modal').addEventListener('click',function(e){{ if (e.target === this) this.classList.remove('open'); }});
 document.querySelectorAll('[data-submit-new-ticket]').forEach(function(b){{b.addEventListener('click',function(){{
   var val=document.getElementById('new-ticket-text').value.trim();
   if(!val) return;

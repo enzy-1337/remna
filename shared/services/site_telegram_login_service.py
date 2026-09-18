@@ -77,8 +77,11 @@ async def pop_pending_ref(code: str, *, settings: Settings | None = None) -> str
     return (str(val).strip() or None) if val else None
 
 
+_DECLINED = "declined"
+
+
 async def mark_login_done(code: str, telegram_id: int, *, settings: Settings | None = None) -> None:
-    """Вызывается ботом на /start sitelogin_<code> — сохраняет подтверждённого пользователя."""
+    """Вызывается ботом после нажатия «Подтвердить» — сохраняет подтверждённого пользователя."""
     s = settings or get_settings()
     try:
         r = _client(s.redis_url)
@@ -90,8 +93,22 @@ async def mark_login_done(code: str, telegram_id: int, *, settings: Settings | N
         logger.exception("mark_login_done failed")
 
 
-async def pop_login_result(code: str, *, settings: Settings | None = None) -> int | None:
-    """Сайт поллит этим — вернёт telegram_id один раз, затем код удаляется."""
+async def mark_login_declined(code: str, *, settings: Settings | None = None) -> None:
+    """Вызывается ботом после нажатия «Отклонить»."""
+    s = settings or get_settings()
+    try:
+        r = _client(s.redis_url)
+        try:
+            await r.set(_RESULT_KEY.format(code=code), _DECLINED, ex=_TTL_SEC)
+        finally:
+            await r.aclose()
+    except Exception:
+        logger.exception("mark_login_declined failed")
+
+
+async def pop_login_result(code: str, *, settings: Settings | None = None) -> int | str | None:
+    """Сайт поллит этим. Возвращает: None (ещё не подтверждено/не отклонено), "declined"
+    (пользователь нажал «Отклонить») или telegram_id (int) при подтверждении. Одноразово."""
     code = (code or "").strip()
     if not code:
         return None
@@ -110,6 +127,8 @@ async def pop_login_result(code: str, *, settings: Settings | None = None) -> in
         return None
     if not val:
         return None
+    if val == _DECLINED:
+        return _DECLINED
     try:
         return int(val)
     except (TypeError, ValueError):

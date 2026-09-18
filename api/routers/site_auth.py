@@ -94,6 +94,7 @@ _TG_BOT_LOGIN_JS = """
             .then(function(p){
               if (p.status === 'done') { stopPoll(); window.location.href = '/app'; }
               else if (p.status === '2fa') { stopPoll(); window.location.href = '/login/2fa'; }
+              else if (p.status === 'declined') { stopPoll(); btn.disabled = false; if (waitBox) { waitBox.textContent = 'Вход отклонён в Telegram. Попробуйте ещё раз.'; } }
               else if (p.status === 'error') { stopPoll(); btn.disabled = false; if (waitBox) waitBox.hidden = true; }
             })
             .catch(function(){});
@@ -422,9 +423,12 @@ async def telegram_bot_login_start(request: Request) -> JSONResponse:
 @router.get("/login/telegram/bot-poll")
 async def telegram_bot_login_poll(request: Request, code: str = "") -> JSONResponse:
     settings = get_settings()
-    tg_id = await pop_login_result(code, settings=settings)
-    if tg_id is None:
+    result = await pop_login_result(code, settings=settings)
+    if result is None:
         return JSONResponse({"status": "pending"})
+    if result == "declined":
+        return JSONResponse({"status": "declined"})
+    tg_id = result
     factory = get_session_factory()
     async with factory() as session:
         user = await get_user_by_telegram_id(session, tg_id)

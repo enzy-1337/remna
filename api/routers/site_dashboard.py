@@ -271,7 +271,7 @@ async def dashboard(request: Request) -> HTMLResponse:
   </div>
 </div>
 
-<div id="promo-modal" hidden style="position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:16px;">
+<div id="promo-modal" class="modal-overlay">
   <div class="fade-in" style="width:100%;max-width:380px;background:var(--card-2);border:1px solid var(--line-2);border-radius:18px;padding:24px;">
     <div style="font:800 17px Manrope;color:var(--text-1);">Активировать промокод</div>
     <form method="post" action="/app/promo" style="margin-top:16px;">
@@ -284,8 +284,9 @@ async def dashboard(request: Request) -> HTMLResponse:
   </div>
 </div>
 <script>
-document.querySelectorAll('[data-open-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').hidden = false; }}); }});
-document.querySelectorAll('[data-close-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').hidden = true; }}); }});
+document.querySelectorAll('[data-open-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').classList.add('open'); }}); }});
+document.querySelectorAll('[data-close-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').classList.remove('open'); }}); }});
+document.getElementById('promo-modal').addEventListener('click', function(e){{ if (e.target === this) this.classList.remove('open'); }});
 </script>
 """
     resp_body = page(title="Личный кабинет — Flux Network", body=body)

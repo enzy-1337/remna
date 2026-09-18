@@ -193,6 +193,8 @@ img{max-width:100%;}
 
 /* --- misc --- */
 .divider{height:1px;background:var(--line);}
+.modal-overlay{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:16px;}
+.modal-overlay.open{display:flex;}
 .vdivider{width:1px;background:var(--line-2);}
 .opacity-60{opacity:.6;}
 .grid-auto{display:grid;gap:16px;}

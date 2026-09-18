@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from shared.config import get_settings
-from shared.services.flux_login_service import bot_deeplink, new_login_code, pop_login_url
+from shared.services.flux_login_service import DECLINED, bot_deeplink, new_login_code, pop_login_url
 
 router = APIRouter()
 
@@ -24,9 +24,12 @@ async def flux_login_start() -> JSONResponse:
 
 @router.get("/api/flux/login/{code}")
 async def flux_login_poll(code: str) -> JSONResponse:
-    """Poll a login code. Returns the subscription URL once the bot has set it."""
+    """Poll a login code. Returns the subscription URL once the bot has set it, or
+    status "declined" if the user tapped «Отклонить» on the confirmation prompt in Telegram."""
     settings = get_settings()
     url = await pop_login_url(code, settings=settings)
-    if url:
-        return JSONResponse({"ok": True, "status": "ok", "subscription_url": url})
-    return JSONResponse({"ok": True, "status": "pending"})
+    if not url:
+        return JSONResponse({"ok": True, "status": "pending"})
+    if url == DECLINED:
+        return JSONResponse({"ok": True, "status": "declined"})
+    return JSONResponse({"ok": True, "status": "ok", "subscription_url": url})

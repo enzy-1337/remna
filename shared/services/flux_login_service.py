@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _KEY = "flux_login:{code}"
 _TTL_SEC = 300  # 5 min to finish login before the code expires
 _PREFIX = "fluxlogin_"
+DECLINED = "declined"
 
 
 def _client(url: str) -> redis.Redis:
@@ -63,6 +64,11 @@ async def save_login_url(code: str, url: str, *, settings: Settings | None = Non
             await r.aclose()
     except Exception:
         logger.exception("save_login_url failed")
+
+
+async def mark_login_declined(code: str, *, settings: Settings | None = None) -> None:
+    """Bind DECLINED to the code — set when the user taps «Отклонить» in the bot."""
+    await save_login_url(code, DECLINED, settings=settings)
 
 
 async def pop_login_url(code: str, *, settings: Settings | None = None) -> str | None:
