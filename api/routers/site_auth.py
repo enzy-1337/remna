@@ -28,6 +28,7 @@ from shared.services.site_session_service import (
 from shared.services.site_telegram_login_service import (
     new_login_code,
     pop_login_result,
+    save_pending_device,
     save_pending_ref,
     site_bot_deeplink,
 )
@@ -37,7 +38,7 @@ from shared.services.user_registration import get_user_by_telegram_id, register_
 from shared.models.user import User
 
 from api.routers.site_landing import REF_COOKIE
-from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, tg_logo_svg, google_logo_svg
+from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, tg_logo_svg, google_logo_svg, ua_label
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -417,6 +418,8 @@ async def telegram_bot_login_start(request: Request) -> JSONResponse:
     ref_code = (request.cookies.get(REF_COOKIE) or "").strip()
     if ref_code:
         await save_pending_ref(code, ref_code, settings=settings)
+    device_label = ua_label(request.headers.get("user-agent"))
+    await save_pending_device(code, device_label, settings=settings)
     return JSONResponse({"ok": True, "code": code, "bot_url": bot_url})
 
 

@@ -170,14 +170,17 @@ img{max-width:100%;}
 .tab.active{background:var(--accent);color:#fff;}
 
 /* --- accordion (FAQ) --- */
-.acc-item{border-radius:14px;transition:background .2s ease,border-color .2s ease;}
-.acc-item.open{background:rgba(123,92,255,.1);border:1px solid rgba(123,92,255,.3);}
+.acc-item{border-radius:14px;border:1px solid transparent;transition:background .25s ease,border-color .25s ease;margin-bottom:8px;}
+.acc-item:last-child{margin-bottom:0;}
+.acc-item.open{background:rgba(123,92,255,.1);border-color:rgba(123,92,255,.3);}
 .acc-head{display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer;}
 .acc-title{flex:1;font:700 14px Manrope;color:var(--text-1);}
-.acc-chevron{transition:transform .25s ease;color:var(--text-3);}
+.acc-chevron{transition:transform .35s cubic-bezier(.22,1,.36,1);color:var(--text-3);flex-shrink:0;}
 .acc-item.open .acc-chevron{transform:rotate(180deg);color:var(--accent-soft);}
-.acc-body{max-height:0;overflow:hidden;transition:max-height .3s ease;padding:0 16px;}
-.acc-item.open .acc-body{max-height:400px;padding:0 16px 16px 46px;}
+.acc-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .35s cubic-bezier(.22,1,.36,1);}
+.acc-item.open .acc-body{grid-template-rows:1fr;}
+.acc-body>div{overflow:hidden;min-height:0;}
+.acc-body-inner{padding:0 16px 16px 46px;}
 .acc-body p{margin:0;font:500 13.5px Manrope;color:var(--text-3);line-height:1.6;}
 
 /* --- chat / tickets --- */
@@ -195,6 +198,10 @@ img{max-width:100%;}
 .divider{height:1px;background:var(--line);}
 .modal-overlay{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:16px;}
 .modal-overlay.open{display:flex;}
+.toast-stack{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px;max-width:calc(100vw - 32px);}
+.toast{background:var(--card-2);border:1px solid var(--line-2);border-left:3px solid var(--accent-soft);border-radius:12px;padding:12px 16px;font:600 13px Manrope;color:var(--text-1);box-shadow:0 20px 50px -15px rgba(0,0,0,.6);max-width:340px;animation:fadeUp .3s ease both;}
+.toast.success{border-left-color:var(--success);}
+.toast.error{border-left-color:var(--danger);color:var(--danger-soft);}
 .vdivider{width:1px;background:var(--line-2);}
 .opacity-60{opacity:.6;}
 .grid-auto{display:grid;gap:16px;}
@@ -208,8 +215,24 @@ footer.site-footer{border-top:1px solid var(--line);padding:26px 0;display:flex;
 
 @media (max-width:900px){
   .cols-2{grid-template-columns:1fr !important;}
+  .topbar{border-radius:22px;}
   .topbar-links{order:3;width:100%;justify-content:center;padding-top:6px;border-top:1px solid var(--line-2);margin-top:6px;}
   .hide-mobile{display:none !important;}
+}
+@media (max-width:640px){
+  body{font-size:14px;}
+  .hero-bg [style*="padding:96px 0 0"]{padding-top:56px !important;}
+  #features{margin-top:56px !important;}
+  #pricing{margin-top:40px !important;padding:24px 20px !important;flex-direction:column;align-items:stretch !important;}
+  .card{padding:16px !important;}
+  .topbar{gap:4px;padding:6px 8px;}
+  .topbar-link span{display:none;}
+  .topbar-link{padding:9px;}
+  .brand-name{font-size:13px;}
+  .balance-chip span{font-size:12px;}
+  h1,[style*="font:800 clamp"]{line-height:1.15;}
+  .modal-overlay>div{max-width:100% !important;}
+  #notifs-dropdown{right:8px !important;left:8px;width:auto !important;}
 }
 """
 
@@ -289,6 +312,45 @@ def google_logo_svg(size: int = 18) -> str:
 # ---------------------------------------------------------------------------
 
 
+_TOAST_JS = """
+window.remnaToast = function(kind, text){
+  var stack = document.getElementById('toast-stack');
+  if(!stack){ stack = document.createElement('div'); stack.id='toast-stack'; stack.className='toast-stack'; document.body.appendChild(stack); }
+  var el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = text;
+  stack.appendChild(el);
+  setTimeout(function(){
+    el.style.transition = 'opacity .3s ease, transform .3s ease';
+    el.style.opacity = '0'; el.style.transform = 'translateY(6px)';
+    setTimeout(function(){ el.remove(); }, 300);
+  }, 3800);
+};
+(function(){
+  try {
+    var u = new URL(window.location.href);
+    var n = u.searchParams.get('n');
+    var err = u.searchParams.get('err');
+    var map = {
+      promo_ok: 'Промокод активирован.',
+      promo_err: 'Не удалось активировать промокод — проверьте код.',
+      '2fa_on': 'Двухфакторная аутентификация включена.',
+      '2fa_off': 'Двухфакторная аутентификация выключена.',
+      sessions_revoked: 'Сессии завершены.'
+    };
+    if (n && map[n]) window.remnaToast('success', map[n]);
+    if (err) window.remnaToast('error', err);
+    if (n || err) {
+      u.searchParams.delete('n');
+      u.searchParams.delete('err');
+      var qs = u.searchParams.toString();
+      window.history.replaceState({}, '', u.pathname + (qs ? '?' + qs : ''));
+    }
+  } catch (e) {}
+})();
+"""
+
+
 def page(*, title: str, body: str, extra_head: str = "") -> str:
     return f"""<!doctype html>
 <html lang="ru">
@@ -302,6 +364,7 @@ def page(*, title: str, body: str, extra_head: str = "") -> str:
 </head>
 <body>
 {body}
+<script>{_TOAST_JS}</script>
 </body>
 </html>"""
 
@@ -350,29 +413,95 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
         f'{icon(ic, size=13)}<span>{esc(label)}</span></a>'
         for label, href, ic, key in items
     )
-    badge = (
-        f'<div style="position:absolute;top:-2px;right:-2px;min-width:15px;height:15px;border-radius:8px;'
-        f'background:var(--accent);display:flex;align-items:center;justify-content:center;font:800 9px Manrope;color:#fff;padding:0 4px;">'
-        f"{unread_tickets}</div>"
-        if unread_tickets > 0
-        else ""
-    )
     return f"""
 <div class="topbar-wrap fade-up">
   <div class="topbar">
     {brand_mark()}
     <div class="topbar-links">{links}</div>
     <div class="topbar-sep hide-mobile"></div>
-    <div style="display:flex;align-items:center;gap:6px;">
-      <a class="balance-chip" href="/app#topup" title="Пополнить баланс">{icon('wallet', size=14, color='var(--accent-soft)')}<span>{esc(balance_rub)} ₽</span><span style="color:var(--accent);font-weight:800;">+</span></a>
-      <a class="icon-btn" href="/app/tickets" style="position:relative;" title="Тикеты">{icon('tickets', size=15)}{badge}</a>
+    <div style="display:flex;align-items:center;gap:6px;position:relative;">
+      <button type="button" class="balance-chip" style="border:0;cursor:pointer;" data-open-topup title="Пополнить баланс">{icon('wallet', size=14, color='var(--accent-soft)')}<span>{esc(balance_rub)} ₽</span><span style="color:var(--accent);font-weight:800;">+</span></button>
+      <button type="button" class="icon-btn" style="position:relative;" data-open-notifs title="Уведомления">{icon('bell', size=15)}</button>
+      <div id="notifs-dropdown" hidden style="position:absolute;top:calc(100% + 10px);right:96px;width:300px;background:var(--card-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 30px 60px -20px rgba(0,0,0,.7);z-index:70;overflow:hidden;">
+        <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;">
+          <span style="font:800 14px Manrope;color:var(--text-1);">Уведомления</span>
+          <button type="button" class="icon-btn" style="width:24px;height:24px;" data-close-notifs>{icon('x', size=12)}</button>
+        </div>
+        <div style="padding:32px 16px;text-align:center;">
+          <div style="width:36px;height:36px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;margin:0 auto;">{icon('bell', size=16, color='var(--text-4)')}</div>
+          <div style="font:600 12.5px Manrope;color:var(--text-4);margin-top:10px;">Пока нет уведомлений</div>
+        </div>
+      </div>
       <a class="avatar-circle" href="/app/profile" style="width:30px;height:30px;" title="Профиль">{esc(initial)}</a>
       <form method="post" action="/logout" style="margin:0;">
         <button type="submit" class="icon-btn" title="Выйти">{icon('logout', size=15)}</button>
       </form>
     </div>
   </div>
-</div>"""
+</div>
+
+<div id="topup-modal" class="modal-overlay">
+  <div class="fade-in" style="width:100%;max-width:380px;background:var(--card-2);border:1px solid var(--line-2);border-radius:18px;padding:24px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:38px;height:38px;border-radius:11px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;">{icon('wallet', size=18, color='var(--accent-soft)')}</div>
+      <div>
+        <div style="font:800 16px Manrope;color:var(--text-1);">Пополнение баланса</div>
+        <div style="font:500 11px Manrope;color:var(--text-4);">Текущий баланс: {esc(balance_rub)} ₽</div>
+      </div>
+    </div>
+    <form method="post" action="/app/topup" style="margin-top:18px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:8px;">
+        {"".join(f'<button type="button" class="btn btn-outline btn-sm" data-amount-btn data-amount="{a}">{a} ₽</button>' for a in (100, 200, 500, 1000))}
+      </div>
+      <input class="input mono" name="amount" id="topup-amount" placeholder="Своя сумма, ₽" inputmode="numeric" style="margin-top:10px;" required/>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button type="button" class="btn btn-outline btn-block" data-close-topup>Отмена</button>
+        <button type="submit" class="btn btn-primary btn-block">Пополнить</button>
+      </div>
+    </form>
+  </div>
+</div>
+{f'''<div id="support-fab" style="position:fixed;right:20px;bottom:20px;z-index:90;">
+  <div id="support-popover" hidden style="position:absolute;bottom:64px;right:0;width:min(280px,calc(100vw - 40px));background:var(--card-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 30px 60px -20px rgba(0,0,0,.7);padding:16px;">
+    <div style="font:800 14px Manrope;color:var(--text-1);">Нужна помощь?</div>
+    <div style="font:500 12px Manrope;color:var(--text-4);margin-top:4px;">Напишите нам — ответим в тикете личного кабинета.</div>
+    <a href="/app/tickets" class="btn btn-primary btn-block" style="margin-top:12px;">{icon('chat', size=15, color='#fff')}<span>Открыть тикеты</span></a>
+  </div>
+  <button type="button" id="support-fab-btn" class="icon-btn" style="width:52px;height:52px;background:var(--accent);color:#fff;box-shadow:0 16px 40px -12px rgba(123,92,255,.9);">{icon('chat', size=20, color='#fff')}</button>
+</div>
+<script>
+(function(){{
+  var fabBtn = document.getElementById('support-fab-btn');
+  var pop = document.getElementById('support-popover');
+  if (fabBtn && pop) {{
+    fabBtn.addEventListener('click', function(e){{ e.stopPropagation(); pop.hidden = !pop.hidden; }});
+    document.addEventListener('click', function(e){{ if (!pop.hidden && !pop.contains(e.target) && e.target !== fabBtn) pop.hidden = true; }});
+  }}
+}})();
+</script>''' if active != "tickets" else ""}
+<script>
+(function(){{
+  var topupModal = document.getElementById('topup-modal');
+  var topupInput = document.getElementById('topup-amount');
+  document.querySelectorAll('[data-open-topup]').forEach(function(b){{ b.addEventListener('click', function(){{ topupModal.classList.add('open'); topupInput.focus(); }}); }});
+  document.querySelectorAll('[data-close-topup]').forEach(function(b){{ b.addEventListener('click', function(){{ topupModal.classList.remove('open'); }}); }});
+  topupModal.addEventListener('click', function(e){{ if (e.target === this) this.classList.remove('open'); }});
+  document.querySelectorAll('[data-amount-btn]').forEach(function(b){{
+    b.addEventListener('click', function(){{
+      topupInput.value = b.getAttribute('data-amount');
+      document.querySelectorAll('[data-amount-btn]').forEach(function(x){{ x.classList.remove('btn-primary'); x.classList.add('btn-outline'); }});
+      b.classList.remove('btn-outline'); b.classList.add('btn-primary');
+    }});
+  }});
+  var notifsBtn = document.querySelector('[data-open-notifs]');
+  var notifsDd = document.getElementById('notifs-dropdown');
+  if (notifsBtn && notifsDd) {{
+    notifsBtn.addEventListener('click', function(e){{ e.stopPropagation(); notifsDd.hidden = !notifsDd.hidden; }});
+    document.querySelectorAll('[data-close-notifs]').forEach(function(b){{ b.addEventListener('click', function(){{ notifsDd.hidden = true; }}); }});
+    document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && e.target !== notifsBtn) notifsDd.hidden = true; }});
+  }}
+}})();
+</script>"""
 
 
 def site_footer() -> str:
@@ -452,6 +581,34 @@ def fmt_money(value) -> str:
         return "0"
     s = f"{n:,.0f}".replace(",", " ")
     return s
+
+
+def ua_label(ua: str | None) -> str:
+    """Короткая метка устройства/браузера из User-Agent, например «Windows · Chrome»."""
+    ua = ua or ""
+    if "iPhone" in ua or "iOS" in ua:
+        plat = "iPhone"
+    elif "Android" in ua:
+        plat = "Android"
+    elif "Macintosh" in ua:
+        plat = "macOS"
+    elif "Windows" in ua:
+        plat = "Windows"
+    elif "Linux" in ua:
+        plat = "Linux"
+    else:
+        plat = "Устройство"
+    if "Chrome" in ua:
+        browser = "Chrome"
+    elif "Firefox" in ua:
+        browser = "Firefox"
+    elif "Safari" in ua and "Chrome" not in ua:
+        browser = "Safari"
+    elif "Edg" in ua:
+        browser = "Edge"
+    else:
+        browser = "браузер"
+    return f"{plat} · {browser}"
 
 
 def bot_deep_link(settings: Settings) -> str:

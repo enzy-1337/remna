@@ -131,7 +131,7 @@ def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) 
       </div>
     </div>
 
-    <div id="features" class="grid-auto fade-up d2" style="grid-template-columns:repeat(4,1fr);margin:100px 0 0;">
+    <div id="features" class="grid-auto fade-up d2" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:100px 0 0;">
       {features_html}
     </div>
 

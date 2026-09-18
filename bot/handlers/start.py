@@ -47,6 +47,7 @@ from shared.services.flux_login_service import (
     save_login_url,
 )
 from shared.services.site_telegram_login_service import (
+    get_pending_device,
     mark_login_declined as mark_site_login_declined,
     mark_login_done,
     parse_site_login_code,
@@ -182,8 +183,18 @@ async def _handle_site_login(
     и создание сессии сайта происходят только после нажатия «Подтвердить» (cb_site_login_decision)."""
     if message.from_user is None:
         return
+    device = await get_pending_device(code, settings=settings)
+    lines = [bold("🔒 Подтвердите вход на сайт Flux Network")]
+    if device:
+        lines.append(esc(f"Устройство: {device}"))
+    lines.append(
+        esc(
+            "Подтвердите вход, только если это вы сами открыли сайт на этом устройстве. "
+            "Никому не пересылайте это сообщение."
+        )
+    )
     await message.answer(
-        esc("🔐 Кто-то пытается войти в личный кабинет на сайте Flux Network с вашим аккаунтом. Это вы?"),
+        join_lines(*lines),
         reply_markup=_login_confirm_keyboard("sl", code),
     )
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -21,6 +22,7 @@ from shared.services.promo_service import apply_promo_code_for_user_v2
 from shared.services.referral_service import count_invited_users, sum_referrer_bonus_rub
 from shared.services.site_session_service import load_site_user, touch_session
 from shared.services.subscription_service import get_active_subscription, subscription_days_left
+from shared.services.topup_service import create_topup_payment
 
 from api.routers.site_theme import (
     app_topbar,
@@ -200,7 +202,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       <div style="display:flex;flex-direction:column;gap:20px;min-width:0;">
         {sub_card}
 
-        <div class="grid-auto" style="grid-template-columns:repeat(3,1fr);">
+        <div class="grid-auto" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
           <button class="card" style="text-align:left;border:0;cursor:pointer;" data-open-promo>
             <div style="width:30px;height:30px;border-radius:9px;background:rgba(245,181,68,.12);display:flex;align-items:center;justify-content:center;">{icon('coupon', size=15, color='#F5B544')}</div>
             <div style="font:700 13px Manrope;color:var(--text-1);margin-top:10px;">Купон</div>
@@ -315,3 +317,38 @@ async def activate_promo(request: Request, code: str = Form("")) -> RedirectResp
         ok, _msg, _data = await apply_promo_code_for_user_v2(session, settings=settings, user=user, raw_code=code)
         await session.commit()
     return RedirectResponse("/app?n=" + ("promo_ok" if ok else "promo_err"), status_code=303)
+
+
+@router.post("/app/topup")
+async def create_topup(request: Request, amount: str = Form("")) -> RedirectResponse:
+    settings = get_settings()
+    try:
+        amt = Decimal((amount or "").strip().replace(",", ".").replace(" ", ""))
+    except InvalidOperation:
+        return RedirectResponse(f"/app?err={quote_plus('Некорректная сумма')}", status_code=303)
+    if amt <= 0:
+        return RedirectResponse(f"/app?err={quote_plus('Некорректная сумма')}", status_code=303)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await touch_session(session, sess_row)
+        try:
+            _txn, pay_url = await create_topup_payment(
+                session,
+                user=user,
+                telegram_id=int(user.telegram_id),
+                amount_rub=amt,
+                provider_name="platega",
+                settings=settings,
+            )
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            return RedirectResponse(
+                f"/app?err={quote_plus('Не удалось создать платёж: ' + str(exc)[:160])}", status_code=303
+            )
+    return RedirectResponse(pay_url, status_code=303)

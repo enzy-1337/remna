@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _RESULT_KEY = "site_login:{code}"
 _REF_KEY = "site_login_ref:{code}"
+_DEVICE_KEY = "site_login_device:{code}"
 _TTL_SEC = 300  # 5 минут на подтверждение в боте
 _PREFIX = "sitelogin_"
 
@@ -73,6 +74,38 @@ async def pop_pending_ref(code: str, *, settings: Settings | None = None) -> str
             await r.aclose()
     except Exception:
         logger.exception("pop_pending_ref failed")
+        return None
+    return (str(val).strip() or None) if val else None
+
+
+async def save_pending_device(code: str, device_label: str, *, settings: Settings | None = None) -> None:
+    """Сохраняет метку устройства/браузера, с которого начали вход на сайте — бот покажет её
+    в запросе на подтверждение, чтобы пользователь понимал, что именно подтверждает."""
+    if not device_label:
+        return
+    s = settings or get_settings()
+    try:
+        r = _client(s.redis_url)
+        try:
+            await r.set(_DEVICE_KEY.format(code=code), device_label, ex=_TTL_SEC)
+        finally:
+            await r.aclose()
+    except Exception:
+        logger.exception("save_pending_device failed")
+
+
+async def get_pending_device(code: str, *, settings: Settings | None = None) -> str | None:
+    """Как pop_pending_ref, но НЕ удаляет ключ — метка устройства может понадобиться и в
+    callback-обработчике решения (подтвердить/отклонить), не только в исходном сообщении."""
+    s = settings or get_settings()
+    try:
+        r = _client(s.redis_url)
+        try:
+            val = await r.get(_DEVICE_KEY.format(code=code))
+        finally:
+            await r.aclose()
+    except Exception:
+        logger.exception("get_pending_device failed")
         return None
     return (str(val).strip() or None) if val else None
 

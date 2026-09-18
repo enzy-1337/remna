@@ -76,16 +76,15 @@ _FAQ = [
 
 def _faq_accordion() -> str:
     items = ""
-    for i, (ic, q, a) in enumerate(_FAQ):
-        open_cls = " open" if i == 0 else ""
+    for ic, q, a in _FAQ:
         items += f"""
-        <div class="acc-item{open_cls}" data-acc-item>
+        <div class="acc-item" data-acc-item>
           <div class="acc-head" data-acc-head>
             {icon(ic, size=16, color='var(--accent-soft)')}
             <span class="acc-title">{esc(q)}</span>
             <span class="acc-chevron">{icon('chevron-down', size=15)}</span>
           </div>
-          <div class="acc-body"><p>{esc(a)}</p></div>
+          <div class="acc-body"><div><div class="acc-body-inner"><p>{esc(a)}</p></div></div></div>
         </div>"""
     return items
 
@@ -96,7 +95,7 @@ def _contact_cards(settings) -> str:
     support_href = f"https://t.me/{support}" if support else "/app/tickets"
     channel_href = f"https://t.me/{channel}" if channel else "#"
     return f"""
-    <div class="grid-auto" style="grid-template-columns:1fr 1fr;">
+    <div class="grid-auto" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
       <a href="{esc(support_href)}" class="card" style="display:flex;align-items:center;gap:14px;">
         <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;flex-shrink:0;">{icon('headset', size=20, color='#fff')}</div>
         <div style="flex:1;"><div style="font:700 14px Manrope;color:var(--text-1);">Техподдержка</div><div style="font:500 12px Manrope;color:var(--text-4);margin-top:2px;">{('@' + esc(support)) if support else 'Тикет в кабинете'}</div></div>

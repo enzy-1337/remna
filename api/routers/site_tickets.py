@@ -144,7 +144,7 @@ async def tickets_page(request: Request, ticket: int = 0) -> HTMLResponse:
       <button class="btn btn-primary" data-new-ticket>{icon('plus', size=15, color='#fff')}<span>Новый тикет</span></button>
     </div>
 
-    <div class="grid-auto fade-up d1" style="grid-template-columns:repeat(3,1fr);margin-top:20px;">
+    <div class="grid-auto fade-up d1" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-top:20px;">
       <div class="card" style="text-align:center;"><div style="font:800 22px Manrope;color:var(--warn);">{n_open}</div><div style="font:600 11px Manrope;color:var(--text-4);margin-top:4px;">ОТКРЫТЫХ</div></div>
       <div class="card" style="text-align:center;"><div style="font:800 22px Manrope;color:var(--success);">{n_prog}</div><div style="font:600 11px Manrope;color:var(--text-4);margin-top:4px;">В РАБОТЕ</div></div>
       <div class="card" style="text-align:center;"><div style="font:800 22px Manrope;color:var(--text-2);">{n_closed}</div><div style="font:600 11px Manrope;color:var(--text-4);margin-top:4px;">ЗАКРЫТО</div></div>

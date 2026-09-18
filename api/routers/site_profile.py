@@ -25,36 +25,9 @@ from shared.services.site_totp_service import (
     verify_totp_code,
 )
 
-from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg
+from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg, ua_label as _ua_label
 
 router = APIRouter()
-
-
-def _ua_label(ua: str | None) -> str:
-    ua = ua or ""
-    if "iPhone" in ua or "iOS" in ua:
-        plat = "iPhone"
-    elif "Android" in ua:
-        plat = "Android"
-    elif "Macintosh" in ua:
-        plat = "macOS"
-    elif "Windows" in ua:
-        plat = "Windows"
-    elif "Linux" in ua:
-        plat = "Linux"
-    else:
-        plat = "Устройство"
-    if "Chrome" in ua:
-        browser = "Chrome"
-    elif "Firefox" in ua:
-        browser = "Firefox"
-    elif "Safari" in ua and "Chrome" not in ua:
-        browser = "Safari"
-    elif "Edg" in ua:
-        browser = "Edge"
-    else:
-        browser = "браузер"
-    return f"{plat} · {browser}"
 
 
 @router.get("/app/profile")
@@ -81,7 +54,7 @@ async def profile_page(request: Request) -> HTMLResponse:
 
     sessions_html = "".join(
         f"""
-        <div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);">
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;{'border-bottom:1px solid var(--line);' if i < len(sessions) - 1 else ''}">
           {icon('monitor', size=15, color='var(--text-3)')}
           <div style="flex:1;min-width:0;">
             <div style="font:700 13px Manrope;color:var(--text-1);">{esc(_ua_label(s.user_agent))}{' · <span style="color:var(--success);">эта сессия</span>' if s.session_token == sess_row.session_token else ''}</div>
@@ -89,28 +62,13 @@ async def profile_page(request: Request) -> HTMLResponse:
           </div>
           {f'''<form method="post" action="/app/profile/sessions/revoke"><input type="hidden" name="session_id" value="{s.id}"/><button type="submit" class="link-btn" style="color:var(--danger-soft);">Завершить</button></form>''' if s.session_token != sess_row.session_token else ''}
         </div>"""
-        for s in sessions
-    ) or '<div style="opacity:.5;font:500 13px Manrope;padding:10px 0;">Нет активных сессий</div>'
-
-    n = request.query_params.get("n") or ""
-    notice_map = {
-        "2fa_on": ("success", "Двухфакторная аутентификация включена."),
-        "2fa_off": ("success", "Двухфакторная аутентификация выключена."),
-        "2fa_err": ("danger", "Неверный код — попробуйте ещё раз."),
-        "sessions_revoked": ("success", "Сессии завершены."),
-    }
-    notice_html = ""
-    if n in notice_map:
-        kind, msg = notice_map[n]
-        cls = "card-soft" if kind == "success" else "card-danger"
-        color = "var(--success)" if kind == "success" else "var(--danger-soft)"
-        notice_html = f'<div class="{cls}" style="padding:12px 16px;border-radius:12px;font:600 13px Manrope;color:{color};margin-top:14px;">{esc(msg)}</div>'
+        for i, s in enumerate(sessions)
+    ) or '<div style="opacity:.5;font:500 13px Manrope;padding:12px 0;">Нет активных сессий</div>'
 
     body = f"""
 <div class="cabinet-bg" style="min-height:100vh;">
   <div class="shell-wide">
     {app_topbar(active="", balance_rub=fmt_money(user.balance), unread_tickets=0, initial=initial)}
-    {notice_html}
 
     <div class="card card-accent fade-up" style="margin-top:16px;display:flex;align-items:center;gap:22px;flex-wrap:wrap;">
       <div class="avatar-circle" style="width:96px;height:96px;border-radius:22px;font-size:32px;position:relative;flex-shrink:0;">
@@ -163,13 +121,13 @@ async def profile_page(request: Request) -> HTMLResponse:
               </div>
               <a href="/app/profile/2fa/{'disable' if totp_on else 'enable'}" class="toggle{' on' if totp_on else ''}" title="{'Отключить' if totp_on else 'Включить'}"><span class="knob"></span></a>
             </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;{'border-bottom:1px solid var(--line);' if sessions else ''}">
               <div style="width:34px;height:34px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;">{icon('monitor', size=16, color='var(--text-3)')}</div>
               <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Активные сессии</div><div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">{len(sessions)} устройств</div></div>
               <form method="post" action="/app/profile/sessions/revoke-all"><button type="submit" class="btn btn-outline btn-sm">Завершить все</button></form>
             </div>
+            {sessions_html}
           </div>
-          <div style="margin-top:6px;">{sessions_html}</div>
         </div>
       </div>
 
