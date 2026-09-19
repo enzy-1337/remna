@@ -175,9 +175,11 @@ async def run_connection_notify_loop(
 
     cutoff = datetime.now(UTC) - timedelta(hours=_NOTIFY_DELAY_HOURS)
 
-    # Пользователи с активной подпиской, стартовавшей > 24ч назад, без уведомления
-    users_q = (
-        select(User)
+    # Пользователи с активной подпиской, стартовавшей > 24ч назад, без уведомления.
+    # Сначала берём только id (DISTINCT), т.к. в User есть колонка типа `json`
+    # (site_totp_backup_codes) без оператора равенства — DISTINCT по всей строке User падает.
+    user_ids_q = (
+        select(User.id)
         .join(Subscription, Subscription.user_id == User.id)
         .where(
             Subscription.status == "active",
@@ -189,7 +191,16 @@ async def run_connection_notify_loop(
         .distinct()
         .limit(_BATCH_SIZE)
     )
-    users = (await session.execute(users_q)).scalars().all()
+    user_ids = (await session.execute(user_ids_q)).scalars().all()
+
+    if not user_ids:
+        return
+
+    users = (
+        (await session.execute(select(User).where(User.id.in_(user_ids))))
+        .scalars()
+        .all()
+    )
 
     if not users:
         return
