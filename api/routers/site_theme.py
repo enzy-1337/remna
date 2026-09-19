@@ -390,7 +390,7 @@ def public_topbar(*, active: str = "") -> str:
         for label, href, key in items
     )
     return f"""
-<div class="topbar-wrap fade-up">
+<div class="topbar-wrap fade-in">
   <div class="topbar">
     {brand_mark()}
     <div class="topbar-links">{links}</div>
@@ -414,7 +414,7 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
         for label, href, ic, key in items
     )
     return f"""
-<div class="topbar-wrap fade-up">
+<div class="topbar-wrap fade-in">
   <div class="topbar">
     {brand_mark()}
     <div class="topbar-links">{links}</div>
