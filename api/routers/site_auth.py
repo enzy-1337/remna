@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import datetime, timezone
 from secrets import token_urlsafe
 
 import httpx
@@ -35,6 +36,12 @@ from shared.services.site_telegram_login_service import (
 from shared.services.site_totp_service import verify_totp_code, verify_and_consume_backup_code
 from shared.services.telegram_login_verify import verify_telegram_login
 from shared.services.user_registration import get_user_by_telegram_id, register_user
+from shared.services.email_code_service import (
+    email_sending_configured,
+    normalize_email,
+    start_email_code,
+    verify_email_code,
+)
 from shared.models.user import User
 
 from api.routers.site_landing import REF_COOKIE
@@ -45,10 +52,36 @@ router = APIRouter()
 
 _PENDING_2FA_COOKIE = "flux_pending_2fa"
 _PENDING_2FA_MAX_AGE = 60 * 5
+_PENDING_EMAIL_COOKIE = "flux_pending_email"
+_PENDING_EMAIL_MAX_AGE = 60 * 10
+_EMAIL_LOGIN_PURPOSE = "site_login"
+_EMAIL_LINK_PURPOSE = "site_link"
 
 
 def _pending_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(str(get_settings().web_admin_session_secret), salt="flux-site-pending-2fa")
+
+
+def _pending_email_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(str(get_settings().web_admin_session_secret), salt="flux-site-pending-email")
+
+
+def _set_pending_email_cookie(response, *, email: str, mode: str, link_user_id: int | None = None) -> None:
+    token = _pending_email_serializer().dumps({"email": email, "mode": mode, "link_user_id": link_user_id})
+    response.set_cookie(
+        _PENDING_EMAIL_COOKIE, token, max_age=_PENDING_EMAIL_MAX_AGE, httponly=True, samesite="lax", path="/"
+    )
+
+
+def _read_pending_email(request: Request) -> dict | None:
+    raw = (request.cookies.get(_PENDING_EMAIL_COOKIE) or "").strip()
+    if not raw:
+        return None
+    try:
+        data = _pending_email_serializer().loads(raw, max_age=_PENDING_EMAIL_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _set_pending_2fa_cookie(response, user_id: int) -> None:
@@ -107,16 +140,23 @@ _TG_BOT_LOGIN_JS = """
 """
 
 
-def _login_page_html(*, error: str = "") -> str:
+def _login_page_html(*, error: str = "", notice: str = "") -> str:
     settings = get_settings()
     bot_username = (settings.bot_username or "").strip().lstrip("@")
     oidc_ready = bool(
         (settings.web_admin_telegram_client_id or "").strip()
         and (settings.web_admin_telegram_client_secret or "").strip()
     )
+    google_ready = bool((settings.site_google_client_id or "").strip() and (settings.site_google_client_secret or "").strip())
+    email_ready = email_sending_configured(settings)
     err_html = (
         f'<div class="card-danger" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(error)}</div>'
         if error
+        else ""
+    )
+    notice_html = (
+        f'<div class="card" style="padding:12px 14px;margin-top:16px;font:600 13px Manrope;color:var(--success);">{esc(notice)}</div>'
+        if notice
         else ""
     )
     # Основной способ — тот же Telegram OAuth/OIDC (oauth.tg.dev), что уже настроен и работает
@@ -161,10 +201,14 @@ def _login_page_html(*, error: str = "") -> str:
           <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Выберите удобный способ — аккаунт один для сайта, бота и приложений</div>
         </div>
         {err_html}
+        {notice_html}
         <div style="display:flex;flex-direction:column;gap:11px;margin-top:24px;align-items:center;">
           <div style="width:100%;display:flex;flex-direction:column;gap:8px;">{widget}</div>
-          <button type="button" class="btn btn-google btn-block" disabled title="Скоро">{google_logo_svg(19)}<span>Продолжить через Google</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>
-          <button type="button" class="btn btn-outline btn-block" disabled title="Скоро">{icon('devices', size=18)}<span>Войти по почте — код на e-mail</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>
+          {f'<a href="/login/google/oauth-start" class="btn btn-google btn-block">{google_logo_svg(19)}<span>Продолжить через Google</span></a>' if google_ready else f'<button type="button" class="btn btn-google btn-block" disabled title="Скоро">{google_logo_svg(19)}<span>Продолжить через Google</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'}
+          {f'''<form method="post" action="/login/email/start" style="width:100%;display:flex;gap:8px;">
+            <input class="input" type="email" name="email" placeholder="Почта, привязанная в боте" required style="flex:1;"/>
+            <button type="submit" class="btn btn-outline" style="white-space:nowrap;">Получить код</button>
+          </form>''' if email_ready else f'<button type="button" class="btn btn-outline btn-block" disabled title="Скоро">{icon("devices", size=18)}<span>Войти по почте — код на e-mail</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'}
         </div>
         <div style="text-align:center;font:500 11.5px Manrope;color:var(--text-5);margin-top:22px;line-height:1.6;">
           Продолжая, вы соглашаетесь с <a href="/legal/offer">офертой</a> и <a href="/legal/privacy">политикой конфиденциальности</a>
@@ -190,8 +234,14 @@ async def login_page(request: Request) -> HTMLResponse:
         "expired": "Ссылка входа устарела, попробуйте снова.",
         "oauth": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз или войдите через бота.",
         "oauth_config": "Вход через Telegram временно недоступен. Попробуйте через бота.",
+        "google_oauth": "Не удалось подтвердить вход через Google. Попробуйте ещё раз.",
+        "google_no_account": "Аккаунт с этой почтой/Google не найден. Сначала войдите через Telegram и привяжите Google в профиле — или привяжите почту в боте и войдите по коду.",
+        "email_not_linked": "Эта почта не привязана ни к одному аккаунту. Привяжите её в боте: профиль → «Почта для сайта».",
+        "email_code": "Неверный или устаревший код.",
+        "email_expired": "Время на ввод кода истекло, запросите новый.",
     }
-    return HTMLResponse(_login_page_html(error=err_map.get(err, "")))
+    custom_err = request.query_params.get("m") or ""
+    return HTMLResponse(_login_page_html(error=custom_err or err_map.get(err, "")))
 
 
 async def _finish_login(request: Request, user: User, *, login_kind: str) -> RedirectResponse:
@@ -367,6 +417,266 @@ async def telegram_oauth_callback(request: Request, code: str = "", state: str =
             return resp
         user_for_session = user
     return await _finish_login(request, user_for_session, login_kind="telegram_oauth")
+
+
+# --- Google OAuth ------------------------------------------------------------
+
+
+@router.get("/login/google/oauth-start")
+async def google_oauth_start(request: Request) -> RedirectResponse:
+    settings = get_settings()
+    client_id = (settings.site_google_client_id or "").strip()
+    if not client_id:
+        return RedirectResponse("/login?err=google_oauth", status_code=303)
+    state = base64.urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["site_google_oauth_state"] = state
+    request.session.pop("site_google_link_uid", None)
+    from urllib.parse import quote_plus
+
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    redirect_uri = (settings.site_google_redirect_uri or "").strip() or f"{base}/login/google/callback"
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={quote_plus(client_id)}"
+        f"&redirect_uri={quote_plus(redirect_uri)}"
+        "&response_type=code"
+        "&scope=openid%20email%20profile"
+        f"&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/app/profile/google/link-start")
+async def google_link_start(request: Request) -> RedirectResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+    if auth is None:
+        return RedirectResponse("/login", status_code=303)
+    user, _sess = auth
+    settings = get_settings()
+    client_id = (settings.site_google_client_id or "").strip()
+    if not client_id:
+        return RedirectResponse("/app/profile?err=" + "Google не настроен", status_code=303)
+    state = base64.urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["site_google_oauth_state"] = state
+    request.session["site_google_link_uid"] = user.id
+    from urllib.parse import quote_plus
+
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    redirect_uri = (settings.site_google_redirect_uri or "").strip() or f"{base}/login/google/callback"
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={quote_plus(client_id)}"
+        f"&redirect_uri={quote_plus(redirect_uri)}"
+        "&response_type=code"
+        "&scope=openid%20email%20profile"
+        f"&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/login/google/callback")
+async def google_oauth_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+    settings = get_settings()
+    if not code.strip() or state != request.session.get("site_google_oauth_state"):
+        return RedirectResponse("/login?err=google_oauth", status_code=303)
+    request.session.pop("site_google_oauth_state", None)
+    link_uid = request.session.pop("site_google_link_uid", None)
+
+    client_id = (settings.site_google_client_id or "").strip()
+    client_secret = (settings.site_google_client_secret or "").strip()
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    redirect_uri = (settings.site_google_redirect_uri or "").strip() or f"{base}/login/google/callback"
+    if not client_id or not client_secret:
+        return RedirectResponse("/login?err=google_oauth", status_code=303)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            t_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                headers={"Accept": "application/json"},
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code.strip(),
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                },
+            )
+            t_resp.raise_for_status()
+            t_data = t_resp.json()
+    except Exception:
+        logger.exception("google token exchange failed")
+        return RedirectResponse("/login?err=google_oauth", status_code=303)
+
+    id_token = str(t_data.get("id_token") or "").strip()
+    claims = _jwt_payload_unverified(id_token) if id_token else {}
+    google_sub = str(claims.get("sub") or "").strip()
+    google_email_raw = str(claims.get("email") or "").strip().lower()
+    google_email_verified = bool(claims.get("email_verified"))
+    google_name = str(claims.get("name") or "").strip()
+    if not google_sub:
+        return RedirectResponse("/login?err=google_oauth", status_code=303)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        if link_uid:
+            user = await session.get(User, int(link_uid))
+            if user is None:
+                return RedirectResponse("/login", status_code=303)
+            taken = (
+                await session.execute(select(User.id).where(User.id != user.id, User.google_id == google_sub).limit(1))
+            ).scalar_one_or_none()
+            if taken is not None:
+                return RedirectResponse(f"/app/profile?err={_qp('Этот Google-аккаунт уже привязан к другому пользователю')}", status_code=303)
+            user.google_id = google_sub
+            if google_email_verified and google_email_raw and not user.email:
+                email_taken = (
+                    await session.execute(select(User.id).where(User.id != user.id, User.email == google_email_raw).limit(1))
+                ).scalar_one_or_none()
+                if email_taken is None:
+                    user.email = google_email_raw
+                    user.email_verified_at = datetime.now(timezone.utc)
+            await session.commit()
+            return RedirectResponse("/app/profile?n=google_linked", status_code=303)
+
+        existing = (await session.execute(select(User).where(User.google_id == google_sub))).scalar_one_or_none()
+        if existing is None and google_email_verified and google_email_raw:
+            existing = (
+                await session.execute(
+                    select(User).where(User.email == google_email_raw, User.email_verified_at.is_not(None))
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.google_id = google_sub
+                await session.flush()
+        if existing is None:
+            return RedirectResponse("/login?err=google_no_account", status_code=303)
+        if google_name and existing.first_name != google_name:
+            existing.first_name = google_name
+        if bool(existing.site_totp_enabled):
+            resp = RedirectResponse("/login/2fa", status_code=303)
+            _set_pending_2fa_cookie(resp, existing.id)
+            await session.commit()
+            return resp
+        user_for_session = existing
+        await session.commit()
+    return await _finish_login(request, user_for_session, login_kind="google_oauth")
+
+
+def _qp(s: str) -> str:
+    from urllib.parse import quote_plus
+
+    return quote_plus(s)
+
+
+# --- Email-код (вход и привязка) ---------------------------------------------
+
+
+@router.post("/login/email/start")
+async def email_login_start(request: Request, email: str = Form("")) -> RedirectResponse:
+    settings = get_settings()
+    norm = normalize_email(email)
+    if norm is None:
+        return RedirectResponse(f"/login?m={_qp('Некорректный адрес почты')}", status_code=303)
+    factory = get_session_factory()
+    async with factory() as session:
+        existing = (
+            await session.execute(select(User.id).where(User.email == norm, User.email_verified_at.is_not(None)))
+        ).scalar_one_or_none()
+    if existing is None:
+        return RedirectResponse("/login?err=email_not_linked", status_code=303)
+    ok, err = await start_email_code(norm, purpose=_EMAIL_LOGIN_PURPOSE, settings=settings)
+    if not ok:
+        return RedirectResponse(f"/login?m={_qp(err)}", status_code=303)
+    resp = RedirectResponse("/login/email/verify", status_code=303)
+    _set_pending_email_cookie(resp, email=norm, mode="login")
+    return resp
+
+
+@router.get("/login/email/verify")
+async def email_verify_page(request: Request) -> HTMLResponse:
+    pending = _read_pending_email(request)
+    if pending is None:
+        return RedirectResponse("/login?err=email_expired", status_code=303)
+    err = request.query_params.get("err") or ""
+    err_html = (
+        f'<div class="card-danger" style="padding:10px 14px;margin-top:14px;font:600 13px Manrope;color:var(--danger-soft);border-radius:12px;">{esc(err)}</div>'
+        if err
+        else ""
+    )
+    body = f"""
+<div class="hero-bg" style="min-height:100vh;display:flex;align-items:center;justify-content:center;">
+  <div class="fade-up" style="width:440px;background:var(--card-2);border:1px solid var(--line-2);border-radius:20px;padding:32px;">
+    <div style="width:48px;height:48px;border-radius:14px;background:rgba(123,92,255,.12);display:flex;align-items:center;justify-content:center;margin:0 auto;">
+      {icon('devices', size=22, color='var(--accent-soft)')}
+    </div>
+    <div style="text-align:center;margin-top:16px;">
+      <div style="font:800 20px Manrope;color:var(--text-1);">Код из письма</div>
+      <div style="font:500 13px Manrope;color:var(--text-3);margin-top:7px;">Отправили код на {esc(pending.get('email', ''))}</div>
+    </div>
+    <form method="post" action="/login/email/verify" style="margin-top:26px;">
+      {_otp_boxes_html()}
+      {err_html}
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:22px;">Подтвердить</button>
+    </form>
+    <div style="text-align:center;margin-top:16px;"><a class="link-btn" href="/login">Назад ко входу</a></div>
+  </div>
+</div>
+<script>{_OTP_JS}</script>
+"""
+    return HTMLResponse(page(title="Код подтверждения — Flux Network", body=body))
+
+
+@router.post("/login/email/verify")
+async def email_verify_submit(request: Request, code: str = Form("")) -> RedirectResponse:
+    pending = _read_pending_email(request)
+    if pending is None:
+        return RedirectResponse("/login?err=email_expired", status_code=303)
+    email = str(pending.get("email") or "")
+    mode = str(pending.get("mode") or "login")
+    link_uid = pending.get("link_user_id")
+    ok, err = await verify_email_code(email, code, purpose=_EMAIL_LOGIN_PURPOSE if mode == "login" else _EMAIL_LINK_PURPOSE)
+    if not ok:
+        return RedirectResponse(f"/login/email/verify?err={_qp(err)}", status_code=303)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        if mode == "link" and link_uid:
+            user = await session.get(User, int(link_uid))
+            if user is None:
+                return RedirectResponse("/login", status_code=303)
+            taken = (
+                await session.execute(select(User.id).where(User.id != user.id, User.email == email).limit(1))
+            ).scalar_one_or_none()
+            if taken is not None:
+                resp = RedirectResponse(f"/app/profile?err={_qp('Эта почта уже привязана к другому аккаунту')}", status_code=303)
+                resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+                return resp
+            user.email = email
+            user.email_verified_at = datetime.now(timezone.utc)
+            await session.commit()
+            resp = RedirectResponse("/app/profile?n=email_linked", status_code=303)
+            resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+            return resp
+
+        user = (
+            await session.execute(select(User).where(User.email == email, User.email_verified_at.is_not(None)))
+        ).scalar_one_or_none()
+        if user is None:
+            resp = RedirectResponse("/login?err=email_not_linked", status_code=303)
+            resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+            return resp
+        if bool(user.site_totp_enabled):
+            resp = RedirectResponse("/login/2fa", status_code=303)
+            _set_pending_2fa_cookie(resp, user.id)
+            resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+            return resp
+        user_for_session = user
+    resp = await _finish_login(request, user_for_session, login_kind="email_code")
+    resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+    return resp
 
 
 @router.get("/login/telegram/callback")

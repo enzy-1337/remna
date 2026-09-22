@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from sqlalchemy import select
 
 from shared.config import get_settings
 from shared.database import get_session_factory
+from shared.models.user import User
 from shared.services.site_session_service import (
     list_user_sessions,
     load_site_user,
@@ -24,6 +27,8 @@ from shared.services.site_totp_service import (
     totp_qr_data_uri,
     verify_totp_code,
 )
+from shared.services.email_code_service import email_sending_configured, normalize_email, start_email_code
+from api.routers.site_auth import _EMAIL_LINK_PURPOSE, _set_pending_email_cookie
 
 from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg, ua_label as _ua_label
 
@@ -40,6 +45,10 @@ async def profile_page(request: Request) -> HTMLResponse:
         user, sess_row = auth
         await touch_session(session, sess_row)
         sessions = await list_user_sessions(session, user.id)
+
+    settings = get_settings()
+    google_ready = bool((settings.site_google_client_id or "").strip() and (settings.site_google_client_secret or "").strip())
+    email_ready = email_sending_configured(settings)
 
     initial = (user.first_name or user.username or "U")[:1].upper()
     name_display = esc(user.first_name or (f"@{user.username}" if user.username else f"#{user.id}"))
@@ -103,13 +112,25 @@ async def profile_page(request: Request) -> HTMLResponse:
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">
               <div style="width:34px;height:34px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;">{google_logo_svg(17)}</div>
               <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Google</div></div>
-              <span class="badge badge-neutral">Скоро</span>
+              {(
+                  '<span class="badge badge-success">' + icon('check-circle', size=12) + ' Привязан</span>'
+                  if user.google_id else
+                  ('<a href="/app/profile/google/link-start" class="btn btn-outline btn-sm">Привязать</a>' if google_ready else '<span class="badge badge-neutral">Скоро</span>')
+              )}
             </div>
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
               <div style="width:34px;height:34px;border-radius:10px;background:var(--card-3);display:flex;align-items:center;justify-content:center;">{icon('devices', size=16, color='var(--text-3)')}</div>
-              <div style="flex:1;"><div style="font:700 13px Manrope;color:var(--text-1);">Почта для входа по коду</div></div>
-              <span class="badge badge-neutral">Скоро</span>
+              <div style="flex:1;min-width:0;">
+                <div style="font:700 13px Manrope;color:var(--text-1);">Почта для входа по коду</div>
+                {f'<div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">{esc(user.email)}</div>' if user.email_verified_at else ''}
+              </div>
+              {('<span class="badge badge-success">' + icon('check-circle', size=12) + ' Привязана</span>') if user.email_verified_at else ''}
             </div>
+            {f'''<form method="post" action="/app/profile/email/link-start" style="display:flex;gap:8px;margin-top:10px;">
+              <input class="input" type="email" name="email" placeholder="Ваша почта" required style="flex:1;"/>
+              <button type="submit" class="btn btn-outline btn-sm" style="white-space:nowrap;">Получить код</button>
+            </form>''' if (email_ready and not user.email_verified_at) else ''}
+            {'<div style="font:500 11px Manrope;color:var(--text-5);margin-top:8px;">Отправка писем ещё не настроена</div>' if (not email_ready and not user.email_verified_at) else ''}
           </div>
         </div>
 
@@ -316,3 +337,30 @@ async def revoke_all_sessions(request: Request) -> RedirectResponse:
         await revoke_all_user_sessions(session, user.id, except_token=sess_row.session_token)
         await touch_session(session, sess_row)
     return RedirectResponse("/app/profile?n=sessions_revoked", status_code=303)
+
+
+@router.post("/app/profile/email/link-start")
+async def email_link_start(request: Request, email: str = Form("")) -> RedirectResponse:
+    settings = get_settings()
+    norm = normalize_email(email)
+    if norm is None:
+        return RedirectResponse(f"/app/profile?err={quote_plus('Некорректный адрес почты')}", status_code=303)
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await touch_session(session, sess_row)
+        taken = (
+            await session.execute(select(User.id).where(User.id != user.id, User.email == norm).limit(1))
+        ).scalar_one_or_none()
+        if taken is not None:
+            return RedirectResponse(f"/app/profile?err={quote_plus('Эта почта уже привязана к другому аккаунту')}", status_code=303)
+        uid = user.id
+    ok, err = await start_email_code(norm, purpose=_EMAIL_LINK_PURPOSE, settings=settings)
+    if not ok:
+        return RedirectResponse(f"/app/profile?err={quote_plus(err)}", status_code=303)
+    resp = RedirectResponse("/login/email/verify", status_code=303)
+    _set_pending_email_cookie(resp, email=norm, mode="link", link_user_id=uid)
+    return resp

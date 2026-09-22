@@ -335,7 +335,9 @@ window.remnaToast = function(kind, text){
       promo_err: 'Не удалось активировать промокод — проверьте код.',
       '2fa_on': 'Двухфакторная аутентификация включена.',
       '2fa_off': 'Двухфакторная аутентификация выключена.',
-      sessions_revoked: 'Сессии завершены.'
+      sessions_revoked: 'Сессии завершены.',
+      google_linked: 'Google привязан.',
+      email_linked: 'Почта привязана.'
     };
     if (n && map[n]) window.remnaToast('success', map[n]);
     if (err) window.remnaToast('error', err);

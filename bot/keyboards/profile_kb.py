@@ -58,6 +58,9 @@ def profile_main_keyboard(
     b.row(
         InlineKeyboardButton(text="👨‍👩‍👧 Семейная подписка", callback_data="menu:family"),
     )
+    b.row(
+        InlineKeyboardButton(text="✉️ Почта для сайта", callback_data="menu:email"),
+    )
     if is_admin:
         b.row(
             InlineKeyboardButton(

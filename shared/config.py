@@ -668,6 +668,59 @@ class Settings(BaseSettings):
             "нужно добавить как ещё один разрешённый, если провайдер требует точное совпадение."
         ),
     )
+    site_google_client_id: str = Field(
+        default="",
+        validation_alias="SITE_GOOGLE_CLIENT_ID",
+        description="Google OAuth Client ID (Google Cloud Console) для входа на сайт через Google.",
+    )
+    site_google_client_secret: str = Field(
+        default="",
+        validation_alias="SITE_GOOGLE_CLIENT_SECRET",
+        description="Google OAuth Client Secret для входа на сайт через Google.",
+    )
+    site_google_redirect_uri: str = Field(
+        default="",
+        validation_alias="SITE_GOOGLE_REDIRECT_URI",
+        description=(
+            "Callback URL Google OAuth (например https://my.flux-network.store/login/google/callback). "
+            "Должен быть добавлен в Google Cloud Console как Authorized redirect URI."
+        ),
+    )
+    resend_api_key: str = Field(
+        default="",
+        validation_alias="RESEND_API_KEY",
+        description="API-ключ Resend (resend.com) для отправки писем с кодом подтверждения почты.",
+    )
+    resend_from_email: str = Field(
+        default="",
+        validation_alias="RESEND_FROM_EMAIL",
+        description="Адрес отправителя для писем с кодом (например noreply@mail.flux-network.store), домен должен быть подтверждён в Resend.",
+    )
+    smtp_host: str = Field(
+        default="",
+        validation_alias="SMTP_HOST",
+        description="SMTP-сервер для отправки писем с кодом (например smtp.gmail.com, smtp.yandex.ru, smtp.mail.ru) — бесплатная альтернатива Resend, не требует подтверждения домена. Если задан — используется вместо Resend.",
+    )
+    smtp_port: int = Field(
+        default=587,
+        validation_alias="SMTP_PORT",
+        description="Порт SMTP (587 — STARTTLS, обычно подходит для Gmail/Yandex/Mail.ru).",
+    )
+    smtp_user: str = Field(
+        default="",
+        validation_alias="SMTP_USER",
+        description="Логин SMTP — обычно полный адрес почты (например you@gmail.com).",
+    )
+    smtp_password: str = Field(
+        default="",
+        validation_alias="SMTP_PASSWORD",
+        description="Пароль приложения SMTP (НЕ обычный пароль от почты — см. инструкцию для Gmail/Yandex).",
+    )
+    smtp_from_email: str = Field(
+        default="",
+        validation_alias="SMTP_FROM_EMAIL",
+        description="Адрес отправителя в письмах. Если пусто — берётся SMTP_USER.",
+    )
     public_site_url: str | None = Field(
         default=None,
         validation_alias="PUBLIC_SITE_URL",
