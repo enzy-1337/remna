@@ -133,7 +133,7 @@ _TG_BOT_LOGIN_JS = """
           fetch('/login/telegram/bot-poll?code=' + encodeURIComponent(d.code), {credentials:'same-origin'})
             .then(function(r){ return r.json(); })
             .then(function(p){
-              if (p.status === 'done') { stopPoll(); window.location.href = '/app'; }
+              if (p.status === 'done') { stopPoll(); window.location.href = p.next || '/app'; }
               else if (p.status === '2fa') { stopPoll(); window.location.href = '/login/2fa'; }
               else if (p.status === 'declined') { stopPoll(); btn.disabled = false; if (waitBox) { waitBox.textContent = 'Вход отклонён в Telegram. Попробуйте ещё раз.'; } }
               else if (p.status === 'error') { stopPoll(); btn.disabled = false; if (waitBox) waitBox.hidden = true; }
@@ -147,7 +147,19 @@ _TG_BOT_LOGIN_JS = """
 """
 
 
-def _login_page_html(*, error: str = "", notice: str = "") -> str:
+_NEXT_COOKIE = "flux_login_next"
+
+
+def _safe_next(raw: str | None) -> str | None:
+    """Куда вернуть после входа: только локальный путь (без //host и схем)."""
+    v = (raw or "").strip()
+    if not v.startswith("/") or v.startswith("//") or v.startswith("/\\") or len(v) > 300:
+        return None
+    return v
+
+
+def login_panel_html(*, error: str = "", notice: str = "") -> str:
+    """Способы входа — общий блок для страницы /login и всплывающего окна на лендинге."""
     settings = get_settings()
     bot_username = (settings.bot_username or "").strip().lstrip("@")
     oidc_ready = bool(
@@ -167,9 +179,7 @@ def _login_page_html(*, error: str = "", notice: str = "") -> str:
         else ""
     )
     # Основной способ — тот же Telegram OAuth/OIDC (oauth.tg.dev), что уже настроен и работает
-    # для входа в web-admin (WEB_ADMIN_TELEGRAM_CLIENT_ID/SECRET, тот же бот). Обычный top-level
-    # редирект, без JS и без сломанного у Telegram Login Widget (oauth.telegram.org/auth сейчас
-    # отвечает "deprecated" на любой запрос — проверено).
+    # для входа в web-admin (WEB_ADMIN_TELEGRAM_CLIENT_ID/SECRET, тот же бот).
     primary_btn = (
         f'<a href="/login/telegram/oauth-start" class="btn btn-tg btn-block">{tg_logo_svg(20, "#fff")}<span>Войти через Telegram</span></a>'
         if oidc_ready
@@ -184,6 +194,74 @@ def _login_page_html(*, error: str = "", notice: str = "") -> str:
         else ""
     )
     widget = f'{primary_btn}\n{alt_btn}'
+    google_btn = (
+        f'<a href="/login/google/oauth-start" class="btn btn-google btn-block">{google_logo_svg(19)}<span>Продолжить через Google</span></a>'
+        if google_ready
+        else f'<button type="button" class="btn btn-google btn-block" disabled title="Скоро">{google_logo_svg(19)}<span>Продолжить через Google</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'
+    )
+    email_form = (
+        """<form method="post" action="/login/email/start" style="width:100%;display:flex;gap:8px;">
+            <input class="input" type="email" name="email" placeholder="Почта, привязанная к аккаунту" required style="flex:1;min-width:0;"/>
+            <button type="submit" class="btn btn-outline" style="white-space:nowrap;">Получить код</button>
+          </form>"""
+        if email_ready
+        else f'<button type="button" class="btn btn-outline btn-block" disabled title="Скоро">{icon("devices", size=18)}<span>Войти по почте — код на e-mail</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'
+    )
+    return f"""
+        <div style="text-align:center;">
+          <div style="font:800 22px Manrope;color:var(--text-1);">Вход в личный кабинет</div>
+          <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Выберите удобный способ — аккаунт один для сайта, бота и приложений</div>
+        </div>
+        {err_html}
+        {notice_html}
+        <div style="display:flex;flex-direction:column;gap:11px;margin-top:24px;align-items:center;">
+          <div style="width:100%;display:flex;flex-direction:column;gap:8px;">{widget}</div>
+          {google_btn}
+          {email_form}
+        </div>
+        <div style="text-align:center;font:500 11.5px Manrope;color:var(--text-5);margin-top:22px;line-height:1.6;">
+          Продолжая, вы соглашаетесь с <a href="/legal/offer">офертой</a> и <a href="/legal/privacy">политикой конфиденциальности</a>
+        </div>"""
+
+
+_LOGIN_MODAL_JS = """
+(function(){
+  var ov = document.getElementById('login-modal');
+  if (!ov) return;
+  function setNext(path){
+    if (!path || path.charAt(0) !== '/' || path.charAt(1) === '/') return;
+    document.cookie = 'flux_login_next=' + encodeURIComponent(path) + '; path=/; max-age=1800; samesite=lax';
+  }
+  function open(next){
+    setNext(next || (location.pathname + location.search + location.hash));
+    ov.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+  function close(){ ov.classList.remove('open'); document.body.style.overflow = ''; }
+  window.fluxOpenLogin = open;
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('[data-open-login], a[href="/login"]');
+    if (t) { e.preventDefault(); open(t.getAttribute('data-login-next')); return; }
+    if (e.target.closest('[data-close-login]') || e.target === ov) close();
+  });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && ov.classList.contains('open')) close(); });
+})();
+"""
+
+
+def login_modal_html() -> str:
+    """Окно входа поверх страницы (вместо перехода на /login). Ссылки на /login перехватываются."""
+    return f"""
+<div id="login-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-label="Вход">
+  <div class="fade-in" style="position:relative;width:100%;max-width:440px;max-height:calc(100dvh - 32px);overflow-y:auto;background:var(--card-2);border:1px solid var(--line-2);border-radius:20px;padding:30px 26px 24px;box-shadow:0 50px 120px -30px rgba(0,0,0,.9);">
+    <button type="button" class="icon-btn" data-close-login aria-label="Закрыть" style="position:absolute;top:14px;right:14px;">{icon('x', size=14)}</button>
+    {login_panel_html()}
+  </div>
+</div>
+<script>{_LOGIN_MODAL_JS}</script>"""
+
+
+def _login_page_html(*, error: str = "", notice: str = "") -> str:
     body = f"""
 <div class="hero-bg" style="min-height:100vh;">
   <div class="shell" style="padding-top:20px;">
@@ -203,23 +281,7 @@ def _login_page_html(*, error: str = "", notice: str = "") -> str:
         </div>
       </div>
       <div style="flex:1.1;min-width:300px;padding:36px 40px;">
-        <div style="text-align:center;">
-          <div style="font:800 22px Manrope;color:var(--text-1);">Вход в личный кабинет</div>
-          <div style="font:500 13px Manrope;color:var(--text-3);margin-top:6px;">Выберите удобный способ — аккаунт один для сайта, бота и приложений</div>
-        </div>
-        {err_html}
-        {notice_html}
-        <div style="display:flex;flex-direction:column;gap:11px;margin-top:24px;align-items:center;">
-          <div style="width:100%;display:flex;flex-direction:column;gap:8px;">{widget}</div>
-          {f'<a href="/login/google/oauth-start" class="btn btn-google btn-block">{google_logo_svg(19)}<span>Продолжить через Google</span></a>' if google_ready else f'<button type="button" class="btn btn-google btn-block" disabled title="Скоро">{google_logo_svg(19)}<span>Продолжить через Google</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'}
-          {f'''<form method="post" action="/login/email/start" style="width:100%;display:flex;gap:8px;">
-            <input class="input" type="email" name="email" placeholder="Почта, привязанная в боте" required style="flex:1;"/>
-            <button type="submit" class="btn btn-outline" style="white-space:nowrap;">Получить код</button>
-          </form>''' if email_ready else f'<button type="button" class="btn btn-outline btn-block" disabled title="Скоро">{icon("devices", size=18)}<span>Войти по почте — код на e-mail</span><span class="badge badge-neutral" style="margin-left:6px;">скоро</span></button>'}
-        </div>
-        <div style="text-align:center;font:500 11.5px Manrope;color:var(--text-5);margin-top:22px;line-height:1.6;">
-          Продолжая, вы соглашаетесь с <a href="/legal/offer">офертой</a> и <a href="/legal/privacy">политикой конфиденциальности</a>
-        </div>
+        {login_panel_html(error=error, notice=notice)}
       </div>
     </div>
   </div>
@@ -233,8 +295,9 @@ async def login_page(request: Request) -> HTMLResponse:
     factory = get_session_factory()
     async with factory() as session:
         auth = await load_site_user(session, request)
+    nxt = _safe_next(request.query_params.get("next"))
     if auth is not None:
-        return RedirectResponse("/app", status_code=303)
+        return RedirectResponse(nxt or "/app", status_code=303)
     err = request.query_params.get("err") or ""
     err_map = {
         "widget": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз.",
@@ -248,14 +311,21 @@ async def login_page(request: Request) -> HTMLResponse:
         "email_expired": "Время на ввод кода истекло, запросите новый.",
     }
     custom_err = request.query_params.get("m") or ""
-    return HTMLResponse(_login_page_html(error=custom_err or err_map.get(err, "")))
+    resp = HTMLResponse(_login_page_html(error=custom_err or err_map.get(err, "")))
+    if nxt:
+        resp.set_cookie(_NEXT_COOKIE, nxt, max_age=1800, samesite="lax", path="/")
+    return resp
 
 
 async def _finish_login(request: Request, user: User, *, login_kind: str) -> RedirectResponse:
     factory = get_session_factory()
     async with factory() as session:
         row = await create_session(session, user=user, request=request, login_kind=login_kind)
-    resp = RedirectResponse("/app", status_code=303)
+    from urllib.parse import unquote
+
+    nxt = _safe_next(unquote(request.cookies.get(_NEXT_COOKIE) or ""))
+    resp = RedirectResponse(nxt or "/app", status_code=303)
+    resp.delete_cookie(_NEXT_COOKIE, path="/")
     set_session_cookie(resp, row.session_token)
     resp.delete_cookie(_PENDING_2FA_COOKIE, path="/")
     resp.delete_cookie(REF_COOKIE, path="/")
@@ -777,7 +847,10 @@ async def telegram_bot_login_poll(request: Request, code: str = "") -> JSONRespo
             _set_pending_2fa_cookie(resp, user.id)
             return resp
         row = await create_session(session, user=user, request=request, login_kind="telegram_bot")
-    resp = JSONResponse({"status": "done"})
+    from urllib.parse import unquote
+
+    resp = JSONResponse({"status": "done", "next": _safe_next(unquote(request.cookies.get(_NEXT_COOKIE) or "")) or "/app"})
+    resp.delete_cookie(_NEXT_COOKIE, path="/")
     set_session_cookie(resp, row.session_token)
     resp.delete_cookie(REF_COOKIE, path="/")
     return resp

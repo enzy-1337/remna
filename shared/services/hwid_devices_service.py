@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from shared.config import Settings
 from shared.integrations.remnawave import RemnaWaveClient, RemnaWaveError
 from shared.integrations.rw_hwid_devices import (
@@ -18,16 +20,16 @@ async def fetch_panel_hwid_context(
     if user.remnawave_uuid is None:
         return None, [], "Remnawave не привязан к профилю."
     rw = RemnaWaveClient(settings)
-    uinf: dict | None = None
-    try:
-        uinf = await rw.get_user(str(user.remnawave_uuid))
-    except RemnaWaveError:
-        uinf = None
-    try:
-        raw = await rw.get_user_hwid_devices(str(user.remnawave_uuid))
-    except RemnaWaveError as e:
-        return uinf, [], str(e)
-    return uinf, normalize_hwid_devices_list(raw), None
+    uid = str(user.remnawave_uuid)
+    # Профиль и устройства — независимые запросы к панели, выполняем параллельно.
+    uinf_res, raw_res = await asyncio.gather(rw.get_user(uid), rw.get_user_hwid_devices(uid), return_exceptions=True)
+    for res in (uinf_res, raw_res):
+        if isinstance(res, BaseException) and not isinstance(res, RemnaWaveError):
+            raise res
+    uinf: dict | None = None if isinstance(uinf_res, BaseException) else uinf_res
+    if isinstance(raw_res, BaseException):
+        return uinf, [], str(raw_res)
+    return uinf, normalize_hwid_devices_list(raw_res), None
 
 
 def connected_devices_count(uinf: dict | None, devices: list[dict]) -> int:

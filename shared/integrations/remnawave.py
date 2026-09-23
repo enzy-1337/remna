@@ -17,6 +17,7 @@ import logging
 import re
 import time
 import uuid as uuid_lib
+import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -31,6 +32,21 @@ logger = logging.getLogger(__name__)
 
 # Маркер «поле не передано» (в отличие от None — «очистить значение в панели»).
 _UNSET: Any = object()
+
+# Один httpx-клиент на event loop: соединение с панелью переиспользуется (keep-alive), без нового
+# TCP+TLS-рукопожатия на каждый запрос — раньше это давало сотни мс на каждый вызов панели.
+_SHARED_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
+
+
+def _shared_http_client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    client = _SHARED_CLIENTS.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=60),
+        )
+        _SHARED_CLIENTS[loop] = client
+    return client
 
 class RemnaWaveError(Exception):
     """Ошибка вызова Remnawave API."""
@@ -155,14 +171,14 @@ class RemnaWaveClient:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
-                async with httpx.AsyncClient(timeout=self._s.remnawave_request_timeout) as client:
-                    r = await client.request(
-                        method,
-                        url,
-                        headers=self._headers(),
-                        json=json_body,
-                        params=params,
-                    )
+                r = await _shared_http_client().request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    json=json_body,
+                    params=params,
+                    timeout=self._s.remnawave_request_timeout,
+                )
                 if r.status_code == 401:
                     logger.error("Remnawave 401 Unauthorized — проверьте REMNAWAVE_API_TOKEN")
                     raise RemnaWaveError("Неверный или просроченный токен Remnawave")

@@ -571,6 +571,18 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC",
         description="Как часто проверять подписки на напоминания (сек)",
     )
+    landing_trial_promo_code: str = Field(
+        default="TEST3",
+        validation_alias="LANDING_TRIAL_PROMO_CODE",
+        description="Промокод пробного периода, который лендинг показывает после входа (блок «3 дня бесплатно»). Пусто — блок скрыт.",
+    )
+    landing_trial_days: int = Field(
+        default=3,
+        ge=1,
+        le=90,
+        validation_alias="LANDING_TRIAL_DAYS",
+        description="Сколько дней даёт промокод пробного периода (текст на лендинге).",
+    )
     email_site_url: str = Field(
         default="https://my.flux-network.store",
         validation_alias="EMAIL_SITE_URL",

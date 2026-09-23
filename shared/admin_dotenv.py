@@ -49,6 +49,18 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "HTTPS-origin веб-админки без слэша в конце (например https://weba.example.com) — используется для ссылок на /admin/... в админ-логе Telegram и темах тикетов. Пусто — берётся PUBLIC_SITE_URL.",
             ),
             (
+                "LANDING_TRIAL_PROMO_CODE",
+                "Промокод «N дней бесплатно» на сайте",
+                lambda s: s.landing_trial_promo_code or "",
+                "Лендинг my.… показывает блок «Получи N дней бесплатно»: после входа открывает этот промокод. Сам промокод создайте в «Промокоды» (тип — дни подписки). Пусто — блок скрыт.",
+            ),
+            (
+                "LANDING_TRIAL_DAYS",
+                "Дней по промокоду (текст на сайте)",
+                lambda s: str(s.landing_trial_days),
+                "Число дней в тексте блока на лендинге — должно совпадать с настройкой самого промокода.",
+            ),
+            (
                 "BOT_USERNAME",
                 "Username бота",
                 lambda s: s.bot_username or "",

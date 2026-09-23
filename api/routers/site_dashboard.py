@@ -289,6 +289,14 @@ async def dashboard(request: Request) -> HTMLResponse:
 document.querySelectorAll('[data-open-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').classList.add('open'); }}); }});
 document.querySelectorAll('[data-close-promo]').forEach(function(b){{ b.addEventListener('click', function(){{ document.getElementById('promo-modal').classList.remove('open'); }}); }});
 document.getElementById('promo-modal').addEventListener('click', function(e){{ if (e.target === this) this.classList.remove('open'); }});
+(function(){{
+  var m = location.search.match(/[?&]promo=([A-Za-z0-9_-]{{1,32}})/);
+  if (!m) return;
+  var inp = document.querySelector('#promo-modal input[name=code]');
+  if (inp) inp.value = m[1].toUpperCase();
+  document.getElementById('promo-modal').classList.add('open');
+  history.replaceState({{}}, '', location.pathname);
+}})();
 </script>
 """
     resp_body = page(title="Личный кабинет — Flux Network", body=body)

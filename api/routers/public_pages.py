@@ -950,11 +950,24 @@ def render_not_found_page(path: str) -> HTMLResponse:
 async def public_stub(request: Request) -> HTMLResponse:
     from api.routers.site_landing import REF_COOKIE, REF_COOKIE_MAX_AGE, render_landing_page
 
+    from shared.services.site_session_service import load_site_user
+
     ref = (request.query_params.get("ref") or "").strip()
     factory = get_session_factory()
+    from shared.services.subscription_service import default_one_month_tariff_price_rub, resolve_plan_price_rub
+
     async with factory() as session:
         plans = await list_paid_plans(session)
-    resp = HTMLResponse(render_landing_page(ref_code=ref, plans=plans))
+        # цены — из базы по тем же правилам, что в боте: «1 месяц» = база, остальные = база × мес − скидка
+        prices = {p.id: await resolve_plan_price_rub(session, p) for p in plans}
+        month_price = await default_one_month_tariff_price_rub(session)
+        try:
+            logged_in = await load_site_user(session, request) is not None
+        except Exception:
+            logged_in = False
+    resp = HTMLResponse(
+        render_landing_page(ref_code=ref, plans=plans, logged_in=logged_in, prices=prices, month_price=month_price)
+    )
     if ref:
         resp.set_cookie(
             REF_COOKIE, ref[:32], max_age=REF_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"

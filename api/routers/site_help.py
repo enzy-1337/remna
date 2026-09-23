@@ -165,4 +165,6 @@ async def help_page(request: Request) -> HTMLResponse:
             initial = (user.first_name or user.username or "U")[:1].upper()
             body = render_help_body(authed=True, balance_rub=fmt_money(user.balance), initial=initial)
             return HTMLResponse(page(title="Помощь — Flux Network", body=body))
-    return HTMLResponse(page(title="Помощь — Flux Network", body=render_help_body(authed=False)))
+    from api.routers.site_auth import login_modal_html
+
+    return HTMLResponse(page(title="Помощь — Flux Network", body=render_help_body(authed=False) + login_modal_html()))

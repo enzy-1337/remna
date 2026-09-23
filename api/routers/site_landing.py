@@ -37,14 +37,21 @@ def _plan_months(duration_days: int) -> int:
     return max(1, round(duration_days / 30))
 
 
-def _pricing_html(plans: list[Plan]) -> str:
+def _price(p: Plan, prices: dict[int, Decimal] | None) -> Decimal:
+    """Актуальная цена тарифа — та же, что в боте (resolve_plan_price_rub), иначе поле плана."""
+    if prices and p.id in prices:
+        return prices[p.id]
+    return p.price_rub
+
+
+def _pricing_html(plans: list[Plan], prices: dict[int, Decimal] | None = None) -> str:
     if not plans:
         return ""
     best_id = max(plans, key=lambda p: p.discount_percent).id if any(p.discount_percent > 0 for p in plans) else None
     tiles = []
     for p in plans:
         months = _plan_months(p.duration_days)
-        per_month = (p.price_rub / months).quantize(Decimal("1"))
+        per_month = (_price(p, prices) / months).quantize(Decimal("1"))
         is_best = p.id == best_id
         badge = (
             '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);font:800 9px Manrope;'
@@ -72,7 +79,89 @@ def _pricing_html(plans: list[Plan]) -> str:
     return "".join(tiles)
 
 
-def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) -> str:
+def _ru_days(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} день"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} дня"
+    return f"{n} дней"
+
+
+def _monthly_price(plans: list[Plan], prices: dict[int, Decimal] | None = None) -> Decimal | None:
+    """Цена месячного тарифа (по нему считается «затем N ₽/мес»)."""
+    monthly = [p for p in plans if _plan_months(p.duration_days) == 1]
+    if monthly:
+        return min(_price(p, prices) for p in monthly)
+    return None
+
+
+def _trial_block_html(*, code: str, days: int, price: Decimal | None, logged_in: bool) -> str:
+    then = f"затем {fmt_money(price.quantize(Decimal('1')))} ₽/месяц" if price is not None else "затем по тарифу"
+    days_s = _ru_days(days)
+    if logged_in:
+        # код попадает в страницу только для вошедших
+        reveal = f"""
+        <div id="trial-code-box" hidden style="margin-top:22px;">
+          <div style="font:600 12px Manrope;color:var(--text-4);text-transform:uppercase;letter-spacing:.08em;">Ваш промокод</div>
+          <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+            <div class="mono" style="font:800 30px 'JetBrains Mono',monospace;letter-spacing:.18em;color:#fff;background:rgba(123,92,255,.16);border:1px dashed rgba(157,133,255,.6);border-radius:14px;padding:12px 22px;">{esc(code)}</div>
+            <button type="button" class="btn btn-outline" data-copy-field data-copy-value="{esc(code)}" onclick="var s=this.querySelector('span');s.textContent='Скопировано';setTimeout(function(){{s.textContent='Копировать';}},1500);">{icon('copy', size=15)}<span>Копировать</span></button>
+          </div>
+          <div style="font:500 13px Manrope;color:var(--text-3);margin-top:14px;">{esc(days_s)} бесплатно, {esc(then)}. Активируйте в личном кабинете → «Купон».</div>
+          <a href="/app?promo={esc(code)}" class="btn btn-primary" style="margin-top:16px;display:inline-flex;">Активировать сейчас {icon('arrow-right', size=15, color='#fff', stroke=2.4)}</a>
+        </div>"""
+        button = f'<button type="button" class="btn btn-primary btn-lg" id="trial-reveal-btn">{icon("gift", size=17, color="#fff")}<span>Получить промокод</span></button>'
+    else:
+        reveal = ""
+        button = (
+            f'<button type="button" class="btn btn-primary btn-lg" data-open-login data-login-next="/?trial=1#free-trial">'
+            f'{icon("gift", size=17, color="#fff")}<span>Получить промокод</span></button>'
+            '<div style="font:500 12px Manrope;color:var(--text-4);margin-top:10px;">Нужно войти — это займёт пару секунд</div>'
+        )
+    return f"""
+    <div id="free-trial" class="card fade-up" style="margin:60px 0 0;padding:38px 28px;text-align:center;position:relative;overflow:hidden;
+      background:radial-gradient(120% 140% at 50% 0%,rgba(123,92,255,.22),rgba(17,24,32,.95) 60%);border:1px solid rgba(123,92,255,.35);">
+      <div style="width:52px;height:52px;border-radius:16px;margin:0 auto;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;box-shadow:0 16px 40px -14px rgba(123,92,255,.9);">{icon('gift', size=24, color='#fff')}</div>
+      <div style="font:800 clamp(24px,4vw,34px) Manrope;color:var(--text-1);margin-top:18px;letter-spacing:-.02em;">Получи {esc(days_s)} подписки бесплатно</div>
+      <div style="font:500 15px Manrope;color:var(--text-3);margin:10px auto 0;max-width:520px;line-height:1.55;">
+        Попробуйте Flux VPN без оплаты: {esc(days_s)} полного доступа на всех устройствах, {esc(then)}. Без привязки карты — продление можно отключить в любой момент.
+      </div>
+      <div id="trial-cta" style="margin-top:24px;">{button}</div>
+      {reveal}
+    </div>"""
+
+
+_TRIAL_JS = """
+(function(){
+  var btn = document.getElementById('trial-reveal-btn');
+  var box = document.getElementById('trial-code-box');
+  function reveal(){
+    if (!box) return;
+    box.hidden = false;
+    var cta = document.getElementById('trial-cta'); if (cta) cta.hidden = true;
+  }
+  if (btn) btn.addEventListener('click', reveal);
+  // вернулись сюда после входа — сразу показываем код
+  if (/[?&]trial=1/.test(location.search) && box) {
+    reveal();
+    var el = document.getElementById('free-trial');
+    if (el) setTimeout(function(){ el.scrollIntoView({behavior:'smooth', block:'center'}); }, 150);
+    history.replaceState({}, '', location.pathname + '#free-trial');
+  }
+})();
+"""
+
+
+def render_landing_page(
+    *,
+    ref_code: str = "",
+    plans: list[Plan] | None = None,
+    logged_in: bool = False,
+    prices: dict[int, Decimal] | None = None,
+    month_price: Decimal | None = None,
+) -> str:
+    from api.routers.site_auth import login_modal_html
+
     settings = get_settings()
     plans = plans or []
     features_html = "".join(
@@ -89,13 +178,13 @@ def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) 
     bot_username = (settings.bot_username or "").strip().lstrip("@")
     bot_url = f"https://t.me/{bot_username}" if bot_username else "#"
 
-    cheapest = min((p.price_rub / _plan_months(p.duration_days) for p in plans), default=None)
+    cheapest = min((_price(p, prices) / _plan_months(p.duration_days) for p in plans), default=None)
     price_line = (
         f"Дальше — от {fmt_money(cheapest.quantize(Decimal('1')))} ₽ в месяц, оплата картой, СБП или криптовалютой."
         if cheapest is not None
         else "Оплата картой, СБП или криптовалютой."
     )
-    pricing_html = _pricing_html(plans)
+    pricing_html = _pricing_html(plans, prices)
     pricing_block = (
         f"""
     <div id="pricing" class="card fade-up d3" style="margin:80px 0 0;padding:34px 40px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
@@ -107,6 +196,23 @@ def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) 
     </div>"""
         if pricing_html
         else ""
+    )
+
+    trial_code = (settings.landing_trial_promo_code or "").strip()
+    trial_block = (
+        _trial_block_html(
+            code=trial_code,
+            days=int(settings.landing_trial_days),
+            price=month_price if month_price is not None else _monthly_price(plans, prices),
+            logged_in=logged_in,
+        )
+        if trial_code
+        else ""
+    )
+    hero_cta = (
+        f'<a href="/app" class="btn btn-primary btn-lg">Личный кабинет {icon("arrow-right", size=16, color="#fff", stroke=2.4)}</a>'
+        if logged_in
+        else f'<a href="/login" class="btn btn-primary btn-lg">Войти и попробовать {icon("arrow-right", size=16, color="#fff", stroke=2.4)}</a>'
     )
 
     body = f"""
@@ -126,7 +232,7 @@ def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) 
         Одна подписка на все устройства: iOS, Android, Windows, macOS, Linux и Telegram Mini App. Оформление и продление — в боте или на сайте, пополнение картой, СБП или криптовалютой.
       </div>
       <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:38px;flex-wrap:wrap;">
-        <a href="/login" class="btn btn-primary btn-lg">Войти и попробовать {icon('arrow-right', size=16, color='#fff', stroke=2.4)}</a>
+        {hero_cta}
         <a href="{esc(bot_url)}" class="btn btn-outline btn-lg">{tg_logo_svg(16, '#8A96A3')}<span>Открыть в Telegram</span></a>
       </div>
     </div>
@@ -137,11 +243,15 @@ def render_landing_page(*, ref_code: str = "", plans: list[Plan] | None = None) 
 
     {pricing_block}
 
+    {trial_block}
+
     <div id="apps" style="margin:60px 0 0;"></div>
     {site_footer()}
   </div>
 </div>
+{'' if logged_in else login_modal_html()}
 <script>{COPY_JS}</script>
+<script>{_TRIAL_JS}</script>
 """
     return page(title="Flux Network — VPN без границ", body=body)
 
@@ -191,5 +301,12 @@ async def legal_page(slug: str) -> HTMLResponse:
     {site_footer()}
   </div>
 </div>
+{_login_modal()}
 """
     return HTMLResponse(page(title=title, body=body))
+
+
+def _login_modal() -> str:
+    from api.routers.site_auth import login_modal_html
+
+    return login_modal_html()

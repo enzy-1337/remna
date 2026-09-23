@@ -32,7 +32,6 @@ def esc_attr(value: object) -> str:
 # ---------------------------------------------------------------------------
 
 SITE_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 :root{
   color-scheme: dark;
   --bg:#0A0D11; --bg-flat:#080A0E;
@@ -368,6 +367,8 @@ def page(*, title: str, body: str, extra_head: str = "") -> str:
 <title>{esc(title)}</title>
 {f'<link rel="icon" href="{esc(site_logo_url())}">' if site_logo_url() else ''}
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap">
 <style>{SITE_CSS}</style>
 {extra_head}
 </head>
