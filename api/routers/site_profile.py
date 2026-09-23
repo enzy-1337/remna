@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 
@@ -31,9 +31,46 @@ from shared.services.email_code_service import email_sending_configured, normali
 from shared.services.email_marketing import parse_unsubscribe_token, set_marketing_consent
 from api.routers.site_auth import _EMAIL_LINK_PURPOSE, _set_pending_email_cookie
 
-from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg, ua_label as _ua_label
+from api.routers.site_theme import app_topbar, avatar_img, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg, ua_label as _ua_label
 
 router = APIRouter()
+
+
+@router.get("/app/avatar")
+async def my_avatar(request: Request) -> Response:
+    """Фото профиля Telegram текущего пользователя — те же загрузчик и кэш, что у аватарок в web-admin."""
+    import time
+
+    from api.routers.web_admin import (
+        _AVATAR_CACHE,
+        _AVATAR_TTL_SEC,
+        _avatar_fetch_lock,
+        _fetch_telegram_public_userpic,
+        _load_telegram_profile_photo,
+    )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+    if auth is None:
+        return Response(status_code=401)
+    user = auth[0]
+    headers = {"Cache-Control": "private, max-age=300", "Vary": "Cookie"}
+    hit = _AVATAR_CACHE.get(user.id)
+    if hit is not None and time.monotonic() - hit[0] < _AVATAR_TTL_SEC:
+        return Response(content=hit[1], media_type=hit[2], headers=headers)
+    async with _avatar_fetch_lock(user.id):
+        hit = _AVATAR_CACHE.get(user.id)
+        if hit is not None and time.monotonic() - hit[0] < _AVATAR_TTL_SEC:
+            return Response(content=hit[1], media_type=hit[2], headers=headers)
+        loaded = await _load_telegram_profile_photo(user)
+        if loaded is None and user.username:
+            loaded = await _fetch_telegram_public_userpic(user.username)
+        if loaded is None:
+            return Response(status_code=404, headers={"Cache-Control": "private, max-age=600"})
+        body_b, mime = loaded
+        _AVATAR_CACHE[user.id] = (time.monotonic(), body_b, mime)
+    return Response(content=body_b, media_type=mime, headers=headers)
 
 
 @router.get("/app/profile")
@@ -82,7 +119,7 @@ async def profile_page(request: Request) -> HTMLResponse:
 
     <div class="card card-accent fade-up" style="margin-top:16px;display:flex;align-items:center;gap:22px;flex-wrap:wrap;">
       <div class="avatar-circle" style="width:96px;height:96px;border-radius:22px;font-size:32px;position:relative;flex-shrink:0;">
-        {esc(initial)}
+        {esc(initial)}{avatar_img()}
         <div style="position:absolute;bottom:2px;right:2px;width:16px;height:16px;border-radius:50%;background:var(--success);border:3px solid var(--card-1);"></div>
       </div>
       <div style="flex:1;min-width:220px;">

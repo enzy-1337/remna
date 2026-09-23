@@ -962,11 +962,15 @@ async def public_stub(request: Request) -> HTMLResponse:
         prices = {p.id: await resolve_plan_price_rub(session, p) for p in plans}
         month_price = await default_one_month_tariff_price_rub(session)
         try:
-            logged_in = await load_site_user(session, request) is not None
+            auth = await load_site_user(session, request)
         except Exception:
-            logged_in = False
+            auth = None
+        logged_in = auth is not None
+        user_initial = ((auth[0].first_name or auth[0].username or "U")[:1].upper()) if auth else None
     resp = HTMLResponse(
-        render_landing_page(ref_code=ref, plans=plans, logged_in=logged_in, prices=prices, month_price=month_price)
+        render_landing_page(
+            ref_code=ref, plans=plans, logged_in=logged_in, prices=prices, month_price=month_price, user_initial=user_initial
+        )
     )
     if ref:
         resp.set_cookie(

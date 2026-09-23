@@ -30,6 +30,7 @@ from shared.datetime_msk import fmt_dt_msk
 
 from api.routers.site_theme import (
     app_topbar,
+    avatar_img,
     bot_deep_link,
     esc,
     fmt_money,
@@ -369,7 +370,7 @@ async def dashboard(request: Request) -> HTMLResponse:
       <div style="display:flex;flex-direction:column;gap:20px;min-width:0;">
         <div class="card card-accent">
           <div style="display:flex;align-items:center;gap:14px;">
-            <div class="avatar-circle" style="width:46px;height:46px;border-radius:14px;font-size:17px;">{esc(initial)}</div>
+            <div class="avatar-circle" style="width:46px;height:46px;border-radius:14px;font-size:17px;">{esc(initial)}{avatar_img()}</div>
             <div style="min-width:0;">
               <div style="font:800 16px Manrope;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{name_display}</div>
               <div class="mono" style="font:600 11px Manrope;color:var(--text-4);margin-top:2px;">ID: {user.id}</div>

@@ -99,7 +99,8 @@ img{max-width:100%;}
 .balance-chip{display:flex;align-items:center;gap:7px;background:var(--card-3);border-radius:999px;padding:6px 11px 6px 9px;color:var(--text-1);
   font:700 12.5px Manrope;}
 .avatar-circle{border-radius:50%;background:linear-gradient(140deg,var(--accent),var(--accent-2));
-  display:flex;align-items:center;justify-content:center;font:800 13px Manrope;color:#fff;flex-shrink:0;}
+  display:flex;align-items:center;justify-content:center;font:800 13px Manrope;color:#fff;flex-shrink:0;position:relative;overflow:hidden;}
+.avatar-circle .av-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;}
 
 /* --- buttons --- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;border-radius:13px;font:800 14px Manrope;
@@ -415,7 +416,12 @@ def brand_mark(*, size: str = "md") -> str:
 </div>"""
 
 
-def public_topbar(*, active: str = "") -> str:
+def avatar_img() -> str:
+    """Фото профиля Telegram текущего пользователя поверх буквы-заглушки (если фото нет — остаётся буква)."""
+    return '<img class="av-img" src="/app/avatar" alt="" loading="lazy" onerror="this.remove()">'
+
+
+def public_topbar(*, active: str = "", user_initial: str | None = None) -> str:
     items = [
         ("Возможности", "/#features", "features"),
         ("Тарифы", "/#pricing", "pricing"),
@@ -432,9 +438,22 @@ def public_topbar(*, active: str = "") -> str:
     {brand_mark()}
     <div class="topbar-links">{links}</div>
     <div class="topbar-sep hide-mobile"></div>
-    <a class="pill-btn" href="/login">{icon('arrow-right', size=14, color='#fff', stroke=2.4)}<span>Войти</span></a>
+    {_public_account_block(user_initial)}
   </div>
 </div>"""
+
+
+def _public_account_block(user_initial: str | None) -> str:
+    """Гость — «Войти»; вошедший — «В панель», аватарка и выход."""
+    if not user_initial:
+        return f'<a class="pill-btn" href="/login">{icon("arrow-right", size=14, color="#fff", stroke=2.4)}<span>Войти</span></a>'
+    return f"""<div style="display:flex;align-items:center;gap:8px;">
+      <a class="pill-btn" href="/app">{icon('home', size=14, color='#fff', stroke=2.2)}<span>В панель</span></a>
+      <a class="avatar-circle" href="/app/profile" style="width:34px;height:34px;" title="Профиль">{esc(user_initial)}{avatar_img()}</a>
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit" class="icon-btn" style="width:34px;height:34px;" title="Выйти">{icon('logout', size=15)}</button>
+      </form>
+    </div>"""
 
 
 def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: str) -> str:
@@ -476,7 +495,7 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
           </div>
         </div>
       </div>
-      <a class="avatar-circle" href="/app/profile" style="width:30px;height:30px;" title="Профиль">{esc(initial)}</a>
+      <a class="avatar-circle" href="/app/profile" style="width:30px;height:30px;" title="Профиль">{esc(initial)}{avatar_img()}</a>
       <form method="post" action="/logout" style="margin:0;">
         <button type="submit" class="icon-btn" title="Выйти">{icon('logout', size=15)}</button>
       </form>
@@ -550,8 +569,10 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
       return;
     }}
     notifsList.innerHTML = items.map(function(n){{
-      return '<div style="padding:12px 16px;border-bottom:1px solid var(--line);">'
-        + '<div style="font:700 12.5px Manrope;color:var(--text-1);">' + escHtml(n.title) + '</div>'
+      return '<div style="padding:12px 16px;border-bottom:1px solid var(--line);' + (n.unread ? 'background:rgba(123,92,255,.08);' : '') + '">'
+        + '<div style="display:flex;align-items:center;gap:7px;font:700 12.5px Manrope;color:var(--text-1);">'
+        + (n.unread ? '<span style="width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;"></span>' : '')
+        + escHtml(n.title) + '</div>'
         + '<div style="font:500 12px Manrope;color:var(--text-3);margin-top:4px;line-height:1.5;">' + n.body_html + '</div>'
         + '<div style="font:600 10.5px Manrope;color:var(--text-4);margin-top:6px;">' + escHtml(n.sent_at) + '</div>'
         + '</div>';
@@ -584,7 +605,11 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
       e.stopPropagation();
       if (notifsDd.hidden) positionNotifsDd();
       notifsDd.hidden = !notifsDd.hidden;
-      if (!notifsDd.hidden) notifsBadge.hidden = true;
+      if (!notifsDd.hidden && !notifsBadge.hidden) {{
+        // открыли колокольчик — отмечаем прочитанным на сервере, значок не вернётся после перезагрузки
+        notifsBadge.hidden = true;
+        fetch('/app/api/notifications/seen', {{method:'POST', credentials:'same-origin'}}).catch(function(){{}});
+      }}
     }});
     document.querySelectorAll('[data-close-notifs]').forEach(function(b){{ b.addEventListener('click', function(){{ notifsDd.hidden = true; }}); }});
     document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && !notifsBtn.contains(e.target)) notifsDd.hidden = true; }});

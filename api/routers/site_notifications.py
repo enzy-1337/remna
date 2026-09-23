@@ -59,16 +59,9 @@ async def site_notifications(request: Request) -> JSONResponse:
             ).scalars()
         )
 
-        seen_at = user.notifications_seen_at
-        seen_cmp = seen_at.replace(tzinfo=timezone.utc) if seen_at and seen_at.tzinfo is None else seen_at
-        unread = 0
-        for r in rows:
-            sent = r.sent_at.replace(tzinfo=timezone.utc) if r.sent_at.tzinfo is None else r.sent_at
-            if seen_cmp is None or sent > seen_cmp:
-                unread += 1
-
-        user.notifications_seen_at = datetime.now(timezone.utc)
-        await session.commit()
+        # Только считаем непрочитанные — прочитанными отмечает POST /seen, когда человек открыл колокольчик.
+        seen_cmp = _utc(user.notifications_seen_at)
+        unread_ids = {r.id for r in rows if seen_cmp is None or _utc(r.sent_at) > seen_cmp}
 
     items = [
         {
@@ -76,7 +69,28 @@ async def site_notifications(request: Request) -> JSONResponse:
             "title": _short_title(r.body_text),
             "body_html": broadcast_html_preview_fragment(r.body_text)[:1500],
             "sent_at": _relative(r.sent_at),
+            "unread": r.id in unread_ids,
         }
         for r in rows
     ]
-    return JSONResponse({"unread": unread, "items": items})
+    return JSONResponse({"unread": len(unread_ids), "items": items})
+
+
+@router.post("/app/api/notifications/seen")
+async def site_notifications_seen(request: Request) -> JSONResponse:
+    """Колокольчик открыт — всё, что уже вышло, считается прочитанным (хранится в БД, переживает перезаход)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return JSONResponse({"ok": False}, status_code=401)
+        user, _sess_row = auth
+        user.notifications_seen_at = datetime.now(timezone.utc)
+        await session.commit()
+    return JSONResponse({"ok": True})
+
+
+def _utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt

@@ -159,6 +159,7 @@ def render_landing_page(
     logged_in: bool = False,
     prices: dict[int, Decimal] | None = None,
     month_price: Decimal | None = None,
+    user_initial: str | None = None,
 ) -> str:
     from api.routers.site_auth import login_modal_html
 
@@ -218,7 +219,7 @@ def render_landing_page(
     body = f"""
 <div class="hero-bg">
   <div class="shell-wide">
-    {public_topbar(active="features")}
+    {public_topbar(active="features", user_initial=user_initial if logged_in else None)}
 
     <div style="text-align:center;padding:96px 0 0;" class="fade-up d1">
       <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(123,92,255,.1);border:1px solid rgba(123,92,255,.28);border-radius:999px;padding:7px 16px;">
@@ -278,12 +279,12 @@ _LEGAL_CSS = """
 """
 
 
-def _legal_page_html(title: str, body_html: str, *, updated: str = "") -> str:
+def _legal_page_html(title: str, body_html: str, *, updated: str = "", user_initial: str | None = None) -> str:
     return f"""
 <style>{_LEGAL_CSS}</style>
 <div class="hero-bg" style="min-height:100vh;">
   <div class="shell" style="padding-top:20px;">
-    {public_topbar()}
+    {public_topbar(user_initial=user_initial)}
     <div class="card fade-up legal-card" style="max-width:820px;margin:40px auto;padding:40px 44px;">
       <h1 style="font:800 clamp(24px,4vw,32px) Manrope;color:var(--text-1);margin:0;letter-spacing:-.02em;">{esc(title)}</h1>
       {f'<div style="font:500 12px Manrope;color:var(--text-4);margin-top:8px;">Редакция от {esc(updated)}</div>' if updated else ''}
@@ -297,12 +298,27 @@ def _legal_page_html(title: str, body_html: str, *, updated: str = "") -> str:
     {site_footer()}
   </div>
 </div>
-{_login_modal()}
+{'' if user_initial else _login_modal()}
 """
 
 
+async def _current_user_initial(request: Request) -> str | None:
+    from shared.database import get_session_factory
+    from shared.services.site_session_service import load_site_user
+
+    try:
+        async with get_session_factory()() as session:
+            auth = await load_site_user(session, request)
+    except Exception:
+        return None
+    if auth is None:
+        return None
+    u = auth[0]
+    return (u.first_name or u.username or "U")[:1].upper()
+
+
 @router.get("/legal/{slug}")
-async def legal_page(slug: str) -> HTMLResponse:
+async def legal_page(slug: str, request: Request) -> HTMLResponse:
     from fastapi.responses import RedirectResponse
 
     from shared.database import get_session_factory
@@ -310,6 +326,7 @@ async def legal_page(slug: str) -> HTMLResponse:
     from shared.services.legal_docs import DOCS, get_or_import_doc
 
     settings = get_settings()
+    ui = await _current_user_initial(request)
     if slug == "offer":
         # раньше была короткая «оферта» — теперь полноценное пользовательское соглашение
         return RedirectResponse("/legal/terms", status_code=301)
@@ -319,7 +336,7 @@ async def legal_page(slug: str) -> HTMLResponse:
             doc = await get_or_import_doc(session, slug, settings)
         if doc is not None:
             updated = fmt_dt_msk(doc.get("updated_at"), with_suffix=False) if doc.get("updated_at") else ""
-            return HTMLResponse(page(title=f"{doc['title']} — Flux Network", body=_legal_page_html(doc["title"], doc["content_html"], updated=updated.split(" ")[0])))
+            return HTMLResponse(page(title=f"{doc['title']} — Flux Network", body=_legal_page_html(doc["title"], doc["content_html"], updated=updated.split(" ")[0], user_initial=ui)))
         support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
         return HTMLResponse(
             page(
@@ -336,7 +353,7 @@ async def legal_page(slug: str) -> HTMLResponse:
     title, body_text = item
     support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
     body_text = body_text.format(support_line=f" — @{support}" if support else "")
-    return HTMLResponse(page(title=title, body=_legal_page_html(title, f"<p>{esc(body_text)}</p>")))
+    return HTMLResponse(page(title=title, body=_legal_page_html(title, f"<p>{esc(body_text)}</p>", user_initial=ui)))
 
 
 def _login_modal() -> str:
