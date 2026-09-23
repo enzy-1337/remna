@@ -388,14 +388,14 @@ def _logo_inner(px: int, icon_size: int) -> str:
     if url:
         return (
             f'<img src="{esc(url)}" alt="Flux" width="{px}" height="{px}" '
-            f'style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;"/>'
+            f'style="width:86%;height:86%;object-fit:contain;display:block;"/>'
         )
     return icon('shield', size=icon_size, color='#fff', stroke=2.4)
 
 
 def _logo_box_style() -> str:
     # С картинкой — без фиолетовой подложки, чтобы не просвечивала по краям прозрачного PNG.
-    return "background:none;overflow:hidden;" if site_logo_url() else ""
+    return "background:none;display:flex;align-items:center;justify-content:center;" if site_logo_url() else ""
 
 
 def brand_mark(*, size: str = "md") -> str:
