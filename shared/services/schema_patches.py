@@ -23,6 +23,10 @@ _PG_USER_NOTIFY_MSG_DDL = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_notify_message_id bigint NULL",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_marketing_consent boolean NOT NULL DEFAULT false",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_marketing_consent_at TIMESTAMP WITH TIME ZONE NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS intro_offer_used_at TIMESTAMP WITH TIME ZONE NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS winback_offered_at TIMESTAMP WITH TIME ZONE NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS winback_offer_until TIMESTAMP WITH TIME ZONE NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS winback_offer_used_at TIMESTAMP WITH TIME ZONE NULL",
     # json → jsonb: у json нет оператора равенства (ошибка «could not identify an equality operator for type json»).
     "DO $$ BEGIN "
     "IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' "

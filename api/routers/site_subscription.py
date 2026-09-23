@@ -26,20 +26,17 @@ from shared.services.hwid_devices_service import (
     fetch_panel_hwid_context,
     panel_devices_unlimited,
 )
-from shared.services.promo_service import get_pending_purchase_discount_info
+from shared.services.offers_service import get_intro_plan, intro_offer_eligible, intro_offer_texts, quote_plan_price
+from shared.datetime_msk import fmt_dt_msk
 from shared.services.site_session_service import load_site_user, touch_session
 from shared.services.subscription_service import (
     add_paid_device_slots,
     get_active_subscription,
-    get_one_month_reference_plan,
     list_paid_plans,
     purchase_plan_with_balance,
-    resolve_user_plan_price_rub,
     set_subscription_auto_renew,
     subscription_days_left,
-    tariff_duration_months,
     unbind_hwid_device_keep_slot,
-    user_custom_month_price_rub,
 )
 
 from api.routers.miniapp import _classify_device, _md2_to_plain
@@ -65,23 +62,26 @@ async def subscription_page(request: Request) -> HTMLResponse:
         days_left = subscription_days_left(sub.expires_at if sub else None)
         is_bot_admin = is_admin_unlimited_devices(user, settings)
 
-        ref_plan = await get_one_month_reference_plan(session)
-        custom_month = user_custom_month_price_rub(user)
-        base_month = custom_month if custom_month is not None else (ref_plan.price_rub if ref_plan else Decimal("0"))
-        _promo_code, promo_discount_pct = await get_pending_purchase_discount_info(session, user_id=user.id)
 
         plans = await list_paid_plans(session)
         plan_cards: list[dict] = []
+        wb_source = False
         for p in plans:
-            price_after_plan = await resolve_user_plan_price_rub(session, user, p)
-            final_price = price_after_plan
-            if promo_discount_pct > 0:
-                final_price = (price_after_plan * (Decimal("100") - promo_discount_pct) / Decimal("100")).quantize(Decimal("1"))
-            months = tariff_duration_months(p.duration_days)
-            original_price = (base_month * months).quantize(Decimal("1")) if base_month > 0 else final_price
-            if original_price < final_price:
-                original_price = final_price
-            plan_cards.append({"plan": p, "price": final_price, "original": original_price})
+            # та же цена, что спишется при покупке: тариф → персональная цена → промокод/«вернись»
+            q = await quote_plan_price(session, user, p, settings)
+            wb_source = wb_source or q.source == "winback"
+            plan_cards.append({"plan": p, "price": q.final, "original": q.original})
+        intro_card = ""
+        if await intro_offer_eligible(session, user, settings):
+            intro_plan = await get_intro_plan(session, settings)
+            intro_card = _intro_card_html(intro_plan, intro_offer_texts(settings))
+        winback_note = ""
+        if wb_source:
+            winback_note = (
+                '<div class="card-soft" style="border-radius:12px;padding:12px 14px;margin-top:14px;font:600 13px Manrope;color:var(--text-2);">'
+                f'🎁 Скидка «с возвращением» {settings.winback_discount_percent.normalize():f}% уже учтена в ценах — '
+                f'на одну покупку, до {esc(fmt_dt_msk(user.winback_offer_until))}.</div>'
+            )
 
         subscription_url = ""
         traffic_used_gb: float | None = None
@@ -142,6 +142,8 @@ async def subscription_page(request: Request) -> HTMLResponse:
 
     <div class="card fade-up d1" style="margin-top:20px;">
       <div class="section-label">{icon('coupon', size=14)}<span>{'ПРОДЛИТЬ ТАРИФ' if sub else 'ВЫБРАТЬ ТАРИФ'}</span></div>
+      {intro_card}
+      {winback_note}
       <div class="grid-auto" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:14px;">
         {"".join(_plan_card_html(pc, has_sub=sub is not None) for pc in plan_cards) or '<div style="opacity:.5;font:500 13px Manrope;padding:12px 0;">Тарифы не найдены</div>'}
       </div>
@@ -286,6 +288,24 @@ def _sub_card_html(
     </div>"""
 
 
+def _intro_card_html(plan, t: dict) -> str:
+    return f"""
+      <form id="offer" method="post" action="/app/subscription/buy" data-disable-on-submit
+        style="margin-top:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 20px;border-radius:16px;
+        background:radial-gradient(120% 160% at 0% 0%,rgba(123,92,255,.3),rgba(17,24,32,.96) 60%);border:1px solid rgba(123,92,255,.45);">
+        <input type="hidden" name="plan_id" value="{plan.id}"/>
+        <input type="hidden" name="idempotency_key" value="{uuid.uuid4()}"/>
+        <div style="width:46px;height:46px;border-radius:14px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;flex-shrink:0;">{icon('gift', size=22, color='#fff')}</div>
+        <div style="flex:1;min-width:180px;">
+          <span class="badge badge-purple">РАЗОВАЯ АКЦИЯ ДЛЯ НОВЫХ</span>
+          <div style="font:800 18px Manrope;color:var(--text-1);margin-top:6px;">{esc(t['title'])}
+            <span style="font:600 13px Manrope;color:var(--text-4);text-decoration:line-through;margin-left:4px;">{fmt_money(t['old_price'])} ₽</span></div>
+          <div style="font:500 12px Manrope;color:var(--text-3);margin-top:3px;">Полный доступ на все устройства. Доступна один раз — до первой покупки подписки.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Подключить за {fmt_money(t['price'])} ₽</button>
+      </form>"""
+
+
 def _plan_card_html(pc: dict, *, has_sub: bool) -> str:
     p = pc["plan"]
     price = pc["price"]
@@ -296,16 +316,23 @@ def _plan_card_html(pc: dict, *, has_sub: bool) -> str:
         + (f'<span style="font:600 13px Manrope;color:var(--text-5);text-decoration:line-through;margin-left:6px;">{fmt_money(original)} ₽</span>' if discounted else "")
     )
     traffic_label = f"{p.traffic_limit_gb:g} ГБ" if p.traffic_limit_gb else "Безлимит"
+    months = round(p.duration_days / 30)
+    per_month = (
+        f'<div style="font:600 11.5px Manrope;color:var(--success);">{fmt_money((price / months).quantize(Decimal("1")))} ₽/мес</div>'
+        if months > 1
+        else ""
+    )
     return f"""
     <form method="post" action="/app/subscription/buy" class="card" style="display:flex;flex-direction:column;gap:10px;" data-disable-on-submit>
       <input type="hidden" name="plan_id" value="{p.id}"/>
       <input type="hidden" name="idempotency_key" value="{uuid.uuid4()}"/>
       <div style="font:800 15px Manrope;color:var(--text-1);">{esc(p.name)}</div>
       <div>{price_row}</div>
+      {per_month}
       <div style="font:500 11.5px Manrope;color:var(--text-4);display:flex;flex-direction:column;gap:2px;">
         <span>{p.duration_days} дней</span>
         <span>Трафик: {esc(traffic_label)}</span>
-        <span>Устройств: {p.device_limit}</span>
+        {f'<span>Устройств: {p.device_limit}</span>' if p.device_limit else ''}
       </div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:auto;">{'Продлить' if has_sub else 'Купить'}</button>
     </form>"""

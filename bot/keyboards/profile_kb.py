@@ -14,6 +14,7 @@ def profile_main_keyboard(
     support_url: str | None,
     is_admin: bool = False,
     show_welcome_topup: bool = False,
+    intro_offer_text: str | None = None,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     _settings = get_settings()
@@ -28,6 +29,9 @@ def profile_main_keyboard(
                 web_app=WebAppInfo(url=miniapp_url),
             )
         )
+    if intro_offer_text:
+        # разовая акция для тех, кто ещё не покупал подписку (offers_service)
+        b.row(InlineKeyboardButton(text=intro_offer_text[:64], callback_data="sub:plans", style="success"))
     if show_welcome_topup:
         b.row(
             InlineKeyboardButton(

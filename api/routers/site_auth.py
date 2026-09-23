@@ -220,7 +220,7 @@ def login_panel_html(*, error: str = "", notice: str = "") -> str:
           {email_form}
         </div>
         <div style="text-align:center;font:500 11.5px Manrope;color:var(--text-5);margin-top:22px;line-height:1.6;">
-          Продолжая, вы соглашаетесь с <a href="/legal/offer">офертой</a> и <a href="/legal/privacy">политикой конфиденциальности</a>
+          Продолжая, вы соглашаетесь с <a href="/legal/terms">пользовательским соглашением</a> и <a href="/legal/privacy">политикой конфиденциальности</a>
         </div>"""
 
 

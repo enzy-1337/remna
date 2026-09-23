@@ -6,7 +6,7 @@ import logging
 import uuid as uuid_lib
 from typing import Any
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 from shared.datetime_msk import fmt_dt_msk
 
@@ -62,14 +62,15 @@ def calculate_tariff_price_from_base_month(
     discount_percent: Decimal,
 ) -> Decimal:
     """
-    Цена тарифа: база за месяц × число месяцев × (1 − скидка%), округление вниз до целых ₽.
-    Пример: 179 × 2 × 0,98 = 350,84 → 350 ₽.
+    Цена тарифа: сначала цена за месяц со скидкой (округление до целых ₽), затем × число месяцев.
+    Так цена «за месяц» на витрине всегда целая и совпадает с тем, что обещано:
+    179 ₽ −5% → 170 ₽/мес → 2 мес = 340 ₽;  179 ₽ −12,5% → 157 ₽/мес → 3 мес = 471 ₽.
     """
     months = tariff_duration_months(duration_days)
     disc = discount_percent if discount_percent > 0 else Decimal("0")
     factor = Decimal("1") - disc / Decimal("100")
-    raw = base_month_rub * months * factor
-    return raw.quantize(Decimal("1"), rounding=ROUND_FLOOR)
+    per_month = (base_month_rub * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return (per_month * months).quantize(Decimal("1"), rounding=ROUND_FLOOR)
 
 
 def is_one_month_duration(duration_days: int) -> bool:
@@ -672,8 +673,15 @@ async def purchase_plan_with_balance(
     if not await tariff_purchases_enabled(settings):
         return False, plain("Покупка тарифов временно отключена."), "error"
 
+    from shared.services.offers_service import INTRO_PLAN_NAME, intro_offer_eligible, winback_percent
+
     plan = await session.get(Plan, plan_id)
-    if not plan or plan.price_rub <= 0 or not plan.is_active:
+    # Акция «2 недели за 1 ₽» — скрытый план (is_active=False), доступен только пока не было покупок.
+    is_intro = plan is not None and plan.name == INTRO_PLAN_NAME
+    if is_intro:
+        if not await intro_offer_eligible(session, user, settings):
+            return False, plain("Акция доступна только до первой покупки подписки."), "error"
+    elif not plan or plan.price_rub <= 0 or not plan.is_active:
         return False, plain("Тариф не найден или недоступен."), "error"
     if plan.name == BASE_SUBSCRIPTION_PLAN_NAME:
         return False, plain("Этот тариф недоступен для покупки в магазине."), "error"
@@ -685,9 +693,18 @@ async def purchase_plan_with_balance(
     if base_plan is None:
         return False, plain("В БД не настроен тариф «Базовый» (seed планов)."), "error"
 
-    original_price = await resolve_user_plan_price_rub(session, user, purchased_plan)
+    used_winback = False
+    if is_intro:
+        original_price = Decimal(settings.intro_offer_price_rub)
+        discount_usage, discount_percent = None, Decimal("0")
+    else:
+        original_price = await resolve_user_plan_price_rub(session, user, purchased_plan)
+        discount_usage, discount_percent = await get_pending_purchase_discount_percent(session, user_id=user.id)
+        # Скидка «вернись» не суммируется с промокодом — берём бо́льшую, промокод тогда не тратится.
+        wb_pct = winback_percent(user, settings)
+        if wb_pct > 0 and wb_pct >= discount_percent:
+            discount_usage, discount_percent, used_winback = None, wb_pct, True
     price = original_price
-    discount_usage, discount_percent = await get_pending_purchase_discount_percent(session, user_id=user.id)
     discount_amount = Decimal("0")
     if discount_percent > 0:
         discount_amount = (price * discount_percent / Decimal("100")).quantize(Decimal("0.01"))
@@ -718,7 +735,7 @@ async def purchase_plan_with_balance(
     allowed, days_left, renewal_window = await check_tariff_extension_window(
         session, user.id, settings
     )
-    if not allowed:
+    if not allowed and not is_intro:
         return False, renewal_blocked_message(days_left, renewal_window), "error"
 
     hybrid_cap = hybrid_subscription_hwid_cap(settings, user)
@@ -804,6 +821,7 @@ async def purchase_plan_with_balance(
             "discount_percent": str(discount_percent),
             "discount_amount_rub": str(discount_amount),
             "personal_discount_percent": str(user_personal_discount_percent(user)),
+            "offer": "intro" if is_intro else ("winback" if used_winback else None),
             "custom_month_price_rub": (
                 str(user_custom_month_price_rub(user))
                 if user_custom_month_price_rub(user) is not None
@@ -864,6 +882,10 @@ async def purchase_plan_with_balance(
     await ensure_placeholder_devices(session, sub)
     if discount_usage is not None:
         discount_usage.topup_bonus_applied_at = datetime.now(timezone.utc)
+    if is_intro:
+        user.intro_offer_used_at = datetime.now(timezone.utc)
+    if used_winback:
+        user.winback_offer_used_at = datetime.now(timezone.utc)
     await session.flush()
 
     merge_meta: dict = {
@@ -896,7 +918,18 @@ async def purchase_plan_with_balance(
         plain("Действует до: ")
         + bold(fmt_dt_msk(new_expires)),
     )
-    if discount_percent > 0 and discount_amount > 0:
+    if is_intro:
+        msg = join_lines(msg, plain("🔥 Акция для новых пользователей — спасибо, что выбрали нас!"))
+    elif used_winback and discount_amount > 0:
+        msg = join_lines(
+            msg,
+            plain("🎁 Скидка «с возвращением»: ")
+            + bold(str(discount_percent))
+            + plain("% (−")
+            + bold(str(discount_amount))
+            + plain(" ₽)."),
+        )
+    elif discount_percent > 0 and discount_amount > 0:
         msg = join_lines(
             msg,
             plain("Промокод скидки: ")

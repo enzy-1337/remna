@@ -74,6 +74,16 @@ class Settings(BaseSettings):
         validation_alias="SUPPORT_USERNAME",
         description="Поддержка: username без @",
     )
+    legal_privacy_source_url: str = Field(
+        default="https://telegra.ph/Politika-konfidencialnosti-08-01-83",
+        validation_alias="LEGAL_PRIVACY_SOURCE_URL",
+        description="Откуда один раз импортировать политику конфиденциальности на сайт (/legal/privacy).",
+    )
+    legal_terms_source_url: str = Field(
+        default="https://telegra.ph/Polzovatelskoe-soglashenie-08-01-39",
+        validation_alias="LEGAL_TERMS_SOURCE_URL",
+        description="Откуда один раз импортировать пользовательское соглашение на сайт (/legal/terms).",
+    )
     info_privacy_policy_url: str = Field(
         default="https://telegra.ph/Politika-konfidencialnosti-08-15-17",
         validation_alias="INFO_PRIVACY_POLICY_URL",
@@ -571,6 +581,36 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC",
         description="Как часто проверять подписки на напоминания (сек)",
     )
+    onboarding_app_name: str = Field(default="Happ", validation_alias="ONBOARDING_APP_NAME",
+        description="Приложение, которое рекомендуем в подсказках «как подключиться».")
+    onboarding_app_ios_url: str = Field(default="https://apps.apple.com/app/happ-proxy-utility/id6504287215",
+        validation_alias="ONBOARDING_APP_IOS_URL")
+    onboarding_app_android_url: str = Field(default="https://play.google.com/store/apps/details?id=com.happproxy",
+        validation_alias="ONBOARDING_APP_ANDROID_URL")
+    onboarding_app_windows_url: str = Field(default="https://www.happ.su/main", validation_alias="ONBOARDING_APP_WINDOWS_URL")
+    onboarding_app_macos_url: str = Field(default="https://apps.apple.com/app/happ-proxy-utility/id6504287215",
+        validation_alias="ONBOARDING_APP_MACOS_URL")
+    intro_offer_enabled: bool = Field(
+        default=True,
+        validation_alias="INTRO_OFFER_ENABLED",
+        description="Разовая акция для тех, кто ни разу не покупал подписку: INTRO_OFFER_DAYS дней за INTRO_OFFER_PRICE_RUB ₽.",
+    )
+    intro_offer_days: int = Field(default=14, ge=1, le=90, validation_alias="INTRO_OFFER_DAYS")
+    intro_offer_price_rub: Decimal = Field(default=Decimal("1"), ge=0, validation_alias="INTRO_OFFER_PRICE_RUB")
+    intro_offer_old_price_rub: Decimal = Field(
+        default=Decimal("99"), ge=0, validation_alias="INTRO_OFFER_OLD_PRICE_RUB",
+        description="«Старая» цена акции — показывается зачёркнутой.",
+    )
+    winback_enabled: bool = Field(
+        default=True,
+        validation_alias="WINBACK_ENABLED",
+        description="Скидка на возвращение тем, у кого закончилась оплаченная подписка (см. offers_service).",
+    )
+    winback_discount_percent: Decimal = Field(default=Decimal("20"), ge=0, le=90, validation_alias="WINBACK_DISCOUNT_PERCENT")
+    winback_min_days_after_expiry: int = Field(default=3, ge=0, le=365, validation_alias="WINBACK_MIN_DAYS_AFTER_EXPIRY")
+    winback_max_days_after_expiry: int = Field(default=60, ge=1, le=3650, validation_alias="WINBACK_MAX_DAYS_AFTER_EXPIRY")
+    winback_offer_days: int = Field(default=7, ge=1, le=90, validation_alias="WINBACK_OFFER_DAYS")
+    winback_cooldown_days: int = Field(default=180, ge=1, le=3650, validation_alias="WINBACK_COOLDOWN_DAYS")
     landing_trial_promo_code: str = Field(
         default="TEST3",
         validation_alias="LANDING_TRIAL_PROMO_CODE",

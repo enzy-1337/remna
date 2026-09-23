@@ -33,6 +33,14 @@ def test_calculate_tariff_price_floor_three_months_five_percent() -> None:
     assert price == Decimal("510")
 
 
+def test_tiered_discounts_per_month_prices() -> None:
+    # 1 мес 179 ₽; 2 мес −5% → 170 ₽/мес; 3 мес −12,5% → 157 ₽/мес
+    two = calculate_tariff_price_from_base_month(Decimal("179"), duration_days=60, discount_percent=Decimal("5"))
+    three = calculate_tariff_price_from_base_month(Decimal("179"), duration_days=90, discount_percent=Decimal("12.5"))
+    assert (two, three) == (Decimal("340"), Decimal("471"))
+    assert two / 2 == Decimal("170") and three / 3 == Decimal("157")
+
+
 def test_extension_would_stack() -> None:
     now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     sub = Subscription(

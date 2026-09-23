@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, support_telegram_url
 from bot.keyboards.inline import channel_required_keyboard
 from bot.keyboards.profile_kb import profile_main_keyboard
+from shared.services.offers_service import intro_offer_button_text
 from bot.telegram_profile_texts import BOT_PROFILE_LONG_DEFAULT, BOT_PROFILE_SHORT_DEFAULT
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import delete_message_safe, send_profile_screen
@@ -360,6 +361,7 @@ async def cmd_start(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
         show_welcome_topup=show_welcome_topup,
+        intro_offer_text=await intro_offer_button_text(session, user, settings),
     )
     profile_block = profile_caption(user, tg, is_admin=is_bot_admin)
     no_sub_hint = ""
@@ -448,6 +450,7 @@ async def cb_channel_check(
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
         show_welcome_topup=show_welcome_topup,
+        intro_offer_text=await intro_offer_button_text(session, db_user, settings),
     )
     cap = profile_caption(db_user, tg_user, is_admin=is_bot_admin)
     no_sub_hint = ""

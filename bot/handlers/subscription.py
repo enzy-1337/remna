@@ -67,6 +67,14 @@ from shared.services.billing_v2.detail_service import (
     user_has_tariff_subscription_charges,
 )
 from shared.services.promo_service import get_pending_purchase_discount_info
+from shared.services.offers_service import (
+    INTRO_PLAN_NAME,
+    get_intro_plan,
+    intro_offer_eligible,
+    intro_offer_texts,
+    winback_percent,
+)
+from shared.datetime_msk import fmt_dt_msk
 from shared.services.feature_flags import tariff_purchases_enabled
 
 router = Router(name="subscription")
@@ -362,9 +370,28 @@ async def _render_tariff_list(
             f"Сейчас осталось {days_left} дн."
         )
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
+    wb_pct = winback_percent(db_user, settings)
+    if wb_pct > 0 and wb_pct >= discount_percent:
+        promo_code, discount_percent = None, wb_pct
+    intro_plan = await get_intro_plan(session, settings) if await intro_offer_eligible(session, db_user, settings) else None
     body = title + plain(
         "Выберите тариф (оплата с баланса). При нехватке средств тариф попадёт в корзину."
     )
+    if intro_plan is not None:
+        it = intro_offer_texts(settings)
+        body = join_lines(
+            "🔥 " + bold("Акция для новых: " + it["title"]),
+            plain(f"Вместо {it['old_price'].normalize():f} ₽ — только до первой покупки подписки, один раз."),
+            "",
+            body,
+        )
+    if wb_pct > 0 and promo_code is None and discount_percent == wb_pct:
+        body = join_lines(
+            "🎁 " + bold(f"Скидка {wb_pct.normalize():f}% «с возвращением»"),
+            plain(f"На одну покупку, действует до {fmt_dt_msk(db_user.winback_offer_until)}."),
+            "",
+            body,
+        )
     if extend_hint:
         body = join_lines(extend_hint, "", body)
     if banner:
@@ -408,10 +435,20 @@ async def _render_tariff_list(
             + plain(" (применится к следующей покупке тарифа)."),
         )
     b = InlineKeyboardBuilder()
+    if intro_plan is not None:
+        it = intro_offer_texts(settings)
+        # акция — первой кнопкой (окно продления на неё не распространяется)
+        b.row(
+            InlineKeyboardButton(
+                text=f"🔥 {it['title']} (вместо {it['old_price'].normalize():f} ₽)"[:64],
+                callback_data=f"sub:buy:{intro_plan.id}",
+                style="success",
+            )
+        )
     for p in plans:
         eff_price = await resolve_user_plan_price_rub(session, db_user, p)
         catalog_price = await resolve_plan_price_rub(session, p)
-        if discount_percent > 0 and promo_code:
+        if discount_percent > 0:
             label = plan_tariff_button_label_with_discount(
                 p, discount_percent, price_rub=eff_price
             )
@@ -709,7 +746,11 @@ async def cb_buy_plan(
         return
 
     plan = await session.get(Plan, pid)
-    if not _plan_buyable_from_bot_catalog(plan):
+    is_intro = plan is not None and plan.name == INTRO_PLAN_NAME
+    if is_intro and not await intro_offer_eligible(session, db_user, settings):
+        await cq.answer("Акция доступна только до первой покупки подписки.", show_alert=True)
+        return
+    if not is_intro and not _plan_buyable_from_bot_catalog(plan):
         await _render_tariff_list(
             cq,
             session,
@@ -722,7 +763,7 @@ async def cb_buy_plan(
     extension_allowed, days_left, window = await check_tariff_extension_window(
         session, db_user.id, settings
     )
-    if not extension_allowed:
+    if not extension_allowed and not is_intro:
         await cq.answer(
             strip_for_popup_alert(
                 f"Продление доступно только за {window} дн. до окончания подписки. "
@@ -732,11 +773,21 @@ async def cb_buy_plan(
         )
         return
     promo_code, discount_percent = await get_pending_purchase_discount_info(session, user_id=db_user.id)
-    eff_price = await resolve_user_plan_price_rub(session, db_user, plan)
-    catalog_price = await resolve_plan_price_rub(session, plan)
-    original, discount_amount, final = calculate_discounted_plan_price(
-        plan, discount_percent, price_rub=eff_price
-    )
+    wb_pct = winback_percent(db_user, settings)
+    is_winback = wb_pct > 0 and wb_pct >= discount_percent
+    if is_winback:
+        promo_code, discount_percent = None, wb_pct
+    if is_intro:
+        it = intro_offer_texts(settings)
+        eff_price = catalog_price = it["old_price"]
+        original, discount_amount, final = it["old_price"], it["old_price"] - it["price"], it["price"]
+        discount_percent, promo_code = Decimal("0"), None
+    else:
+        eff_price = await resolve_user_plan_price_rub(session, db_user, plan)
+        catalog_price = await resolve_plan_price_rub(session, plan)
+        original, discount_amount, final = calculate_discounted_plan_price(
+            plan, discount_percent, price_rub=eff_price
+        )
 
     lines = [
         "🧾 " + bold("Подтверждение покупки"),
@@ -753,6 +804,16 @@ async def cb_buy_plan(
         )
     else:
         lines.append(plain("Цена: ") + bold(str(original)) + plain(" ₽"))
+    if is_intro:
+        lines.append(plain("🔥 Акция для новых пользователей — разово, только до первой покупки."))
+    elif is_winback and discount_percent > 0:
+        lines.append(
+            plain("🎁 Скидка «с возвращением»: ")
+            + bold(str(discount_percent))
+            + plain("% (−")
+            + bold(str(discount_amount))
+            + plain(" ₽)")
+        )
     if discount_percent > 0 and promo_code:
         lines.append(
             plain("Скидка: ")
@@ -830,7 +891,8 @@ async def cb_buy_plan_confirm(
     extension_allowed, days_left, window = await check_tariff_extension_window(
         session, db_user.id, settings
     )
-    if not extension_allowed:
+    confirm_plan = await session.get(Plan, pid)
+    if not extension_allowed and not (confirm_plan is not None and confirm_plan.name == INTRO_PLAN_NAME):
         await cq.answer(
             strip_for_popup_alert(
                 f"Продление доступно только за {window} дн. до окончания подписки. "

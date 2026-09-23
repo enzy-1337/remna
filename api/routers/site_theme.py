@@ -604,7 +604,7 @@ def site_footer() -> str:
   </div>
   <div class="footer-links">
     <a href="/legal/privacy">Политика конфиденциальности</a>
-    <a href="/legal/offer">Публичная оферта</a>
+    <a href="/legal/terms">Пользовательское соглашение</a>
     <a href="/legal/refund">Политика возврата</a>
   </div>
 </footer>"""

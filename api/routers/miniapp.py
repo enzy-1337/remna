@@ -37,16 +37,19 @@ from shared.services.hwid_devices_service import (
 )
 from shared.services.subscription_service import (
     add_paid_device_slots,
-    get_one_month_reference_plan,
     list_paid_plans,
     purchase_plan_with_balance,
-    resolve_user_plan_price_rub,
     set_subscription_auto_renew,
-    tariff_duration_months,
     unbind_hwid_device_keep_slot,
-    user_custom_month_price_rub,
 )
-from shared.services.promo_service import get_pending_purchase_discount_info
+from shared.services.offers_service import (
+    get_intro_plan,
+    intro_offer_eligible,
+    intro_offer_texts,
+    quote_plan_price,
+    winback_percent,
+)
+from shared.services.onboarding import onboarding_payload
 from shared.services.topup_service import create_topup_payment
 from shared.services.trial_service import activate_trial, has_active_subscription, trial_eligible
 from shared.services.user_registration import get_user_by_telegram_id
@@ -271,27 +274,12 @@ async def api_context(
         has_active = sub is not None
         trial_ok = trial_eligible(user, has_active)
 
-        # Базовая месячная цена для расчёта «цены без скидки» (зачёркнутой).
-        ref_plan = await get_one_month_reference_plan(session)
-        custom_month = user_custom_month_price_rub(user)
-        base_month = custom_month if custom_month is not None else (ref_plan.price_rub if ref_plan else Decimal("0"))
-        # Промокод-скидка на тариф (если активирован, ещё не использован) — складывается поверх скидки тарифа.
-        _promo_code, promo_discount_pct = await get_pending_purchase_discount_info(session, user_id=user.id)
-
         plans = await list_paid_plans(session)
         plans_out = []
         for p in plans:
-            # Цена с учётом скидки тарифа + персональной скидки (как при покупке).
-            price_after_plan = await resolve_user_plan_price_rub(session, user, p)
-            # Промокод на тариф применяется поверх — итог к оплате.
-            final_price = price_after_plan
-            if promo_discount_pct > 0:
-                final_price = (price_after_plan * (Decimal("100") - promo_discount_pct) / Decimal("100")).quantize(Decimal("1"))
-            # «Цена без скидки» = базовый месяц × число месяцев.
-            months = tariff_duration_months(p.duration_days)
-            original_price = (base_month * months).quantize(Decimal("1")) if base_month > 0 else final_price
-            if original_price < final_price:
-                original_price = final_price
+            # Та же цена, что спишется: тариф → персональная цена → промокод или скидка «вернись».
+            q = await quote_plan_price(session, user, p, settings)
+            final_price, original_price = q.final, q.original
             eff_discount = 0
             if original_price > 0 and final_price < original_price:
                 eff_discount = int(round(float((original_price - final_price) / original_price * 100)))
@@ -309,16 +297,40 @@ async def api_context(
                 }
             )
 
+        intro_out = None
+        if await intro_offer_eligible(session, user, settings):
+            ip = await get_intro_plan(session, settings)
+            it = intro_offer_texts(settings)
+            intro_out = {"plan_id": ip.id, "title": it["title"], "price_rub": str(it["price"]), "old_price_rub": str(it["old_price"])}
+            disc = int(round(float((it["old_price"] - it["price"]) / it["old_price"] * 100))) if it["old_price"] > 0 else 0
+            plans_out.insert(0, {
+                "id": ip.id,
+                "name": "🔥 Акция: " + it["title"],
+                "duration_days": ip.duration_days,
+                "price_rub": str(it["price"]),
+                "original_price_rub": str(it["old_price"]),
+                "discount_percent": str(disc),
+                "traffic_limit_gb": None,
+                "device_limit": None,
+                "monthly_gb_limit": None,
+                "is_offer": True,
+            })
+        wb = winback_percent(user, settings)
+        winback_out = (
+            {"percent": str(wb.normalize()), "until": _to_iso(user.winback_offer_until)} if wb > 0 else None
+        )
+
         pending_topup_bonus_pct = await _pending_topup_bonus_percent(session, user.id)
         referrals_count = await count_invited_users(session, user.id)
         referrals_earned = await sum_referrer_bonus_rub(session, user.id)
 
         devices_used = 0
         devices_total = sub.devices_count if sub else 0
+        panel_uinf = None
         if user.remnawave_uuid is not None:
             try:
-                uinf, devices, _err = await fetch_panel_hwid_context(user, settings)
-                devices_used = connected_devices_count(uinf, devices)
+                panel_uinf, devices, _err = await fetch_panel_hwid_context(user, settings)
+                devices_used = connected_devices_count(panel_uinf, devices)
             except Exception:
                 devices_used = 0
 
@@ -328,7 +340,7 @@ async def api_context(
             traffic_limit_gb = None
             subscription_url = ""
             try:
-                uinf, _devices, _err = await fetch_panel_hwid_context(user, settings)
+                uinf = panel_uinf
                 if uinf:
                     # Трафик лежит в userTraffic.* (вложенно). «За всё время» = lifetime.
                     traffic_used_gb = _lifetime_used_gb(uinf)
@@ -370,6 +382,13 @@ async def api_context(
                 "referrals_count": referrals_count,
                 "referrals_earned_rub": str(referrals_earned),
                 "plans": plans_out,
+                "offers": {"intro": intro_out, "winback": winback_out},
+                # подсказки «как подключиться», пока нет ни одного устройства
+                "onboarding": (
+                    onboarding_payload(settings, sub_out["subscription_url"])
+                    if sub_out and panel_uinf is not None and devices_used == 0 and sub_out.get("subscription_url")
+                    else None
+                ),
             }
         )
 
@@ -1425,6 +1444,8 @@ input.amount{width:100%;background:var(--card);border:1px solid rgba(255,255,255
       <div class="avatar-circle" id="home-avatar">F</div>
       <div><div class="hi">Добро пожаловать</div><div class="nm" id="home-greet-name">—</div></div>
     </div>
+    <div id="home-offers"></div>
+    <div id="home-onboarding"></div>
     <div id="home-sub-card"></div>
     <div class="card row" style="margin-top:10px;cursor:pointer;" onclick="showView('balance')">
       <div style="width:42px;height:42px;border-radius:12px;background:rgba(123,92,255,.14);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="mi" style="width:25px;height:25px;-webkit-mask-image:url(/assets/miniapp_icons/wallet-100.png);mask-image:url(/assets/miniapp_icons/wallet-100.png);"></span></div>
@@ -1868,6 +1889,8 @@ function renderHome() {
     ? (refCount + ' · +' + Math.round(parseFloat(CTX.referrals_earned_rub || '0')) + ' ₽')
     : 'Пусто :(';
   renderRenewal(sub);
+  renderOffers();
+  renderOnboarding();
   if (!sub) {
     document.getElementById('home-sub-card').innerHTML = `
       <div class="card" style="display:flex;align-items:center;gap:13px;">
@@ -1891,6 +1914,80 @@ function renderHome() {
       <div class="spacer"><div style="font:800 15px Manrope;color:#fff;">Продление</div><div style="font:600 12px Manrope;color:rgba(255,255,255,.75);">тарифы · промокод · автопродление</div></div>
       <span class="mi" style="width:20px;height:20px;background:rgba(255,255,255,.85);-webkit-mask-image:url(/assets/miniapp_icons/arrow-100.png);mask-image:url(/assets/miniapp_icons/arrow-100.png);"></span>
     </div>`;
+}
+
+function escH(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+function renderOffers() {
+  const box = document.getElementById('home-offers');
+  const o = CTX.offers || {};
+  let html = '';
+  if (o.intro) {
+    html += `
+      <div class="card" style="margin-bottom:10px;cursor:pointer;background:radial-gradient(120% 160% at 0% 0%,rgba(123,92,255,.35),var(--card) 60%);border:1px solid rgba(123,92,255,.45);"
+           onclick="showView('renewal'); setTimeout(function(){ selectPlan(${o.intro.plan_id}); }, 50);">
+        <div style="font:800 10px Manrope;color:#C8B6FF;letter-spacing:.08em;">РАЗОВАЯ АКЦИЯ ДЛЯ НОВЫХ</div>
+        <div style="font:800 18px Manrope;color:#fff;margin-top:6px;">🔥 ${escH(o.intro.title)}
+          <span style="font:600 13px Manrope;color:var(--muted);text-decoration:line-through;margin-left:4px;">${Math.round(parseFloat(o.intro.old_price_rub))} ₽</span></div>
+        <div class="muted" style="font:500 12px Manrope;margin-top:4px;">Доступна один раз — до первой покупки подписки. Нажмите, чтобы забрать.</div>
+      </div>`;
+  }
+  if (o.winback) {
+    const until = o.winback.until ? new Date(o.winback.until).toLocaleDateString('ru-RU') : '';
+    html += `
+      <div class="card" style="margin-bottom:10px;cursor:pointer;border:1px solid rgba(79,210,160,.35);" onclick="showView('renewal')">
+        <div style="font:800 20px Manrope;color:#4FD2A0;">−${escH(o.winback.percent)}% для вас</div>
+        <div style="font:700 14px Manrope;color:#fff;margin-top:4px;">С возвращением! Скидка на любой тариф</div>
+        <div class="muted" style="font:500 12px Manrope;margin-top:2px;">Одна покупка${until ? ' · до ' + until : ''}</div>
+      </div>`;
+  }
+  box.innerHTML = html;
+}
+
+let obTimer = null;
+function renderOnboarding() {
+  const box = document.getElementById('home-onboarding');
+  const ob = CTX.onboarding;
+  if (!ob) { box.innerHTML = ''; if (obTimer) { clearInterval(obTimer); obTimer = null; } return; }
+  const ua = navigator.userAgent || '';
+  const os = /iPhone|iPad|iPod/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : /Mac/.test(ua) ? 'macos' : /Win/.test(ua) ? 'windows' : '';
+  const apps = (ob.apps || []).map(a => `<div onclick="openLink('${escH(a.url)}')" style="padding:9px 12px;border-radius:11px;font:700 12.5px Manrope;cursor:pointer;${a.os === os ? 'background:var(--accent);color:#fff;' : 'background:rgba(255,255,255,.06);color:#fff;'}">${escH(a.label)}</div>`).join('');
+  const step = (n, t, b) => `<div style="display:flex;gap:12px;padding:12px 0;border-top:1px solid rgba(255,255,255,.06);">
+      <div style="width:26px;height:26px;border-radius:8px;background:rgba(123,92,255,.2);color:#C8B6FF;font:800 12px Manrope;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${n}</div>
+      <div style="flex:1;min-width:0;"><div style="font:800 14px Manrope;color:#fff;">${t}</div><div style="margin-top:8px;">${b}</div></div></div>`;
+  box.innerHTML = `
+    <div class="card" style="margin-bottom:10px;border:1px solid rgba(123,92,255,.45);background:linear-gradient(160deg,rgba(123,92,255,.16),var(--card) 55%);">
+      <div style="font:800 17px Manrope;color:#fff;">⚡ Подключитесь за 2 минуты</div>
+      <div class="muted" style="font:500 12px Manrope;margin-top:3px;">Подписка активна, но ни одно устройство ещё не подключено</div>
+      <div style="margin-top:10px;">
+        ${step(1, 'Установите ' + escH(ob.app_name), `<div style="display:flex;gap:8px;flex-wrap:wrap;">${apps}</div>`)}
+        ${step(2, 'Добавьте подписку', `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div onclick="openLink('${escH(ob.import_url)}')" style="padding:9px 12px;border-radius:11px;background:var(--accent);color:#fff;font:700 12.5px Manrope;cursor:pointer;">＋ Добавить в ${escH(ob.app_name)}</div>
+            <div id="ob-copy" style="padding:9px 12px;border-radius:11px;background:rgba(255,255,255,.06);color:#fff;font:700 12.5px Manrope;cursor:pointer;">Скопировать ключ</div></div>
+            <div class="muted" style="font:500 11px Manrope;margin-top:6px;">Если приложение не открылось — скопируйте ключ и вставьте его в приложении через «+».</div>`)}
+        ${step(3, 'Нажмите «Подключить»', '<div class="muted" style="font:500 12px Manrope;">Как только устройство подключится, этот блок исчезнет.</div>')}
+      </div>
+      <div onclick="showView('support')" style="font:700 12px Manrope;color:#C8B6FF;margin-top:6px;cursor:pointer;">Не получается? Напишите в поддержку →</div>
+    </div>`;
+  const cp = document.getElementById('ob-copy');
+  if (cp) cp.onclick = function(){ try { navigator.clipboard.writeText(ob.subscription_url); cp.textContent = 'Скопировано ✓'; } catch (e) {} };
+  if (!obTimer) {
+    let tries = 0;
+    obTimer = setInterval(async function(){
+      if (document.hidden) return;
+      if (++tries > 60) { clearInterval(obTimer); obTimer = null; return; }
+      try {
+        const r = await api('/api/context');
+        if (r && r.devices_used > 0) { CTX = r; clearInterval(obTimer); obTimer = null; renderHome(); if (window.Telegram && Telegram.WebApp && Telegram.WebApp.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success'); }
+      } catch (e) {}
+    }, 15000);
+  }
+}
+
+function openLink(url) {
+  if (!url) return;
+  if (/^https?:/.test(url) && window.Telegram && Telegram.WebApp && Telegram.WebApp.openLink) Telegram.WebApp.openLink(url);
+  else window.location.href = url;
 }
 
 function renderRenewal(sub) {

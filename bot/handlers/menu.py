@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.handlers.common import reject_if_blocked, reject_if_no_user, support_telegram_url
 from bot.keyboards.instructions_kb import build_instructions_markup
 from bot.keyboards.profile_kb import profile_main_keyboard
+from shared.services.offers_service import intro_offer_button_text
 from bot.ui.profile_text import profile_caption
 from bot.utils.screen_photo import answer_callback_with_photo_screen
 from shared.config import get_settings
@@ -72,6 +73,7 @@ async def cb_main_menu(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        intro_offer_text=await intro_offer_button_text(session, db_user, settings),
     )
     await answer_callback_with_photo_screen(
         cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:main"
@@ -154,6 +156,7 @@ async def cb_trial_activate(
         show_trial=show_trial,
         support_url=support_telegram_url(settings.support_username),
         is_admin=is_bot_admin,
+        intro_offer_text=await intro_offer_button_text(session, db_user, settings),
     )
     await answer_callback_with_photo_screen(
         cq, caption=cap, reply_markup=kb, settings=settings, photo_key="menu:main"
@@ -219,8 +222,11 @@ async def cb_service_info(cq: CallbackQuery, db_user: User | None) -> None:
     assert db_user is not None
     settings = get_settings()
     sup = support_telegram_url(settings.support_username)
-    privacy = (settings.info_privacy_policy_url or "").strip()
-    terms = (settings.info_terms_of_service_url or "").strip()
+    # Документы живут на нашем сайте (/legal/*); INFO_*_URL — запасной вариант, если сайт не настроен.
+    from shared.services.legal_docs import public_doc_url
+
+    privacy = public_doc_url(settings, "privacy") or (settings.info_privacy_policy_url or "").strip()
+    terms = public_doc_url(settings, "terms") or (settings.info_terms_of_service_url or "").strip()
 
     help_line = plain("Нужна помощь — нажмите «Поддержка» ниже.")
 

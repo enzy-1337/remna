@@ -110,7 +110,7 @@ def _contact_cards(settings) -> str:
 
 
 def _docs_card() -> str:
-    docs = [("Политика конфиденциальности", "/legal/privacy"), ("Публичная оферта", "/legal/offer"), ("Политика возврата", "/legal/refund")]
+    docs = [("Политика конфиденциальности", "/legal/privacy"), ("Пользовательское соглашение", "/legal/terms"), ("Политика возврата", "/legal/refund")]
     rows = "".join(
         f"""
         <a href="{href}" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);">

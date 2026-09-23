@@ -41,6 +41,11 @@ class User(Base):
     # Согласие на рекламную/информационную рассылку по почте. Чеки и уведомления о подписке приходят всегда.
     email_marketing_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     email_marketing_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Предложения (shared/services/offers_service.py)
+    intro_offer_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    winback_offered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    winback_offer_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    winback_offer_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

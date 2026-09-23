@@ -586,6 +586,8 @@ _ENV_BOOL_KEYS = {
     "SUBSCRIPTION_AUTORENEW_ENABLED",
     "SUBSCRIPTION_EXPIRY_NOTIFY_ENABLED",
     "SUBSCRIPTION_EMAIL_NOTIFY_ENABLED",
+    "INTRO_OFFER_ENABLED",
+    "WINBACK_ENABLED",
     "BILLING_FIRST_TOPUP_WELCOME_ENABLED",
     "BILLING_V2_ENABLED",
     "BILLING_TRAFFIC_RW_METER_ENABLED",
@@ -10021,7 +10023,10 @@ async def admin_settings(request: Request) -> HTMLResponse:
             transform: translate(42px, -50%);
           }}
         </style>
-        <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
+          <a href="/admin/settings/documents" class="btn btn-outline btn-sm h-9 min-h-9 gap-1.5 ml-auto"><i class="fa-solid fa-file-contract" aria-hidden="true"></i>Документы сайта</a>
+        </div>
         {saved_note}
         {backup_note}
         {mail_note}

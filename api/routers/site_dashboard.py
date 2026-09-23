@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 
 from shared.config import get_settings
@@ -23,6 +23,10 @@ from shared.services.referral_service import count_invited_users, sum_referrer_b
 from shared.services.site_session_service import load_site_user, touch_session
 from shared.services.subscription_service import get_active_subscription, subscription_days_left
 from shared.services.topup_service import create_topup_payment
+from shared.integrations.remnawave import subscription_url_for_telegram
+from shared.services.offers_service import intro_offer_eligible, intro_offer_texts, winback_percent
+from shared.services.onboarding import onboarding_payload
+from shared.datetime_msk import fmt_dt_msk
 
 from api.routers.site_theme import (
     app_topbar,
@@ -74,6 +78,121 @@ def _txn_row_html(t: Transaction) -> str:
 </div>"""
 
 
+def _offers_html(settings, *, intro_ok: bool, wb_pct: Decimal, wb_until, compact: bool = False) -> str:
+    out = ""
+    if intro_ok:
+        t = intro_offer_texts(settings)
+        pad = "16px 20px" if compact else "22px 24px"
+        out += f"""
+        <a href="/app/subscription#offer" class="card" style="display:flex;align-items:center;gap:14px 16px;flex-wrap:wrap;padding:{pad};text-decoration:none;
+          background:radial-gradient(120% 160% at 0% 0%,rgba(123,92,255,.28),rgba(17,24,32,.96) 60%);border:1px solid rgba(123,92,255,.4);">
+          <div style="width:46px;height:46px;border-radius:14px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 12px 30px -12px rgba(123,92,255,.9);">{icon('gift', size=22, color='#fff')}</div>
+          <div style="flex:1;min-width:190px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span class="badge badge-purple">РАЗОВАЯ АКЦИЯ</span></div>
+            <div style="font:800 17px Manrope;color:var(--text-1);margin-top:6px;">{esc(t['title'])} <span style="font:600 13px Manrope;color:var(--text-4);text-decoration:line-through;margin-left:4px;">{fmt_money(t['old_price'])} ₽</span></div>
+            <div style="font:500 12.5px Manrope;color:var(--text-3);margin-top:3px;">Только для новых — до первой покупки подписки. Попробуйте VPN почти бесплатно.</div>
+          </div>
+          <span class="btn btn-primary btn-sm" style="flex-shrink:0;margin-left:auto;">Забрать {icon('chevron-right', size=13, color='#fff')}</span>
+        </a>"""
+    if wb_pct > 0:
+        out += f"""
+        <a href="/app/subscription" class="card" style="display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap;padding:18px 22px;text-decoration:none;border:1px solid rgba(79,210,160,.35);background:rgba(79,210,160,.06);">
+          <div style="font:800 24px Manrope;color:var(--success);flex-shrink:0;">−{wb_pct.normalize():f}%</div>
+          <div style="flex:1;min-width:190px;">
+            <div style="font:800 15px Manrope;color:var(--text-1);">С возвращением! Персональная скидка на любой тариф</div>
+            <div style="font:500 12.5px Manrope;color:var(--text-3);margin-top:3px;">На одну покупку · действует до {esc(fmt_dt_msk(wb_until))}</div>
+          </div>
+          <span class="btn btn-primary btn-sm" style="flex-shrink:0;margin-left:auto;">Выбрать тариф</span>
+        </a>"""
+    return out
+
+
+def _onboarding_html(ob: dict) -> str:
+    apps = "".join(
+        f'<a href="{esc(a["url"])}" target="_blank" rel="noopener" class="btn btn-outline btn-sm ob-app" data-os="{a["os"]}">{esc(a["label"])}</a>'
+        for a in ob["apps"]
+    )
+    step = lambda n, title, body: (  # noqa: E731
+        f'<div style="display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid var(--line);">'
+        f'<div style="width:28px;height:28px;border-radius:9px;background:rgba(123,92,255,.16);color:var(--accent-softer);font:800 13px Manrope;'
+        f'display:flex;align-items:center;justify-content:center;flex-shrink:0;">{n}</div>'
+        f'<div style="flex:1;min-width:0;"><div style="font:800 14px Manrope;color:var(--text-1);">{title}</div>'
+        f'<div style="margin-top:8px;">{body}</div></div></div>'
+    )
+    help_links = ""
+    if ob.get("instructions_phone") or ob.get("instructions_pc"):
+        parts = []
+        if ob.get("instructions_phone"):
+            parts.append(f'<a href="{esc(ob["instructions_phone"])}" target="_blank" rel="noopener">инструкция для телефона</a>')
+        if ob.get("instructions_pc"):
+            parts.append(f'<a href="{esc(ob["instructions_pc"])}" target="_blank" rel="noopener">для компьютера</a>')
+        help_links = " · ".join(parts)
+    return f"""
+        <div class="card" id="onboarding" style="border:1px solid rgba(123,92,255,.4);background:linear-gradient(160deg,rgba(123,92,255,.12),rgba(17,24,32,.96) 55%);">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="width:40px;height:40px;border-radius:12px;background:rgba(123,92,255,.2);display:flex;align-items:center;justify-content:center;">{icon('bolt', size=19, color='#C8B6FF')}</div>
+            <div style="flex:1;min-width:190px;">
+              <div style="font:800 18px Manrope;color:var(--text-1);">Подключитесь за 2 минуты</div>
+              <div style="font:500 12.5px Manrope;color:var(--text-3);margin-top:2px;">Подписка активна, но ещё ни одно устройство не подключено</div>
+            </div>
+            <span class="badge badge-warn" id="ob-status"><span class="pulse" style="width:6px;height:6px;border-radius:50%;background:var(--warn);display:inline-block;"></span> ждём подключения</span>
+          </div>
+          <div style="margin-top:12px;">
+            {step(1, f"Установите приложение {esc(ob['app_name'])}", f'<div style="display:flex;gap:8px;flex-wrap:wrap;">{apps}</div>')}
+            {step(2, "Добавьте подписку в одно касание",
+                  f'<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+                  f'<a href="{esc(ob["import_url"])}" class="btn btn-primary btn-sm">{icon("plus", size=14, color="#fff")}<span>Добавить в {esc(ob["app_name"])}</span></a>'
+                  f'<button type="button" class="btn btn-outline btn-sm" data-copy-field data-copy-value="{esc(ob["subscription_url"])}" '
+                  f'onclick="navigator.clipboard&&navigator.clipboard.writeText(this.getAttribute(\'data-copy-value\'));var s=this.querySelector(\'span\');s.textContent=\'Скопировано\';setTimeout(function(){{s.textContent=\'Скопировать ключ\';}},1500);">{icon("copy", size=14)}<span>Скопировать ключ</span></button>'
+                  f'<a href="{esc(ob["subscription_url"])}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">Страница подключения</a></div>'
+                  f'<div style="font:500 11.5px Manrope;color:var(--text-4);margin-top:8px;">Кнопка откроет приложение и сама добавит подписку. Если не сработало — скопируйте ключ и вставьте в приложение через «+».</div>')}
+            {step(3, "Нажмите «Подключить» в приложении",
+                  '<div style="font:500 12.5px Manrope;color:var(--text-3);">Как только устройство подключится, этот блок исчезнет сам.</div>')}
+          </div>
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px;font:500 12px Manrope;color:var(--text-4);">
+            <span>{help_links}</span>
+            <a href="/app/tickets" style="font-weight:700;">Не получается? Поможем в чате →</a>
+          </div>
+        </div>
+        <script>
+        (function(){{
+          var ua = navigator.userAgent || '';
+          var os = /iPhone|iPad|iPod/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : /Mac/.test(ua) ? 'macos' : /Win/.test(ua) ? 'windows' : '';
+          document.querySelectorAll('.ob-app').forEach(function(a){{ if (a.getAttribute('data-os') === os) {{ a.className = 'btn btn-primary btn-sm ob-app'; a.textContent = a.textContent + ' — ваше устройство'; }} }});
+          var tries = 0;
+          var t = setInterval(function(){{
+            if (document.hidden) return;
+            if (++tries > 90) {{ clearInterval(t); return; }}  // ~15 минут
+            fetch('/app/api/connection-status', {{credentials:'same-origin'}}).then(function(r){{ return r.ok ? r.json() : null; }}).then(function(d){{
+              if (d && d.devices > 0) {{
+                clearInterval(t);
+                var st = document.getElementById('ob-status');
+                if (st) {{ st.className = 'badge badge-success'; st.textContent = 'Устройство подключено!'; }}
+                if (window.remnaToast) window.remnaToast('success', 'Готово — VPN подключён 🎉');
+                setTimeout(function(){{ location.reload(); }}, 2500);
+              }}
+            }}).catch(function(){{}});
+          }}, 10000);
+        }})();
+        </script>"""
+
+
+@router.get("/app/api/connection-status")
+async def connection_status(request: Request) -> JSONResponse:
+    """Сколько устройств подключено — для подсказок «ждём подключения» на главной."""
+    settings = get_settings()
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+    if auth is None:
+        return JSONResponse({"devices": 0}, status_code=401)
+    user, _row = auth
+    if user.remnawave_uuid is None:
+        return JSONResponse({"devices": 0})
+    uinf, hw_devices, _err = await fetch_panel_hwid_context(user, settings)
+    return JSONResponse({"devices": connected_devices_count(uinf, hw_devices)})
+
+
 @router.get("/app")
 async def dashboard(request: Request) -> HTMLResponse:
     settings = get_settings()
@@ -93,9 +212,14 @@ async def dashboard(request: Request) -> HTMLResponse:
         devices_max_label = str(devices_max)
         traffic_used_gb: float | None = None
         traffic_limit_gb: float | None = None
+        sub_url = ""
+        panel_ok = False
         if user.remnawave_uuid is not None:
             uinf, hw_devices, _err = await fetch_panel_hwid_context(user, settings)
+            panel_ok = uinf is not None
             devices_used = connected_devices_count(uinf, hw_devices)
+            if uinf:
+                sub_url = subscription_url_for_telegram(uinf.get("subscriptionUrl"), settings) or ""
             is_admin = is_admin_unlimited_devices(user, settings)
             if is_admin or panel_devices_unlimited(uinf, is_bot_admin=is_admin):
                 devices_max_label = "∞"
@@ -124,6 +248,8 @@ async def dashboard(request: Request) -> HTMLResponse:
         ).scalar_one()
         invited_count = await count_invited_users(session, user.id)
         earned_rub = await sum_referrer_bonus_rub(session, user.id)
+        intro_ok = await intro_offer_eligible(session, user, settings)
+        wb_pct = winback_percent(user, settings)
 
     initial = (user.first_name or user.username or "U")[:1].upper()
     name_display = esc(user.first_name or (f"@{user.username}" if user.username else f"#{user.id}"))
@@ -179,6 +305,16 @@ async def dashboard(request: Request) -> HTMLResponse:
           <a href="/app/subscription" class="btn btn-primary" style="margin-top:16px;">Выбрать тариф</a>
         </div>"""
 
+    offers_html = _offers_html(settings, intro_ok=intro_ok and sub is None, wb_pct=wb_pct, wb_until=user.winback_offer_until)
+    if intro_ok and sub is not None:
+        offers_html += _offers_html(settings, intro_ok=True, wb_pct=Decimal("0"), wb_until=None, compact=True)
+    # подсказки до первого подключения: подписка есть, панель ответила, устройств 0
+    onboarding_html = (
+        _onboarding_html(onboarding_payload(settings, sub_url))
+        if sub is not None and panel_ok and devices_used == 0 and sub_url
+        else ""
+    )
+
     txns_html = "".join(_txn_row_html(t) for t in txns) or '<div style="opacity:.5;font:500 13px Manrope;padding:12px 0;">Пока нет операций</div>'
 
     channel = (settings.required_channel_username or "").strip().lstrip("@")
@@ -200,6 +336,8 @@ async def dashboard(request: Request) -> HTMLResponse:
 
     <div class="grid-auto fade-up d1 cols-2" style="grid-template-columns:1fr 400px;margin-top:20px;">
       <div style="display:flex;flex-direction:column;gap:20px;min-width:0;">
+        {offers_html}
+        {onboarding_html}
         {sub_card}
 
         <div class="grid-auto" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">

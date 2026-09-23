@@ -17,6 +17,7 @@ from shared.services.billing_v2.negative_balance_notify_loop import negative_bal
 from shared.services.billing_v2.transition_service import legacy_transition_loop
 from shared.services.admin_report_loop import admin_report_loop
 from shared.services.expiry_notify_service import subscription_expiry_notify_loop
+from shared.services.offers_service import winback_offer_loop
 from shared.services.fraud.blacklist_sync_loop import blacklist_sync_loop
 from shared.services.fraud.ip_hop_scan_loop import ip_hop_scan_loop
 from shared.services.fraud.traffic_spike_scan_loop import traffic_spike_scan_loop
@@ -36,6 +37,7 @@ def start_background_loops(settings: Settings, stop_event: asyncio.Event) -> lis
         tasks.append(asyncio.create_task(backup_loop(settings, stop_event)))
     tasks.append(asyncio.create_task(subscription_autorenew_loop(settings, stop_event)))
     tasks.append(asyncio.create_task(subscription_expiry_notify_loop(settings, stop_event)))
+    tasks.append(asyncio.create_task(winback_offer_loop(settings, stop_event)))
     tasks.append(asyncio.create_task(connection_notify_loop(settings, stop_event)))
     if settings.billing_v2_enabled:
         tasks.append(asyncio.create_task(billing_cleanup_loop(settings, stop_event)))

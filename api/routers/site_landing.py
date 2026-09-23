@@ -257,18 +257,6 @@ def render_landing_page(
 
 
 _LEGAL_PAGES = {
-    "privacy": (
-        "Политика конфиденциальности",
-        "Мы обрабатываем только данные, необходимые для работы сервиса (Telegram ID, платёжные метаданные, "
-        "техническую статистику подключений) и не передаём их третьим лицам, кроме случаев, предусмотренных "
-        "законом. Полный текст политики уточняйте у поддержки{support_line}.",
-    ),
-    "offer": (
-        "Публичная оферта",
-        "Оплачивая подписку Flux Network, вы соглашаетесь с условиями предоставления доступа к VPN-сервису: "
-        "оплата за выбранный период, автопродление можно отключить в личном кабинете, лимиты трафика и устройств "
-        "указаны на странице тарифа.",
-    ),
     "refund": (
         "Политика возврата",
         "Если сервис не заработал по нашей вине и вопрос не удалось решить через поддержку, мы возвращаем "
@@ -278,32 +266,77 @@ _LEGAL_PAGES = {
 }
 
 
-@router.get("/legal/{slug}")
-async def legal_page(slug: str) -> HTMLResponse:
-    settings = get_settings()
-    support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
-    item = _LEGAL_PAGES.get(slug)
-    if item is None:
-        title, text = "Документ не найден", "Такой страницы нет."
-    else:
-        title, text = item
-        support_line = f" — @{support}" if support else ""
-        text = text.format(support_line=support_line)
-    body = f"""
+_LEGAL_CSS = """
+.legal-body{font:500 15px/1.75 Manrope;color:var(--text-2);}
+.legal-body p{margin:0 0 14px;}
+.legal-body strong,.legal-body b{color:var(--text-1);font-weight:800;}
+.legal-body h3,.legal-body h4{font:800 18px Manrope;color:var(--text-1);margin:26px 0 10px;}
+.legal-body blockquote{margin:16px 0;padding:12px 16px;border-left:3px solid var(--accent);background:rgba(123,92,255,.07);border-radius:0 10px 10px 0;color:var(--text-2);}
+.legal-body a{color:var(--accent-softer);text-decoration:underline;}
+.legal-body ul,.legal-body ol{padding-left:22px;margin:0 0 14px;}
+@media (max-width:640px){ .legal-card{padding:22px 18px !important;margin:24px auto !important;} .legal-body{font-size:14.5px;} }
+"""
+
+
+def _legal_page_html(title: str, body_html: str, *, updated: str = "") -> str:
+    return f"""
+<style>{_LEGAL_CSS}</style>
 <div class="hero-bg" style="min-height:100vh;">
-  <div class="shell" style="padding-top:40px;">
+  <div class="shell" style="padding-top:20px;">
     {public_topbar()}
-    <div class="card fade-up" style="max-width:760px;margin:48px auto;padding:36px;">
-      <h1 style="font:800 26px Manrope;color:var(--text-1);margin:0 0 16px;">{esc(title)}</h1>
-      <p style="font:500 14.5px Manrope;color:var(--text-3);line-height:1.7;">{esc(text)}</p>
-      <a href="/" class="btn btn-outline" style="margin-top:20px;">{icon('arrow-right', size=14)}<span>На главную</span></a>
+    <div class="card fade-up legal-card" style="max-width:820px;margin:40px auto;padding:40px 44px;">
+      <h1 style="font:800 clamp(24px,4vw,32px) Manrope;color:var(--text-1);margin:0;letter-spacing:-.02em;">{esc(title)}</h1>
+      {f'<div style="font:500 12px Manrope;color:var(--text-4);margin-top:8px;">Редакция от {esc(updated)}</div>' if updated else ''}
+      <div class="legal-body" style="margin-top:26px;">{body_html}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:24px;border-top:1px solid var(--line);padding-top:20px;">
+        <a href="/legal/privacy" class="btn btn-outline btn-sm">Политика конфиденциальности</a>
+        <a href="/legal/terms" class="btn btn-outline btn-sm">Пользовательское соглашение</a>
+        <a href="/" class="btn btn-outline btn-sm">На главную</a>
+      </div>
     </div>
     {site_footer()}
   </div>
 </div>
 {_login_modal()}
 """
-    return HTMLResponse(page(title=title, body=body))
+
+
+@router.get("/legal/{slug}")
+async def legal_page(slug: str) -> HTMLResponse:
+    from fastapi.responses import RedirectResponse
+
+    from shared.database import get_session_factory
+    from shared.datetime_msk import fmt_dt_msk
+    from shared.services.legal_docs import DOCS, get_or_import_doc
+
+    settings = get_settings()
+    if slug == "offer":
+        # раньше была короткая «оферта» — теперь полноценное пользовательское соглашение
+        return RedirectResponse("/legal/terms", status_code=301)
+    if slug in DOCS:
+        factory = get_session_factory()
+        async with factory() as session:
+            doc = await get_or_import_doc(session, slug, settings)
+        if doc is not None:
+            updated = fmt_dt_msk(doc.get("updated_at"), with_suffix=False) if doc.get("updated_at") else ""
+            return HTMLResponse(page(title=f"{doc['title']} — Flux Network", body=_legal_page_html(doc["title"], doc["content_html"], updated=updated.split(" ")[0])))
+        support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
+        return HTMLResponse(
+            page(
+                title=DOCS[slug][0],
+                body=_legal_page_html(
+                    DOCS[slug][0],
+                    f"<p>Документ временно недоступен. Напишите в поддержку{(' — @' + esc(support)) if support else ''}, и мы пришлём актуальную редакцию.</p>",
+                ),
+            )
+        )
+    item = _LEGAL_PAGES.get(slug)
+    if item is None:
+        return HTMLResponse(page(title="Документ не найден", body=_legal_page_html("Документ не найден", "<p>Такой страницы нет.</p>")), status_code=404)
+    title, body_text = item
+    support = (settings.support_username or settings.bot_username or "").strip().lstrip("@")
+    body_text = body_text.format(support_line=f" — @{support}" if support else "")
+    return HTMLResponse(page(title=title, body=_legal_page_html(title, f"<p>{esc(body_text)}</p>")))
 
 
 def _login_modal() -> str:
