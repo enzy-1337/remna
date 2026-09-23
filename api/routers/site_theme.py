@@ -361,6 +361,7 @@ def page(*, title: str, body: str, extra_head: str = "") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)}</title>
+{f'<link rel="icon" href="{esc(site_logo_url())}">' if site_logo_url() else ''}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <style>{SITE_CSS}</style>
 {extra_head}
@@ -372,11 +373,37 @@ def page(*, title: str, body: str, extra_head: str = "") -> str:
 </html>"""
 
 
+def site_logo_url() -> str:
+    """Логотип сайта — тот же, что в web-admin (ADMIN_PANEL_LOGO_URL). Пусто — встроенный значок."""
+    from shared.config import get_settings
+
+    url = (get_settings().admin_panel_logo_url or "").strip()
+    if url.startswith(("https://", "http://", "/")):
+        return url
+    return ""
+
+
+def _logo_inner(px: int, icon_size: int) -> str:
+    url = site_logo_url()
+    if url:
+        return (
+            f'<img src="{esc(url)}" alt="Flux" width="{px}" height="{px}" '
+            f'style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;"/>'
+        )
+    return icon('shield', size=icon_size, color='#fff', stroke=2.4)
+
+
+def _logo_box_style() -> str:
+    # С картинкой — без фиолетовой подложки, чтобы не просвечивала по краям прозрачного PNG.
+    return "background:none;overflow:hidden;" if site_logo_url() else ""
+
+
 def brand_mark(*, size: str = "md") -> str:
     logo = "26px" if size == "md" else "24px"
+    px = 26 if size == "md" else 24
     return f"""
 <div class="brand-mark">
-  <div class="brand-logo" style="width:{logo};height:{logo};">{icon('shield', size=15 if size == 'md' else 14, color='#fff', stroke=2.4)}</div>
+  <div class="brand-logo" style="width:{logo};height:{logo};{_logo_box_style()}">{_logo_inner(px, 15 if size == 'md' else 14)}</div>
   <span class="brand-name">Flux<b>VPN</b></span>
   <span class="brand-beta">BETA</span>
 </div>"""
@@ -525,6 +552,10 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
     }}).join('');
   }}
   if (notifsBtn && notifsDd) {{
+    // У .topbar есть backdrop-filter: для position:fixed потомков он становится «окном» и
+    // создаёт свой слой — список уезжал вправо и оказывался под карточками. Выносим его в <body>.
+    document.body.appendChild(notifsDd);
+    notifsDd.style.zIndex = '1000';
     fetch('/app/api/notifications', {{credentials:'same-origin'}})
       .then(function(r){{ return r.json(); }})
       .then(function(d){{
@@ -550,8 +581,8 @@ def app_topbar(*, active: str, balance_rub: str, unread_tickets: int, initial: s
       if (!notifsDd.hidden) notifsBadge.hidden = true;
     }});
     document.querySelectorAll('[data-close-notifs]').forEach(function(b){{ b.addEventListener('click', function(){{ notifsDd.hidden = true; }}); }});
-    document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && e.target !== notifsBtn) notifsDd.hidden = true; }});
-    window.addEventListener('scroll', function(){{ if (!notifsDd.hidden) notifsDd.hidden = true; }}, {{passive: true, capture: true}});
+    document.addEventListener('click', function(e){{ if (!notifsDd.hidden && !notifsDd.contains(e.target) && !notifsBtn.contains(e.target)) notifsDd.hidden = true; }});
+    window.addEventListener('scroll', function(e){{ if (!notifsDd.hidden && !(e.target instanceof Node && notifsDd.contains(e.target))) notifsDd.hidden = true; }}, {{passive: true, capture: true}});
     window.addEventListener('resize', function(){{ if (!notifsDd.hidden) notifsDd.hidden = true; }});
   }}
 }})();
@@ -562,7 +593,7 @@ def site_footer() -> str:
     return f"""
 <footer class="site-footer shell">
   <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:22px;height:22px;border-radius:7px;background:linear-gradient(140deg,var(--accent),var(--accent-2));"></div>
+    <div style="width:22px;height:22px;border-radius:7px;background:linear-gradient(140deg,var(--accent),var(--accent-2));{_logo_box_style()}">{_logo_inner(22, 12) if site_logo_url() else ''}</div>
     <span style="font:700 13px Manrope;color:var(--text-3);">© 2026 Flux Network</span>
   </div>
   <div class="footer-links">

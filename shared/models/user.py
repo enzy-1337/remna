@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.models.base import Base
@@ -33,7 +33,8 @@ class User(Base):
 
     site_totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     site_totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    site_totp_backup_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # jsonb (не json): у json нет оператора «=», и SELECT DISTINCT по строке users падал.
+    site_totp_backup_codes: Mapped[list | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     google_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)

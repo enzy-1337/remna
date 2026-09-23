@@ -28,6 +28,10 @@ from shared.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+
+# Маркер «поле не передано» (в отличие от None — «очистить значение в панели»).
+_UNSET: Any = object()
+
 class RemnaWaveError(Exception):
     """Ошибка вызова Remnawave API."""
 
@@ -204,6 +208,7 @@ class RemnaWaveClient:
         telegram_id: int,
         hwid_device_limit: int,
         active_internal_squads: list[str] | None = None,
+        email: str | None = None,
     ) -> dict[str, Any]:
         """POST /api/users — возвращает объект пользователя (unwrap response)."""
         if self._s.remnawave_stub:
@@ -226,6 +231,8 @@ class RemnaWaveClient:
         }
         if active_internal_squads:
             body["activeInternalSquads"] = active_internal_squads
+        if email:
+            body["email"] = email
 
         data = await self._request("POST", "users", json_body=body)
         return self._unwrap(data)
@@ -639,9 +646,12 @@ class RemnaWaveClient:
         status: str | None = None,
         description: str | None = None,
         active_internal_squads: list[str] | None = None,
+        email: Any = _UNSET,
     ) -> dict[str, Any]:
-        """Обновление пользователя (разные версии API панели)."""
+        """Обновление пользователя (разные версии API панели). email=None — очистить почту в панели."""
         body: dict[str, Any] = {}
+        if email is not _UNSET:
+            body["email"] = email
         if expire_at is not None:
             body["expireAt"] = expire_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         if hwid_device_limit is not None:
@@ -665,6 +675,8 @@ class RemnaWaveClient:
                 cur["trafficLimitBytes"] = traffic_limit_bytes
             if status is not None:
                 cur["status"] = status
+            if email is not _UNSET:
+                cur["email"] = email
             return cur
 
         if not body:

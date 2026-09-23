@@ -37,6 +37,7 @@ from shared.services.site_totp_service import verify_totp_code, verify_and_consu
 from shared.services.telegram_login_verify import verify_telegram_login
 from shared.services.user_registration import get_user_by_telegram_id, register_user
 from shared.services.email_marketing import set_marketing_consent
+from shared.services.remnawave_email_sync import push_user_email_to_remnawave
 from shared.services.email_code_service import (
     email_sending_configured,
     normalize_email,
@@ -47,6 +48,7 @@ from shared.models.user import User
 
 from api.routers.site_landing import REF_COOKIE
 from api.routers.site_theme import esc, esc_attr, icon, page, public_topbar, tg_logo_svg, google_logo_svg, ua_label
+from api.routers.site_theme import _logo_box_style, _logo_inner
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -191,7 +193,7 @@ def _login_page_html(*, error: str = "", notice: str = "") -> str:
     <div class="fade-up" style="width:100%;max-width:960px;background:var(--card-2);border:1px solid var(--line-2);border-radius:22px;overflow:hidden;display:flex;box-shadow:0 50px 120px -30px rgba(0,0,0,.9);flex-wrap:wrap;">
       <div style="flex:1;min-width:280px;padding:36px 34px;background:linear-gradient(160deg,rgba(123,92,255,.1),transparent 60%);border-right:1px solid var(--line-2);">
         <div style="display:flex;align-items:center;gap:10px;">
-          <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;">{icon('shield', size=17, color='#fff', stroke=2.3)}</div>
+          <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;{_logo_box_style()}">{_logo_inner(30, 17)}</div>
           <span style="font:800 17px Manrope;color:var(--text-1);">Flux Network</span>
         </div>
         <div style="font:800 27px Manrope;color:var(--text-1);margin-top:30px;line-height:1.2;">Безопасный доступ<br>к интернету</div>
@@ -544,6 +546,8 @@ async def google_oauth_callback(request: Request, code: str = "", state: str = "
                     user.email = google_email_raw
                     user.email_verified_at = datetime.now(timezone.utc)
             await session.commit()
+            if user.email:
+                await push_user_email_to_remnawave(user)
             return RedirectResponse("/app/profile?n=google_linked", status_code=303)
 
         existing = (await session.execute(select(User).where(User.google_id == google_sub))).scalar_one_or_none()
@@ -659,10 +663,15 @@ async def email_verify_submit(request: Request, code: str = Form("")) -> Redirec
                 resp = RedirectResponse(f"/app/profile?err={_qp('Эта почта уже привязана к другому аккаунту')}", status_code=303)
                 resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
                 return resp
+            if user.email_verified_at is not None and (user.email or "") != email:
+                resp = RedirectResponse(f"/app/profile?err={_qp('Сменить почту может только администратор — напишите в поддержку')}", status_code=303)
+                resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
+                return resp
             user.email = email
             user.email_verified_at = datetime.now(timezone.utc)
             set_marketing_consent(user, bool(pending.get("marketing")))
             await session.commit()
+            await push_user_email_to_remnawave(user)
             resp = RedirectResponse("/app/profile?n=email_linked", status_code=303)
             resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")
             return resp

@@ -662,6 +662,14 @@ class Settings(BaseSettings):
         validation_alias="WEB_ADMIN_GITHUB_REDIRECT_URI",
         description="Полный callback URL GitHub OAuth (например https://admin.example.com/admin/login/github/callback)",
     )
+    web_admin_google_redirect_uri: str = Field(
+        default="",
+        validation_alias="WEB_ADMIN_GOOGLE_REDIRECT_URI",
+        description=(
+            "Callback Google OAuth для web-admin (например https://weba.example.com/admin/login/google/callback). "
+            "Client ID/Secret — те же SITE_GOOGLE_*. Пусто — {ADMIN_SITE_URL|PUBLIC_SITE_URL}/admin/login/google/callback."
+        ),
+    )
     web_admin_telegram_client_id: str = Field(
         default="",
         validation_alias="WEB_ADMIN_TELEGRAM_CLIENT_ID",

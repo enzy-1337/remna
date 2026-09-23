@@ -181,6 +181,20 @@ async def _maybe_push_rw_description(
         logger.warning("RW sync: push description failed user=%s: %s", user.id, e)
 
 
+async def _maybe_push_rw_email(rw: RemnaWaveClient, user: User, info: dict) -> None:
+    """Подтягивает поле email в панели к привязанной почте (если разошлись)."""
+    from shared.services.remnawave_email_sync import panel_email_for_user
+
+    want = panel_email_for_user(user)
+    cur = (str(info.get("email") or "").strip()) or None
+    if (want or "").lower() == (cur or "").lower():
+        return
+    try:
+        await rw.update_user(str(user.remnawave_uuid), email=want)
+    except RemnaWaveError as e:
+        logger.warning("RW sync: push email failed user=%s: %s", user.id, e)
+
+
 async def _sync_one_linked_user(
     session: AsyncSession,
     rw: RemnaWaveClient,
@@ -205,6 +219,7 @@ async def _sync_one_linked_user(
         return
     await _upsert_subscription_from_rw_payload(session, user=user, info=info, now=now)
     await _maybe_push_rw_description(rw, settings, user, info)
+    await _maybe_push_rw_email(rw, user, info)
 
 
 async def sync_once(settings: Settings) -> None:

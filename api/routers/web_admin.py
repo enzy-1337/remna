@@ -63,6 +63,7 @@ from shared.models.transaction import Transaction
 from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
 from shared.services.email_code_service import normalize_email
+from shared.services.remnawave_email_sync import push_user_email_to_remnawave
 from shared.services.email_sender import EmailRow, email_sending_configured, send_branded_email, site_url
 from shared.models.user_fraud_state import UserFraudState
 from shared.models.web_admin_browser_session import WebAdminBrowserSession
@@ -1974,6 +1975,8 @@ async def _resume_login_from_hint(request: Request, hint: dict) -> RedirectRespo
     kind = str(hint.get("login_kind") or "telegram").strip().lower()
     if kind == "github":
         return RedirectResponse("/admin/login/github/start", status_code=303)
+    if kind == "google":
+        return RedirectResponse("/admin/login/google/start", status_code=303)
     return RedirectResponse("/admin/login/telegram/start", status_code=303)
 
 
@@ -2710,7 +2713,9 @@ def _admin_mail_help_block(settings, *, open_tab: bool = False) -> str:
               <h4 class="font-semibold">2. Вход через Google (OAuth)</h4>
               <ol class="list-decimal list-inside opacity-80 flex flex-col gap-1">
                 <li>Google Cloud Console → APIs &amp; Services → Credentials → OAuth client ID → <b>Web application</b>.</li>
-                <li>В <b>Authorized redirect URIs</b> добавьте точно тот же адрес, что в <code {code}>SITE_GOOGLE_REDIRECT_URI</code>.</li>
+                <li>В <b>Authorized redirect URIs</b> добавьте <b>оба</b> адреса: сайта (<code {code}>SITE_GOOGLE_REDIRECT_URI</code>)
+                  и админки (<code {code}>{_esc(_admin_google_redirect_uri(settings))}</code>).</li>
+                <li>Вход в админку через Google: войдите через Telegram → «Мой профиль» → «Привязать Google».</li>
                 <li>Client ID и Client Secret вставьте в поля ниже. Аудитория OAuth-экрана — «Внешний», статус — «В производстве».</li>
               </ol>
               <h4 class="font-semibold mt-2">3. Какие письма получают пользователи</h4>
@@ -2868,6 +2873,20 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             "</div>"
         )
     github_href = "/admin/login/github/start"
+    google_login_btn = ""
+    if _admin_google_ready(get_settings()):
+        g_href = "/admin/login/google/start" + ("?mode=link" if link_mode else "")
+        google_login_btn = (
+            f'<a class="btn gap-2 login-auth-btn bg-white text-neutral-800 hover:bg-neutral-100 border-0" href="{_esc(g_href)}">'
+            '<i class="fa-brands fa-google text-lg" aria-hidden="true"></i>Google</a>'
+        )
+    if err == "google_config":
+        login_notice = (
+            "<div class='alert alert-warning text-sm'><span>Для входа через Google задайте SITE_GOOGLE_CLIENT_ID и "
+            "SITE_GOOGLE_CLIENT_SECRET (Настройки → «Почта и Google»).</span></div>"
+        )
+    elif err and err not in {"telegram_login_config", "totp", "locked"}:
+        login_notice = f"<div class='alert alert-error text-sm'><span>{_esc(err)}</span></div>"
     login_bg_url = _admin_background_image_url(get_settings())
     login_bg_css = (
         "background-image:\n"
@@ -2977,6 +2996,7 @@ async def admin_login_page(request: Request, link: str = "") -> HTMLResponse:
             <i class="fa-brands fa-github text-lg" aria-hidden="true"></i>
             {"GitHub" if link_mode else "GitHub"}
           </a>
+          {google_login_btn}
         </div>
       </div>
     </div>
@@ -3550,6 +3570,149 @@ async def admin_login_github_callback(request: Request, code: str = "", state: s
     request.session["wauth_login_kind"] = "github"
     request.session["wauth"]["github_id"] = gh_id
     return await _finalize_login_with_2fa(request)
+
+
+# --- Вход в web-admin через Google --------------------------------------------------------------
+
+
+def _admin_google_ready(settings) -> bool:
+    return bool((settings.site_google_client_id or "").strip() and (settings.site_google_client_secret or "").strip())
+
+
+def _admin_google_redirect_uri(settings) -> str:
+    explicit = (settings.web_admin_google_redirect_uri or "").strip()
+    if explicit:
+        return explicit
+    base = (settings.admin_site_url or settings.public_site_url or "").strip().rstrip("/")
+    return f"{base}/admin/login/google/callback"
+
+
+def _google_claims_from_id_token(id_token: str) -> dict:
+    """id_token получен напрямую от Google по TLS (code flow) — достаточно разобрать payload."""
+    try:
+        payload_b64 = id_token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+@router.get("/login/google/start")
+async def admin_login_google_start(request: Request, mode: str = ""):
+    settings = get_settings()
+    if not _admin_google_ready(settings):
+        return RedirectResponse("/admin/login?err=google_config", status_code=303)
+    state = urlsafe_b64encode(token_urlsafe(24).encode("utf-8")).decode("ascii")[:40]
+    request.session["adm_google_state"] = state
+    request.session["adm_google_mode"] = "link" if (mode or "").strip().lower() == "link" else "login"
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={quote_plus(settings.site_google_client_id.strip())}"
+        f"&redirect_uri={quote_plus(_admin_google_redirect_uri(settings))}"
+        "&response_type=code&scope=openid%20email%20profile&prompt=select_account"
+        f"&state={quote_plus(state)}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/login/google/callback")
+async def admin_login_google_callback(request: Request, code: str = "", state: str = ""):
+    settings = get_settings()
+    mode = str(request.session.pop("adm_google_mode", None) or "login")
+    expected = request.session.pop("adm_google_state", None)
+    fail_url = "/admin/profile?err=" if mode == "link" else "/admin/login?err="
+    if not code or not expected or state != expected or not _admin_google_ready(settings):
+        return RedirectResponse(fail_url + quote_plus("Google: вход не удался, попробуйте ещё раз."), status_code=303)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                headers={"Accept": "application/json"},
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": settings.site_google_client_id.strip(),
+                    "client_secret": settings.site_google_client_secret.strip(),
+                    "redirect_uri": _admin_google_redirect_uri(settings),
+                },
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+    except httpx.HTTPError:
+        logger.exception("admin google token exchange failed")
+        return RedirectResponse(fail_url + quote_plus("Google: не удалось получить токен (проверьте Redirect URI)."), status_code=303)
+    claims = _google_claims_from_id_token(str(token_data.get("id_token") or ""))
+    google_sub = str(claims.get("sub") or "").strip()
+    if not google_sub or str(claims.get("aud") or "") != settings.site_google_client_id.strip():
+        return RedirectResponse(fail_url + quote_plus("Google: неверный ответ."), status_code=303)
+    g_email = str(claims.get("email") or "").strip().lower()
+    g_avatar = str(claims.get("picture") or "")
+
+    async with await _session() as session:
+        if mode == "link":
+            denied = _require_login(request)
+            if denied is not None:
+                return denied
+            linked = await _linked_bot_user_for_admin(request)
+            if linked is None:
+                return RedirectResponse(
+                    "/admin/profile?err=" + quote_plus("Сначала войдите через Telegram — Google привязывается к Telegram-профилю."),
+                    status_code=303,
+                )
+            conflict = (
+                await session.execute(
+                    select(User.id).where(User.id != linked.id, User.google_id == google_sub).limit(1)
+                )
+            ).scalar_one_or_none()
+            if conflict is not None:
+                return RedirectResponse(
+                    "/admin/profile?err=" + quote_plus(f"Этот Google-аккаунт уже привязан к пользователю #{conflict}."),
+                    status_code=303,
+                )
+            user = await session.get(User, linked.id)
+            if user is None:
+                return RedirectResponse("/admin/profile", status_code=303)
+            user.google_id = google_sub
+            await session.commit()
+            return RedirectResponse("/admin/profile?n=linked_google", status_code=303)
+
+        user = (
+            await session.execute(select(User).where(User.google_id == google_sub).limit(1))
+        ).scalar_one_or_none()
+    if user is None or not _admin_allowed_by_tg(int(user.telegram_id)):
+        hint = f" ({g_email})" if g_email else ""
+        return RedirectResponse(
+            "/admin/login?err="
+            + quote_plus(f"Google-аккаунт{hint} не привязан к администратору. Войдите через Telegram и привяжите Google в профиле."),
+            status_code=303,
+        )
+    request.session["wauth_login_kind"] = "google"
+    _set_wauth_telegram(
+        request,
+        tid=int(user.telegram_id),
+        label=str(user.first_name or user.username or f"tg:{user.telegram_id}"),
+        avatar_url=g_avatar,
+        username=str(user.username or ""),
+        github_login=str(user.github_username or ""),
+    )
+    return await _finalize_login_with_2fa(request)
+
+
+@router.post("/profile/google/unlink")
+async def admin_profile_google_unlink(request: Request) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    linked = await _linked_bot_user_for_admin(request)
+    if linked is None:
+        return RedirectResponse("/admin/profile", status_code=303)
+    async with await _session() as session:
+        user = await session.get(User, linked.id)
+        if user is not None:
+            user.google_id = None
+            await session.commit()
+    return RedirectResponse("/admin/profile?n=google_unlinked", status_code=303)
 
 
 @router.post("/logout")
@@ -6373,6 +6536,7 @@ async def admin_users(
     usage: str = "",
     sort: str = "",
     dev_slots: str = "",
+    mail: str = "",
 ) -> HTMLResponse:
     denied = _require_login(request)
     if denied is not None:
@@ -6387,8 +6551,9 @@ async def admin_users(
     usage_f = (usage or "").strip().lower()
     sort_f = (sort or "").strip().lower()
     dev_slots_f = (dev_slots or "").strip()
+    mail_f = (mail or "").strip().lower()
     page = max(1, page)
-    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f, dev_slots_f)
+    cache_key = (needle.casefold(), page, sub_f, blk_f, risk_f, bill_f, gh_f, usage_f, sort_f, dev_slots_f, mail_f)
     now_m = time.monotonic()
     if not want_partial:
         cached_users = _USERS_HTML_CACHE.get(cache_key)
@@ -6464,6 +6629,15 @@ async def admin_users(
         if bill_f in {"legacy", "hybrid"}:
             query = query.where(User.billing_mode == bill_f)
             count_query = count_query.where(User.billing_mode == bill_f)
+        if mail_f == "1":
+            query = query.where(User.email.is_not(None), User.email_verified_at.is_not(None))
+            count_query = count_query.where(User.email.is_not(None), User.email_verified_at.is_not(None))
+        elif mail_f == "0":
+            query = query.where(or_(User.email.is_(None), User.email_verified_at.is_(None)))
+            count_query = count_query.where(or_(User.email.is_(None), User.email_verified_at.is_(None)))
+        elif mail_f == "mkt":
+            query = query.where(User.email_verified_at.is_not(None), User.email_marketing_consent.is_(True))
+            count_query = count_query.where(User.email_verified_at.is_not(None), User.email_marketing_consent.is_(True))
         if gh_f == "1":
             query = query.where(User.github_username.is_not(None))
             count_query = count_query.where(User.github_username.is_not(None))
@@ -6550,11 +6724,16 @@ async def admin_users(
             risk_badge = "<span class='badge badge-warning badge-xs'>24ч</span>"
         dev_slot = _active_subscription_devices_slots(now_utc, subs_by_user.get(u.id, []))
         dev_cell = str(dev_slot) if dev_slot is not None else "—"
+        if u.email and u.email_verified_at:
+            mkt = " <i class='fa-solid fa-bullhorn text-primary text-[10px]' title='Согласие на рассылку'></i>" if u.email_marketing_consent else ""
+            mail_cell = f"<span class='font-mono text-xs break-all'>{_esc(u.email)}</span>{mkt}"
+        else:
+            mail_cell = "<span class='opacity-40'>—</span>"
         rows.append(
             f"<tr class='remna-row-link cursor-pointer' data-row-href='/admin/users/{u.id}' tabindex='0' role='link' aria-label='Открыть пользователя'>"
             f"<td><div class='flex items-center gap-3'>{av}"
             f"<span class='link link-primary font-medium'>{_esc(display)}</span></div></td>"
-            f"<td>{_esc(username)}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
+            f"<td>{_esc(username)}</td><td>{mail_cell}</td><td><code class='bg-base-300 px-1.5 py-0.5 rounded text-xs'>{u.telegram_id}</code></td><td>{u.id}</td><td class='font-medium'>{_esc(u.balance)}</td>"
             f"<td><span class='badge {sub_badge} badge-sm'>{_esc(sub_lbl)}</span></td>"
             f"<td class='text-center font-mono text-sm'>{_esc(dev_cell)}</td>"
             f"<td>{risk_badge}</td></tr>"
@@ -6573,6 +6752,7 @@ async def admin_users(
             "usage": usage_f,
             "sort": sort_f,
             "dev_slots": dev_slots_f,
+            "mail": mail_f,
         },
         htmx_target="#remna-users-results",
     )
@@ -6631,6 +6811,10 @@ async def admin_users(
         + (" selected" if gh_f == "0" else "")
         + '>Без GitHub</option>'
     )
+    mail_opts = "".join(
+        f"<option value='{v}'{' selected' if mail_f == v else ''}>{lbl}</option>"
+        for v, lbl in (("", "Все"), ("1", "Почта привязана"), ("0", "Без почты"), ("mkt", "Согласие на рассылку"))
+    )
     usage_opts = (
         '<option value=""'
         + (" selected" if not usage_f else "")
@@ -6668,8 +6852,8 @@ async def admin_users(
     dev_opts = "".join(dev_opts_parts)
     users_results_inner = (
         "<div class='overflow-x-auto rounded-xl border border-base-content/10'>"
-        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
+        "<table class='table table-zebra table-sm'><thead><tr><th>Пользователь</th><th>Telegram</th><th>Почта</th><th>Telegram ID</th><th>ID в боте</th><th>Баланс</th><th>Подписка</th><th class='text-center'>Слоты</th><th>Риск</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"9\" class=\"opacity-50\">Нет данных</td></tr>'}</tbody></table></div>"
         f"{pager}"
     )
     body = (
@@ -6678,7 +6862,7 @@ async def admin_users(
         "<form id='us-form' method='get' class='flex flex-wrap items-end gap-2' "
         "hx-get='/admin/users' hx-target='#remna-users-results' hx-swap='innerHTML' hx-push-url='true' "
         "hx-trigger='submit, change from:select, keyup changed delay:320ms from:#us-q'>"
-        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, имя'/>"
+        f"<input id='us-q' class='input input-bordered input-sm h-9 min-h-9 w-full max-w-md text-sm' name='q' value='{_esc(needle)}' placeholder='ID, Telegram username, имя, почта'/>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Подписка</span>"
         f"<select id='us-sub' name='sub' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{sub_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Аккаунт</span>"
@@ -6687,6 +6871,8 @@ async def admin_users(
         f"<select id='us-risk' name='risk' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{risk_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Биллинг</span>"
         f"<select id='us-bill' name='bill' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{bill_opts}</select></label>"
+        f"<label class='form-control'><span class='label-text text-xs opacity-70'>Почта</span>"
+        f"<select id='us-mail' name='mail' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{mail_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>GitHub</span>"
         f"<select id='us-gh' name='gh' class='select select-bordered select-sm h-9 min-h-9 text-sm'>{gh_opts}</select></label>"
         f"<label class='form-control'><span class='label-text text-xs opacity-70'>Потребление</span>"
@@ -8572,6 +8758,7 @@ async def admin_user_email_set(request: Request, user_id: int, email: str = Form
         user.email = norm
         user.email_verified_at = datetime.now(timezone.utc)
         await session.commit()
+        await push_user_email_to_remnawave(user)
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=email_set", status_code=303)
 
@@ -8587,7 +8774,10 @@ async def admin_user_email_unset(request: Request, user_id: int) -> RedirectResp
             return RedirectResponse("/admin/users", status_code=303)
         user.email = None
         user.email_verified_at = None
+        user.email_marketing_consent = False
+        user.email_marketing_consent_at = None
         await session.commit()
+        await push_user_email_to_remnawave(user)
     _USERS_HTML_CACHE.clear()
     return RedirectResponse(f"/admin/users/{user_id}?n=email_unset", status_code=303)
 
@@ -9040,6 +9230,21 @@ async def admin_profile(request: Request) -> HTMLResponse:
             '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login?link=1">'
             '<i class="fa-solid fa-link" aria-hidden="true"></i>Связать Telegram и GitHub</a>'
         )
+    google_link_button = ""
+    if linked is not None and (linked.google_id or "").strip():
+        google_link_button = """
+          <span class="badge badge-success gap-1 h-9"><i class="fa-brands fa-google" aria-hidden="true"></i>Google привязан — можно входить</span>
+          <form method="post" action="/admin/profile/google/unlink" data-remna-confirm-msg="Отвязать Google? Входить через Google в админку и на сайт больше не получится.">
+            <button type="submit" class="btn btn-outline btn-error btn-sm h-9 min-h-9 gap-1.5">
+              <i class="fa-solid fa-link-slash" aria-hidden="true"></i>Отвязать Google
+            </button>
+          </form>
+        """
+    elif linked is not None and _admin_google_ready(settings):
+        google_link_button = (
+            '<a class="btn btn-sm h-9 min-h-9 gap-1.5" href="/admin/login/google/start?mode=link">'
+            '<i class="fa-brands fa-google" aria-hidden="true"></i>Привязать Google</a>'
+        )
     profile_notice = ""
     ncode = (request.query_params.get("n") or "").strip()
     err = (request.query_params.get("err") or "").strip()
@@ -9049,6 +9254,10 @@ async def admin_profile(request: Request) -> HTMLResponse:
         profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub успешно привязан к вашему Telegram-профилю.</span></div>"
     elif ncode == "linked_tg":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>Telegram успешно привязан. Теперь профиль работает с приоритетом Telegram ID.</span></div>"
+    elif ncode == "linked_google":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Google привязан. Теперь в админку можно входить через Google.</span></div>"
+    elif ncode == "google_unlinked":
+        profile_notice = "<div class='alert alert-success shadow-sm'><span>Google отвязан.</span></div>"
     elif ncode == "gh_unlinked":
         profile_notice = "<div class='alert alert-success shadow-sm'><span>GitHub отвязан от профиля.</span></div>"
     elif ncode == "2fa_setup":
@@ -9275,6 +9484,7 @@ async def admin_profile(request: Request) -> HTMLResponse:
             <i class="fa-solid fa-user" aria-hidden="true"></i>Мой профиль в боте
           </a>
           {account_link_button}
+          {google_link_button}
         </div>
       </div>
     </div>
@@ -9995,6 +10205,7 @@ async def admin_api_users_search(request: Request, q: str = "", limit: int = 20)
                 User.username.ilike(ilike),
                 User.first_name.ilike(ilike),
                 User.last_name.ilike(ilike),
+                User.email.ilike(ilike),
             ]
             if digits_only:
                 try:
@@ -10027,6 +10238,8 @@ async def admin_api_users_search(request: Request, q: str = "", limit: int = 20)
             sub_parts.append(_esc(name))
         sub_parts.append(f"tg:{tg}")
         sub_parts.append(f"#{uid}")
+        if u.email and u.email_verified_at:
+            sub_parts.append(_esc(u.email))
         label_html = (
             "<div class='flex flex-col'>"
             f"<span class='font-medium'>{_esc(label_main)}</span>"

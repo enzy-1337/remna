@@ -127,6 +127,12 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Client Secret из Google Cloud Console.",
             ),
             (
+                "WEB_ADMIN_GOOGLE_REDIRECT_URI",
+                "Google OAuth Redirect URI (админка)",
+                lambda s: s.web_admin_google_redirect_uri or "",
+                "Вход в web-admin через Google, обычно https://<домен-админки>/admin/login/google/callback. Этот адрес тоже нужно добавить в Google Cloud Console. Пусто — вычисляется из ADMIN_SITE_URL.",
+            ),
+            (
                 "SITE_GOOGLE_REDIRECT_URI",
                 "Google OAuth Redirect URI",
                 lambda s: s.site_google_redirect_uri or "",

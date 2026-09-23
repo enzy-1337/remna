@@ -132,6 +132,7 @@ async def profile_page(request: Request) -> HTMLResponse:
                 <input class="input" type="email" name="email" placeholder="Ваша почта" required style="flex:1;"/>
                 <button type="submit" class="btn btn-outline btn-sm" style="white-space:nowrap;">Получить код</button>
               </div>
+              <div style="font:500 11px/1.5 Manrope;color:var(--text-5);">После привязки сменить или отвязать почту сможет только администратор.</div>
               <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font:500 12px/1.5 Manrope;color:var(--text-3);">
                 <input type="checkbox" name="marketing" value="1" style="margin-top:2px;width:16px;height:16px;accent-color:var(--accent);flex-shrink:0;"/>
                 <span>Хочу получать новости, акции и информационную рассылку на почту. Чеки об оплате и уведомления о подписке приходят в любом случае.</span>
@@ -353,7 +354,7 @@ def _marketing_toggle_row(user: User) -> str:
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0 0 0;margin-top:10px;border-top:1px solid var(--line);">
               <div style="flex:1;min-width:0;">
                 <div style="font:700 13px Manrope;color:var(--text-1);">Новости и акции на почту</div>
-                <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">Чеки, продление и напоминания об окончании подписки приходят всегда</div>
+                <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">Чеки, продление и напоминания об окончании подписки приходят всегда. Сменить почту — через поддержку.</div>
               </div>
               <form method="post" action="/app/profile/email/marketing">
                 <input type="hidden" name="on" value="{'0' if on else '1'}"/>
@@ -438,6 +439,11 @@ async def email_link_start(request: Request, email: str = Form(""), marketing: s
             return RedirectResponse("/login", status_code=303)
         user, sess_row = auth
         await touch_session(session, sess_row)
+        if user.email_verified_at is not None:
+            return RedirectResponse(
+                f"/app/profile?err={quote_plus('Сменить почту может только администратор — напишите в поддержку')}",
+                status_code=303,
+            )
         taken = (
             await session.execute(select(User.id).where(User.id != user.id, User.email == norm).limit(1))
         ).scalar_one_or_none()
