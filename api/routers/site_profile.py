@@ -28,6 +28,7 @@ from shared.services.site_totp_service import (
     verify_totp_code,
 )
 from shared.services.email_code_service import email_sending_configured, normalize_email, start_email_code
+from shared.services.email_marketing import parse_unsubscribe_token, set_marketing_consent
 from api.routers.site_auth import _EMAIL_LINK_PURPOSE, _set_pending_email_cookie
 
 from api.routers.site_theme import app_topbar, esc, fmt_money, icon, page, site_footer, google_logo_svg, tg_logo_svg, ua_label as _ua_label
@@ -126,10 +127,17 @@ async def profile_page(request: Request) -> HTMLResponse:
               </div>
               {('<span class="badge badge-success">' + icon('check-circle', size=12) + ' Привязана</span>') if user.email_verified_at else ''}
             </div>
-            {f'''<form method="post" action="/app/profile/email/link-start" style="display:flex;gap:8px;margin-top:10px;">
-              <input class="input" type="email" name="email" placeholder="Ваша почта" required style="flex:1;"/>
-              <button type="submit" class="btn btn-outline btn-sm" style="white-space:nowrap;">Получить код</button>
+            {f'''<form method="post" action="/app/profile/email/link-start" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+              <div style="display:flex;gap:8px;">
+                <input class="input" type="email" name="email" placeholder="Ваша почта" required style="flex:1;"/>
+                <button type="submit" class="btn btn-outline btn-sm" style="white-space:nowrap;">Получить код</button>
+              </div>
+              <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font:500 12px/1.5 Manrope;color:var(--text-3);">
+                <input type="checkbox" name="marketing" value="1" style="margin-top:2px;width:16px;height:16px;accent-color:var(--accent);flex-shrink:0;"/>
+                <span>Хочу получать новости, акции и информационную рассылку на почту. Чеки об оплате и уведомления о подписке приходят в любом случае.</span>
+              </label>
             </form>''' if (email_ready and not user.email_verified_at) else ''}
+            {_marketing_toggle_row(user) if user.email_verified_at else ''}
             {'<div style="font:500 11px Manrope;color:var(--text-5);margin-top:8px;">Отправка писем ещё не настроена</div>' if (not email_ready and not user.email_verified_at) else ''}
           </div>
         </div>
@@ -339,8 +347,86 @@ async def revoke_all_sessions(request: Request) -> RedirectResponse:
     return RedirectResponse("/app/profile?n=sessions_revoked", status_code=303)
 
 
+def _marketing_toggle_row(user: User) -> str:
+    on = bool(user.email_marketing_consent)
+    return f'''
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0 0 0;margin-top:10px;border-top:1px solid var(--line);">
+              <div style="flex:1;min-width:0;">
+                <div style="font:700 13px Manrope;color:var(--text-1);">Новости и акции на почту</div>
+                <div style="font:500 11px Manrope;color:var(--text-4);margin-top:2px;">Чеки, продление и напоминания об окончании подписки приходят всегда</div>
+              </div>
+              <form method="post" action="/app/profile/email/marketing">
+                <input type="hidden" name="on" value="{'0' if on else '1'}"/>
+                <button type="submit" class="toggle{' on' if on else ''}" title="{'Отключить' if on else 'Включить'}" style="cursor:pointer;"><span class="knob"></span></button>
+              </form>
+            </div>'''
+
+
+@router.post("/app/profile/email/marketing")
+async def email_marketing_toggle(request: Request, on: str = Form("0")) -> RedirectResponse:
+    factory = get_session_factory()
+    async with factory() as session:
+        auth = await load_site_user(session, request)
+        if auth is None:
+            return RedirectResponse("/login", status_code=303)
+        user, sess_row = auth
+        await touch_session(session, sess_row)
+        set_marketing_consent(user, on == "1")
+        await session.commit()
+    return RedirectResponse(f"/app/profile?n={'mkt_on' if on == '1' else 'mkt_off'}", status_code=303)
+
+
+def _unsubscribe_page(title: str, text: str, *, ok: bool) -> HTMLResponse:
+    color = "var(--success)" if ok else "var(--danger-soft)"
+    body = f"""
+<div class="shell" style="min-height:70vh;display:flex;align-items:center;justify-content:center;padding:40px 16px;">
+  <div class="card" style="max-width:460px;width:100%;text-align:center;padding:32px 26px;">
+    <div style="font:800 22px Manrope;color:var(--text-1);">{esc(title)}</div>
+    <div style="font:500 14px/1.6 Manrope;color:var(--text-3);margin-top:12px;">{esc(text)}</div>
+    <div style="height:3px;border-radius:3px;background:{color};width:60px;margin:22px auto 0 auto;"></div>
+    <a href="/app/profile" class="btn btn-outline btn-sm" style="margin-top:22px;display:inline-flex;">Настройки профиля</a>
+  </div>
+</div>
+{site_footer()}
+"""
+    return HTMLResponse(page(title="Отписка от рассылки — Flux Network", body=body))
+
+
+async def _apply_unsubscribe(token: str) -> bool:
+    parsed = parse_unsubscribe_token(token)
+    if parsed is None:
+        return False
+    uid, email = parsed
+    factory = get_session_factory()
+    async with factory() as session:
+        user = await session.get(User, uid)
+        if user is None or (user.email or "").lower() != email.lower():
+            return False
+        set_marketing_consent(user, False)
+        await session.commit()
+    return True
+
+
+@router.get("/email/unsubscribe")
+async def email_unsubscribe(t: str = "") -> HTMLResponse:
+    if not await _apply_unsubscribe(t):
+        return _unsubscribe_page("Ссылка недействительна", "Отключить рассылку можно в профиле на сайте или в боте.", ok=False)
+    return _unsubscribe_page(
+        "Вы отписались от рассылки",
+        "Новости и акции больше не будут приходить. Чеки об оплате и уведомления о подписке продолжат приходить на почту.",
+        ok=True,
+    )
+
+
+@router.post("/email/unsubscribe")
+async def email_unsubscribe_one_click(t: str = "") -> HTMLResponse:
+    """RFC 8058 One-Click: почтовые клиенты (Gmail, Яндекс) отправляют POST по кнопке «Отписаться»."""
+    await _apply_unsubscribe(t)
+    return HTMLResponse("ok")
+
+
 @router.post("/app/profile/email/link-start")
-async def email_link_start(request: Request, email: str = Form("")) -> RedirectResponse:
+async def email_link_start(request: Request, email: str = Form(""), marketing: str = Form("")) -> RedirectResponse:
     settings = get_settings()
     norm = normalize_email(email)
     if norm is None:
@@ -362,5 +448,5 @@ async def email_link_start(request: Request, email: str = Form("")) -> RedirectR
     if not ok:
         return RedirectResponse(f"/app/profile?err={quote_plus(err)}", status_code=303)
     resp = RedirectResponse("/login/email/verify", status_code=303)
-    _set_pending_email_cookie(resp, email=norm, mode="link", link_user_id=uid)
+    _set_pending_email_cookie(resp, email=norm, mode="link", link_user_id=uid, marketing=marketing == "1")
     return resp

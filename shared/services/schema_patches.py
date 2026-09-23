@@ -13,12 +13,16 @@ _PG_EXPIRY_NOTIFY_DDL = (
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expiry_notified_24h boolean NOT NULL DEFAULT false",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expiry_notified_3h boolean NOT NULL DEFAULT false",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expiry_notify_anchor_at TIMESTAMP WITH TIME ZONE NULL",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expiry_email_3d boolean NOT NULL DEFAULT false",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expiry_email_6h boolean NOT NULL DEFAULT false",
 )
 
 
 _PG_USER_NOTIFY_MSG_DDL = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_message_id bigint NULL",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_notify_message_id bigint NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_marketing_consent boolean NOT NULL DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_marketing_consent_at TIMESTAMP WITH TIME ZONE NULL",
 )
 
 

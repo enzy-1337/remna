@@ -1,4 +1,4 @@
-"""Напоминания пользователю в Telegram: за ~24 ч и ~3 ч до окончания подписки."""
+"""Напоминания об окончании подписки: Telegram за ~24 ч и ~3 ч, почта за ~3 дня и ~6 ч."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from shared.config import Settings
 from shared.database import get_session_factory
 from shared.models.subscription import Subscription
+from shared.services.subscription_email_notify import WINDOW_3D, WINDOW_6H, send_expiry_email
 from shared.services.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ def _sync_expiry_anchor(sub: Subscription) -> None:
     if abs((exp - anchor).total_seconds()) > _ANCHOR_DRIFT_SEC:
         sub.expiry_notified_24h = False
         sub.expiry_notified_3h = False
+        sub.expiry_email_3d = False
+        sub.expiry_email_6h = False
         sub.expiry_notify_anchor_at = exp
 
 
@@ -49,7 +52,9 @@ async def process_subscription_expiry_notifications(session: AsyncSession, setti
     Активные и trial подписки с будущим expires_at.
     Возвращает (отправлено_24ч, отправлено_3ч).
     """
-    if not settings.subscription_expiry_notify_enabled:
+    tg_enabled = bool(settings.subscription_expiry_notify_enabled)
+    email_enabled = bool(settings.subscription_email_notify_enabled)
+    if not tg_enabled and not email_enabled:
         return 0, 0
 
     now = datetime.now(timezone.utc)
@@ -78,6 +83,12 @@ async def process_subscription_expiry_notifications(session: AsyncSession, setti
             continue
 
         exp_s = exp.strftime("%d.%m.%Y %H:%M UTC")
+
+        if email_enabled:
+            await _process_expiry_emails(sub, exp, remaining, settings)
+
+        if not tg_enabled:
+            continue
 
         lo, hi = _WINDOW_24H
         if lo <= remaining <= hi and not sub.expiry_notified_24h:
@@ -114,10 +125,22 @@ async def process_subscription_expiry_notifications(session: AsyncSession, setti
     return n24, n3
 
 
+async def _process_expiry_emails(sub: Subscription, exp: datetime, remaining: timedelta, settings: Settings) -> None:
+    user = sub.user
+    lo, hi = WINDOW_3D
+    if lo <= remaining <= hi and not sub.expiry_email_3d:
+        if await send_expiry_email(user=user, settings=settings, expires_at=exp, kind="3d", is_trial=sub.status == "trial"):
+            sub.expiry_email_3d = True
+    lo, hi = WINDOW_6H
+    if lo <= remaining <= hi and not sub.expiry_email_6h:
+        if await send_expiry_email(user=user, settings=settings, expires_at=exp, kind="6h", is_trial=sub.status == "trial"):
+            sub.expiry_email_6h = True
+
+
 async def subscription_expiry_notify_loop(settings: Settings, stop_event: asyncio.Event) -> None:
     interval = max(120, int(settings.subscription_expiry_notify_interval_sec))
     while not stop_event.is_set():
-        if not settings.subscription_expiry_notify_enabled:
+        if not settings.subscription_expiry_notify_enabled and not settings.subscription_email_notify_enabled:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:

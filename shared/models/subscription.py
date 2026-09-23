@@ -39,6 +39,9 @@ class Subscription(Base):
     # Напоминания об окончании (сбрасываются при смене expires_at — см. expiry_notify_service)
     expiry_notified_24h: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     expiry_notified_3h: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Письма на почту: за ~3 дня и ~6 часов до конца (сбрасываются вместе с флагами выше)
+    expiry_email_3d: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    expiry_email_6h: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     expiry_notify_anchor_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

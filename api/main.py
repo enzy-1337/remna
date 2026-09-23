@@ -34,6 +34,7 @@ from api.routers import (
     fraud_admin_pages,
     logs_pages,
     mass_grant_pages,
+    email_broadcast_pages,
     miniapp,
     public_pages,
     site_auth,
@@ -276,6 +277,7 @@ app.include_router(web_admin.router, prefix="/admin")
 app.include_router(web_admin_rbac_pages.router, prefix="/admin")
 app.include_router(fraud_admin_pages.router, prefix="/admin")
 app.include_router(mass_grant_pages.router, prefix="/admin")
+app.include_router(email_broadcast_pages.router, prefix="/admin")
 app.include_router(logs_pages.router, prefix="/admin")
 app.include_router(site_auth.router)
 app.include_router(site_dashboard.router)

@@ -79,6 +79,42 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Callback URL Telegram OAuth для клиентского сайта, обычно https://<сайт>/login/telegram/oauth-callback",
             ),
             (
+                "SUPPORT_USERNAME",
+                "Поддержка (username)",
+                lambda s: s.support_username or "",
+                "Username поддержки без @ (кнопки «написать» и т.п.).",
+            ),
+            (
+                "REQUIRED_CHANNEL_USERNAME",
+                "Канал (обязательная подписка)",
+                lambda s: s.required_channel_username,
+                "Username канала без @ для кнопки «Подписаться».",
+            ),
+        ],
+    ),
+    (
+        "mail",
+        "Почта и Google",
+        [
+            (
+                "EMAIL_SITE_URL",
+                "Сайт в письмах",
+                lambda s: s.email_site_url or "",
+                "Адрес сайта в письмах (подвал, кнопки «Личный кабинет»/«Продлить», ссылка отписки), например https://my.flux-network.store. Пусто — PUBLIC_SITE_URL.",
+            ),
+            (
+                "EMAIL_SUPPORT_BOT_USERNAME",
+                "Бот поддержки в письмах",
+                lambda s: s.email_support_bot_username or "",
+                "Username Telegram-бота поддержки без @ — ссылка «Поддержка» в подвале писем. Пусто — SUPPORT_USERNAME.",
+            ),
+            (
+                "SUBSCRIPTION_EMAIL_NOTIFY_ENABLED",
+                "Чеки и письма о подписке",
+                lambda s: "true" if s.subscription_email_notify_enabled else "false",
+                "Транзакционные письма на подтверждённую почту: чек о пополнении баланса, «подписка продлена», напоминания за ~3 дня и ~6 часов до конца. Приходят всем, независимо от согласия на рассылку. Нужен настроенный SMTP.",
+            ),
+            (
                 "SITE_GOOGLE_CLIENT_ID",
                 "Google OAuth Client ID",
                 lambda s: s.site_google_client_id or "",
@@ -100,13 +136,13 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "SMTP_HOST",
                 "SMTP-сервер",
                 lambda s: s.smtp_host or "",
-                "smtp.gmail.com / smtp.yandex.ru / smtp.mail.ru — бесплатная отправка писем с кодом через обычный ящик, без подтверждения домена. Если задан — используется вместо Resend.",
+                "smtp.gmail.com / smtp.yandex.ru / smtp.mail.ru — отправка писем через обычный ящик, без подтверждения домена. Если задан — используется вместо Resend.",
             ),
             (
                 "SMTP_PORT",
                 "SMTP-порт",
                 lambda s: s.smtp_port,
-                "587 (STARTTLS) обычно подходит для Gmail/Yandex/Mail.ru.",
+                "587 (STARTTLS) или 465 (SSL). Для Gmail подходят оба.",
             ),
             (
                 "SMTP_USER",
@@ -137,18 +173,6 @@ WEB_ADMIN_ENV_SECTIONS: list[tuple[str, str, list[tuple[str, str, Callable[[Sett
                 "Email отправителя (Resend)",
                 lambda s: s.resend_from_email or "",
                 "Адрес отправителя, домен которого подтверждён в Resend (например noreply@mail.flux-network.store).",
-            ),
-            (
-                "SUPPORT_USERNAME",
-                "Поддержка (username)",
-                lambda s: s.support_username or "",
-                "Username поддержки без @ (кнопки «написать» и т.п.).",
-            ),
-            (
-                "REQUIRED_CHANNEL_USERNAME",
-                "Канал (обязательная подписка)",
-                lambda s: s.required_channel_username,
-                "Username канала без @ для кнопки «Подписаться».",
             ),
         ],
     ),

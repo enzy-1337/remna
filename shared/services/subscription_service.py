@@ -918,6 +918,17 @@ async def purchase_plan_with_balance(
             + plain(" ₽ на баланс."),
         )
 
+    from shared.services.subscription_email_notify import queue_subscription_renewed_email
+
+    queue_subscription_renewed_email(
+        session,
+        user=user,
+        settings=settings,
+        new_expires=new_expires,
+        plan_name=purchased_plan.name,
+        price_rub=price,
+    )
+
     from shared.services.admin_notify import notify_admin
 
     from shared.services.admin_log_topics import AdminLogTopic

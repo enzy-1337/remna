@@ -477,6 +477,42 @@ async def apply_topup_from_webhook(
     return "completed", (tg_id if tg_id else None), credited_total, user.id, promo_bonus_total, ft_extra_total
 
 
+async def _send_topup_receipt(
+    session: AsyncSession,
+    *,
+    billing_user: User | None,
+    amount_rub: Decimal,
+    promo_bonus_rub: Decimal | None,
+    first_topup_extra_rub: Decimal | None,
+    provider_name: str | None,
+    internal_transaction_id: int | None,
+    settings: Settings,
+) -> None:
+    """Чек на почту плательщику (для семьи баланс общий — показываем баланс владельца)."""
+    from shared.services.subscription_email_notify import send_topup_receipt_email
+
+    try:
+        payer = billing_user
+        if internal_transaction_id is not None:
+            txn = await session.get(Transaction, int(internal_transaction_id))
+            if txn is not None and (payer is None or txn.user_id != payer.id):
+                payer = await session.get(User, txn.user_id) or payer
+        if payer is None:
+            return
+        await send_topup_receipt_email(
+            user=payer,
+            settings=settings,
+            amount_rub=amount_rub,
+            balance_after=billing_user.balance if billing_user is not None else None,
+            promo_bonus_rub=promo_bonus_rub,
+            first_topup_extra_rub=first_topup_extra_rub,
+            provider_name=provider_name,
+            transaction_id=internal_transaction_id,
+        )
+    except Exception:
+        logger.exception("topup receipt email failed")
+
+
 async def notify_topup_success(
     *,
     telegram_id: int | None,
@@ -566,6 +602,16 @@ async def notify_topup_success(
         factory2 = get_session_factory()
         async with factory2() as session2:
             u = await session2.get(User, user_id)
+            await _send_topup_receipt(
+                session2,
+                billing_user=u,
+                amount_rub=amount_rub,
+                promo_bonus_rub=promo_bonus_rub,
+                first_topup_extra_rub=first_topup_extra_rub,
+                provider_name=provider_name,
+                internal_transaction_id=internal_transaction_id,
+                settings=settings,
+            )
             if u is not None:
                 from shared.services.admin_log_topics import AdminLogTopic
 

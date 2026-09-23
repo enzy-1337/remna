@@ -26,6 +26,7 @@ from shared.services.email_code_service import (
     start_email_code,
     verify_email_code,
 )
+from shared.services.email_marketing import set_marketing_consent
 from shared.services.subscription_service import get_active_subscription
 from shared.services.trial_service import trial_eligible
 
@@ -34,8 +35,16 @@ router = Router(name="email_link")
 _LINK_PURPOSE = "bot_link"
 
 
-def _email_link_keyboard(*, has_linked: bool, show_resend: bool = False) -> InlineKeyboardBuilder:
+_MKT_HINT = "Чеки об оплате и уведомления о подписке приходят на почту всегда."
+
+
+def _email_link_keyboard(
+    *, has_linked: bool, show_resend: bool = False, marketing: bool | None = None
+) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
+    if marketing is not None:
+        mark = "✅" if marketing else "⬜️"
+        b.row(InlineKeyboardButton(text=f"{mark} Получать новости и акции", callback_data="email:mkt"))
     if show_resend:
         b.row(InlineKeyboardButton(text="✉️ Отправить код ещё раз", callback_data="email:resend"))
     if has_linked:
@@ -72,19 +81,23 @@ async def cb_email_open(cq: CallbackQuery, db_user: User | None, state: FSMConte
         await cq.answer("Привязка почты пока не настроена.", show_alert=True)
         return
     await state.set_state(EmailLinkStates.waiting_email)
+    await state.update_data(pending_email=None)
     current = db_user.email if db_user.email_verified_at else None
     status = f"привязана: {current}" if current else "не привязана"
+    marketing = bool(db_user.email_marketing_consent) if current else bool((await state.get_data()).get("marketing"))
     caption = join_lines(
         "✉️ " + bold("Привязка почты"),
         "",
         plain("Сейчас: ") + bold(status),
         "",
         plain("Эта же почта будет работать для входа на сайт. Отправьте адрес почты сообщением."),
+        "",
+        plain("Отметьте «Получать новости и акции», если согласны на рассылку. " + _MKT_HINT),
     )
     await answer_callback_with_photo_screen(
         cq,
         caption=caption,
-        reply_markup=_email_link_keyboard(has_linked=bool(current)).as_markup(),
+        reply_markup=_email_link_keyboard(has_linked=bool(current), marketing=marketing).as_markup(),
         settings=settings,
         photo_key="admin:section:profile",
     )
@@ -106,7 +119,9 @@ async def cb_email_unlink(cq: CallbackQuery, db_user: User | None, state: FSMCon
     assert db_user is not None
     db_user.email = None
     db_user.email_verified_at = None
+    set_marketing_consent(db_user, False)
     await state.set_state(EmailLinkStates.waiting_email)
+    await state.update_data(marketing=False)
     settings = get_settings()
     await cq.answer("Почта отвязана")
     await answer_callback_with_photo_screen(
@@ -116,10 +131,38 @@ async def cb_email_unlink(cq: CallbackQuery, db_user: User | None, state: FSMCon
             "",
             plain("Связь удалена. Отправьте новый адрес почты или нажмите «В профиль»."),
         ),
-        reply_markup=_email_link_keyboard(has_linked=False).as_markup(),
+        reply_markup=_email_link_keyboard(has_linked=False, marketing=False).as_markup(),
         settings=settings,
         photo_key="admin:section:profile",
     )
+
+
+@router.callback_query(F.data == "email:mkt")
+async def cb_email_marketing_toggle(cq: CallbackQuery, db_user: User | None, state: FSMContext) -> None:
+    """До привязки — запоминаем выбор в FSM; после — сразу меняем согласие в БД."""
+    if await reject_if_no_user(cq, db_user) or await reject_if_blocked(cq, db_user):
+        return
+    assert db_user is not None
+    data = await state.get_data()
+    waiting_code = (await state.get_state()) == EmailLinkStates.waiting_code.state
+    linked = bool(db_user.email_verified_at) and not waiting_code and not data.get("pending_email")
+    if linked:
+        new_val = not bool(db_user.email_marketing_consent)
+        set_marketing_consent(db_user, new_val)
+    else:
+        new_val = not bool(data.get("marketing"))
+        await state.update_data(marketing=new_val)
+    await cq.answer("Рассылка включена" if new_val else "Рассылка отключена. " + _MKT_HINT, show_alert=not new_val)
+    if cq.message is not None:
+        kb = _email_link_keyboard(
+            has_linked=bool(db_user.email_verified_at) and not waiting_code,
+            show_resend=waiting_code,
+            marketing=new_val,
+        )
+        try:
+            await cq.message.edit_reply_markup(reply_markup=kb.as_markup())
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data == "email:resend")
@@ -164,7 +207,9 @@ async def msg_email_address(message: Message, session: AsyncSession, db_user: Us
             "✉️ " + bold("Код отправлен"),
             plain("Отправили 6-значный код на ") + bold(email) + plain(" — введите его сюда."),
         ),
-        reply_markup=_email_link_keyboard(has_linked=False, show_resend=True).as_markup(),
+        reply_markup=_email_link_keyboard(
+            has_linked=False, show_resend=True, marketing=bool((await state.get_data()).get("marketing"))
+        ).as_markup(),
     )
 
 
@@ -194,11 +239,16 @@ async def msg_email_code(message: Message, session: AsyncSession, db_user: User 
         return
     db_user.email = pending
     db_user.email_verified_at = datetime.now(timezone.utc)
+    marketing = bool(data.get("marketing"))
+    set_marketing_consent(db_user, marketing)
     await state.clear()
     await delete_message_safe(message)
     await message.answer(
         join_lines(
             "✅ " + bold("Почта привязана"),
             plain("Теперь ей можно входить на сайт: ") + code(db_user.email),
+            "",
+            plain("Рассылка новостей и акций: ") + bold("включена" if marketing else "выключена")
+            + plain(". Изменить можно в профиле → «Почта»."),
         )
     )

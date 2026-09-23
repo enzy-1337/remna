@@ -37,6 +37,9 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     google_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    # Согласие на рекламную/информационную рассылку по почте. Чеки и уведомления о подписке приходят всегда.
+    email_marketing_consent: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    email_marketing_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

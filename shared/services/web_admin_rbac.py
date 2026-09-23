@@ -16,6 +16,7 @@ ADMIN_NAV_ITEMS: tuple[tuple[str, str, str, str | None], ...] = (
     ("/admin/tariffs", "fa-solid fa-tags", "Тарифы", "edit_subscriptions"),
     ("/admin/promos", "fa-solid fa-ticket", "Промокоды", "edit_subscriptions"),
     ("/admin/broadcast", "fa-solid fa-bullhorn", "Рассылка", "edit_subscriptions"),
+    ("/admin/broadcast/email", "fa-solid fa-envelope-open-text", "Рассылка на почту", "edit_subscriptions"),
     ("/admin/mass-grant", "fa-solid fa-gifts", "Массовая выдача", "edit_subscriptions"),
     ("/admin/fraud", "fa-solid fa-shield-halved", "Антифрод", "view_users"),
     ("/admin/logs", "fa-solid fa-list-check", "Логи", "view_users"),

@@ -36,6 +36,7 @@ from shared.services.site_telegram_login_service import (
 from shared.services.site_totp_service import verify_totp_code, verify_and_consume_backup_code
 from shared.services.telegram_login_verify import verify_telegram_login
 from shared.services.user_registration import get_user_by_telegram_id, register_user
+from shared.services.email_marketing import set_marketing_consent
 from shared.services.email_code_service import (
     email_sending_configured,
     normalize_email,
@@ -66,8 +67,12 @@ def _pending_email_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(str(get_settings().web_admin_session_secret), salt="flux-site-pending-email")
 
 
-def _set_pending_email_cookie(response, *, email: str, mode: str, link_user_id: int | None = None) -> None:
-    token = _pending_email_serializer().dumps({"email": email, "mode": mode, "link_user_id": link_user_id})
+def _set_pending_email_cookie(
+    response, *, email: str, mode: str, link_user_id: int | None = None, marketing: bool = False
+) -> None:
+    token = _pending_email_serializer().dumps(
+        {"email": email, "mode": mode, "link_user_id": link_user_id, "marketing": bool(marketing)}
+    )
     response.set_cookie(
         _PENDING_EMAIL_COOKIE, token, max_age=_PENDING_EMAIL_MAX_AGE, httponly=True, samesite="lax", path="/"
     )
@@ -656,6 +661,7 @@ async def email_verify_submit(request: Request, code: str = Form("")) -> Redirec
                 return resp
             user.email = email
             user.email_verified_at = datetime.now(timezone.utc)
+            set_marketing_consent(user, bool(pending.get("marketing")))
             await session.commit()
             resp = RedirectResponse("/app/profile?n=email_linked", status_code=303)
             resp.delete_cookie(_PENDING_EMAIL_COOKIE, path="/")

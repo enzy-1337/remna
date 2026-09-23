@@ -62,6 +62,8 @@ from shared.models.subscription import Subscription
 from shared.models.transaction import Transaction
 from shared.models.broadcast_mailing import BroadcastHistory, BroadcastTemplate, ScheduledBroadcast
 from shared.models.user import User
+from shared.services.email_code_service import normalize_email
+from shared.services.email_sender import EmailRow, email_sending_configured, send_branded_email, site_url
 from shared.models.user_fraud_state import UserFraudState
 from shared.models.web_admin_browser_session import WebAdminBrowserSession
 from shared.services.billing_calculator import (
@@ -582,6 +584,7 @@ _ENV_BOOL_KEYS = {
     "TRIAL_ENABLED",
     "SUBSCRIPTION_AUTORENEW_ENABLED",
     "SUBSCRIPTION_EXPIRY_NOTIFY_ENABLED",
+    "SUBSCRIPTION_EMAIL_NOTIFY_ENABLED",
     "BILLING_FIRST_TOPUP_WELCOME_ENABLED",
     "BILLING_V2_ENABLED",
     "BILLING_TRAFFIC_RW_METER_ENABLED",
@@ -1629,7 +1632,7 @@ def _layout(
         var rw=u.searchParams.get('rw');
         var amt=u.searchParams.get('amt');
         var cnt=u.searchParams.get('cnt');
-        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',ref_set_ok:'Пригласитель сохранён.',ref_unset_ok:'Пользователь отвязан от пригласителя.',saved:'Изменения сохранены.'};
+        var map={hwid_keep:'Устройство отвязано от панели. Оплаченные слоты не менялись.',hwid_slot:'Устройство отвязано, слот подписки уменьшен.',db_slot:'Слот снят: запись в БД удалена, лимит в панели обновлён.',sub_off:'Подписка отключена (БД и панель).',sub_on:'Подписка снова включена.',ar_on:'Авто-продление включено.',ar_off:'Авто-продление выключено.',months_ok:'Срок подписки продлён.',days_ok:'Срок подписки изменён.',device_slots_ok:'Лимит устройств (слоты) обновлён.',personal_price_ok:'Персональная цена ₽/мес сохранена.',personal_discount_ok:'Персональная скидка сохранена.',bal_ok:'Баланс пополнен.',bal_reset:'Баланс обнулён.',billing_mode_toggled:'Режим биллинга переключён.',user_del:'Пользователь удалён из БД и из панели Remnawave (если был UUID).',risk_reset:'Отметки уведомлений о риске минуса сброшены.',purchase_refund_ok:'Возврат по транзакции выполнен.',tariffs_shop:'Режим продажи тарифов в боте обновлён.',manual_bind_ok:'Подписка вручную привязана к пользователю.',rw_check_ok:'Профиль найден в панели и привязан к пользователю.',ref_set_ok:'Пригласитель сохранён.',ref_unset_ok:'Пользователь отвязан от пригласителя.',email_set:'Почта привязана к аккаунту.',email_unset:'Почта отвязана.',email_test_ok:'Тестовое письмо отправлено.',saved:'Изменения сохранены.'};
         if(n&&map[n])window.remnaToast('success',map[n]);
         if(n==='mass_payg_done'){
           window.remnaToast('success','Конвертация завершена: пользователей '+(c||'0')+', панель '+(rw||'0')+', начислено '+(amt||'0')+' ₽.');
@@ -2619,6 +2622,121 @@ def _copy_line(*, label: str, value: str, mono: bool = True) -> str:
         f"<button type='button' class='btn btn-ghost btn-xs h-7 min-h-7 w-7 min-w-7 shrink-0 p-0' data-copy=\"{dc}\" "
         f"title='Копировать' aria-label='Копировать'><i class='fa-regular fa-copy text-xs'></i></button></span></div>"
     )
+
+
+def _admin_user_email_block(ud) -> str:
+    """Карточка «Почта» в профиле пользователя: просмотр, ручная привязка/отвязка, тестовое письмо."""
+    uid = int(ud.id)
+    email = (ud.email or "").strip()
+    if email:
+        status = (
+            f"<span class='badge badge-success badge-sm gap-1'><i class='fa-solid fa-check text-[10px]'></i>подтверждена "
+            f"{_esc(_fmt_dt_msk(ud.email_verified_at))}</span>"
+            if ud.email_verified_at
+            else "<span class='badge badge-warning badge-sm'>не подтверждена — письма не отправляются</span>"
+        )
+        current = _copy_line(label="Email", value=email) + f"<div class='flex flex-wrap gap-2 items-center'>{status}"
+        if ud.google_id:
+            current += "<span class='badge badge-info badge-sm gap-1'><i class='fa-brands fa-google text-[10px]'></i>Google привязан</span>"
+        if ud.email_marketing_consent:
+            current += (
+                "<span class='badge badge-primary badge-sm gap-1'><i class='fa-solid fa-bullhorn text-[10px]'></i>"
+                f"рассылка: согласие {_esc(_fmt_dt_msk(ud.email_marketing_consent_at))}</span>"
+            )
+        else:
+            current += "<span class='badge badge-ghost badge-sm'>рассылка: нет согласия (только чеки и уведомления)</span>"
+        current += "</div>"
+        confirm = _esc_attr(f"Отвязать почту {email} от пользователя #{uid}?")
+        actions = (
+            f"<form method='post' action='/admin/users/{uid}/email/test'>"
+            f"<button type='submit' class='btn btn-outline btn-sm h-9 min-h-9 gap-1.5'>"
+            f"<i class='fa-solid fa-paper-plane' aria-hidden='true'></i>Тестовое письмо</button></form>"
+            f"<form method='post' action='/admin/users/{uid}/email/unset' data-remna-confirm-msg=\"{confirm}\">"
+            f"<button type='submit' class='btn btn-ghost btn-sm h-9 min-h-9 gap-1.5 text-error'>"
+            f"<i class='fa-solid fa-link-slash' aria-hidden='true'></i>Отвязать</button></form>"
+        )
+    else:
+        current = "<p class='text-sm opacity-70'>Почта не привязана — письма о продлении и окончании подписки не приходят.</p>"
+        actions = ""
+    set_label = "Сменить почту" if email else "Привязать почту"
+    return f"""
+          <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3 flex flex-col gap-2">
+            <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60"><i class="fa-solid fa-envelope mr-1.5" aria-hidden="true"></i>Почта</h4>
+            {current}
+            <div class="flex flex-wrap items-end gap-2">
+              <form method="post" action="/admin/users/{uid}/email/set" class="flex flex-wrap items-end gap-2">
+                <label class="form-control">
+                  <span class="label-text text-xs opacity-70">{set_label} (сразу считается подтверждённой)</span>
+                  <input type="email" name="email" required autocomplete="off" placeholder="user@example.com"
+                    class="input input-bordered input-sm h-9 min-h-9 w-64 font-mono text-xs" />
+                </label>
+                <button type="submit" class="btn btn-primary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-link" aria-hidden="true"></i>Сохранить</button>
+              </form>
+              {actions}
+            </div>
+          </div>"""
+
+
+def _admin_mail_help_block(settings, *, open_tab: bool = False) -> str:
+    """Справка для администратора во вкладке «Почта и Google»: что куда вписать + тестовое письмо."""
+    ready = email_sending_configured(settings)
+    status = (
+        "<span class='badge badge-success gap-1'><i class='fa-solid fa-check'></i>Отправка настроена</span>"
+        if ready
+        else "<span class='badge badge-warning gap-1'><i class='fa-solid fa-triangle-exclamation'></i>SMTP не настроен — письма не уходят</span>"
+    )
+    auto_open = "<script>document.addEventListener('DOMContentLoaded',function(){var b=document.querySelector('[data-env-tab=\\'mail\\']');if(b)b.click();});</script>" if open_tab else ""
+    code = "class='bg-base-300 px-1 rounded text-[11px]'"
+    return f"""
+        <div id="env-mail-help-block" class="hidden env-soft-card rounded-2xl border p-4 flex flex-col gap-4">
+          <div class="flex flex-wrap items-center gap-3">
+            <i class="fa-solid fa-envelope-open-text text-primary" aria-hidden="true"></i>
+            <h3 class="text-lg font-semibold">Как работает почта</h3>
+            {status}
+          </div>
+          <div class="grid gap-4 lg:grid-cols-2 text-sm leading-relaxed">
+            <div class="flex flex-col gap-2">
+              <h4 class="font-semibold">1. Отправка писем (SMTP Gmail)</h4>
+              <ol class="list-decimal list-inside opacity-80 flex flex-col gap-1">
+                <li>В Google-аккаунте включите двухэтапную аутентификацию.</li>
+                <li>Создайте пароль приложения: <code {code}>myaccount.google.com/apppasswords</code> (16 символов).</li>
+                <li>Заполните ниже: <code {code}>SMTP_HOST=smtp.gmail.com</code>, <code {code}>SMTP_PORT=587</code>,
+                  <code {code}>SMTP_USER</code> = ваш gmail, <code {code}>SMTP_PASSWORD</code> = пароль приложения <b>без пробелов</b>.</li>
+                <li>Сохраните и перезапустите контейнеры <code {code}>api</code> и <code {code}>bot</code>, затем отправьте тестовое письмо.</li>
+              </ol>
+              <p class="text-xs opacity-60">Лимит Gmail — около 500 писем в сутки. Письма уходят от имени «Flux Network».</p>
+            </div>
+            <div class="flex flex-col gap-2">
+              <h4 class="font-semibold">2. Вход через Google (OAuth)</h4>
+              <ol class="list-decimal list-inside opacity-80 flex flex-col gap-1">
+                <li>Google Cloud Console → APIs &amp; Services → Credentials → OAuth client ID → <b>Web application</b>.</li>
+                <li>В <b>Authorized redirect URIs</b> добавьте точно тот же адрес, что в <code {code}>SITE_GOOGLE_REDIRECT_URI</code>.</li>
+                <li>Client ID и Client Secret вставьте в поля ниже. Аудитория OAuth-экрана — «Внешний», статус — «В производстве».</li>
+              </ol>
+              <h4 class="font-semibold mt-2">3. Какие письма получают пользователи</h4>
+              <ul class="list-disc list-inside opacity-80 flex flex-col gap-1">
+                <li>Код подтверждения при привязке почты (сайт / бот).</li>
+                <li>Чек о пополнении баланса.</li>
+                <li>«Подписка продлена» — после покупки тарифа и автопродления.</li>
+                <li>Напоминания за <b>~3 дня</b> и за <b>~6 часов</b> до окончания подписки (проверка раз в
+                  <code {code}>SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC</code>).</li>
+              </ul>
+              <p class="text-xs opacity-60">Эти письма приходят всем, у кого <b>подтверждена</b> почта.
+                <b>Рекламная/информационная рассылка</b> — отдельно, в разделе
+                <a class="link" href="/admin/broadcast/email">Рассылка на почту</a>, и только тем, кто поставил галочку согласия. Посмотреть или привязать почту
+                пользователя можно в его карточке (Пользователи → профиль → блок «Почта»); поиск по email тоже работает.</p>
+            </div>
+          </div>
+          <form method="post" action="/admin/settings/email/test" class="flex flex-wrap items-end gap-2 border-t border-base-content/10 pt-3">
+            <label class="form-control">
+              <span class="label-text text-xs opacity-70">Отправить тестовое письмо на адрес</span>
+              <input type="email" name="email" required autocomplete="off" placeholder="you@gmail.com"
+                value="{_esc((settings.smtp_user or '').strip())}" class="input input-bordered input-sm h-9 min-h-9 w-72 font-mono text-xs" />
+            </label>
+            <button type="submit" class="btn btn-secondary btn-sm h-9 min-h-9 gap-1.5"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i>Отправить тест</button>
+          </form>
+          {auto_open}
+        </div>"""
 
 
 def _telegram_profile_actions(user: User) -> str:
@@ -6321,6 +6439,7 @@ async def admin_users(
                     User.first_name.ilike(f"%{needle}%"),
                     User.last_name.ilike(f"%{needle}%"),
                     User.github_username.ilike(f"%{needle}%"),
+                    User.email.ilike(f"%{needle}%"),
                 )
                 query = query.where(search_filter)
                 count_query = count_query.where(search_filter)
@@ -7012,6 +7131,11 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
             github_username=user.github_username,
             github_profile_url=user.github_profile_url,
             telegram_id=user.telegram_id,
+            email=user.email,
+            email_verified_at=user.email_verified_at,
+            google_id=user.google_id,
+            email_marketing_consent=bool(user.email_marketing_consent),
+            email_marketing_consent_at=user.email_marketing_consent_at,
             balance=user.balance,
             referral_code=user.referral_code,
             remnawave_uuid=user.remnawave_uuid,
@@ -7701,6 +7825,7 @@ async def admin_user_detail(request: Request, user_id: int) -> HTMLResponse:
           {_copy_line(label="Telegram ID", value=str(ud.telegram_id))}
           {_copy_line(label="UUID в панели Remnawave", value=str(ud.remnawave_uuid) if ud.remnawave_uuid else "—")}
           {_copy_line(label="Реф. код", value=str(ud.referral_code))}
+          {_admin_user_email_block(ud)}
           <div class="rounded-xl border border-base-content/10 bg-base-200/30 p-3">
             <h4 class="text-xs font-bold uppercase tracking-wide text-base-content/60 mb-2">Remnawave: проверка и ручная привязка</h4>
             <div class="flex flex-wrap items-end gap-3">
@@ -8424,6 +8549,99 @@ async def admin_user_referral_grant_percent(
         f"/admin/users/{user_id}?n=ref_grant_ok&amt={quote_plus(str(total))}&cnt={count}",
         status_code=303,
     )
+
+
+@router.post("/users/{user_id}/email/set")
+async def admin_user_email_set(request: Request, user_id: int, email: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    norm = normalize_email(email)
+    if norm is None:
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('Некорректный email')}", status_code=303)
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        taken = (
+            await session.execute(select(User.id).where(User.id != user.id, func.lower(User.email) == norm).limit(1))
+        ).scalar_one_or_none()
+        if taken is not None:
+            msg = f"Эта почта уже привязана к пользователю #{taken}"
+            return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(msg)}", status_code=303)
+        user.email = norm
+        user.email_verified_at = datetime.now(timezone.utc)
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=email_set", status_code=303)
+
+
+@router.post("/users/{user_id}/email/unset")
+async def admin_user_email_unset(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        user.email = None
+        user.email_verified_at = None
+        await session.commit()
+    _USERS_HTML_CACHE.clear()
+    return RedirectResponse(f"/admin/users/{user_id}?n=email_unset", status_code=303)
+
+
+@router.post("/users/{user_id}/email/test")
+async def admin_user_email_test(request: Request, user_id: int) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    async with await _session() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            return RedirectResponse("/admin/users", status_code=303)
+        email = (user.email or "").strip()
+    if not email:
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus('У пользователя нет почты')}", status_code=303)
+    ok, err = await _send_admin_test_email(email, get_settings())
+    if not ok:
+        return RedirectResponse(f"/admin/users/{user_id}?err={quote_plus(err[:300])}", status_code=303)
+    return RedirectResponse(f"/admin/users/{user_id}?n=email_test_ok", status_code=303)
+
+
+async def _send_admin_test_email(email: str, settings) -> tuple[bool, str]:
+    sender = (settings.smtp_from_email or settings.smtp_user or settings.resend_from_email or "—").strip()
+    return await send_branded_email(
+        email,
+        subject="Тестовое письмо Flux Network",
+        title="Почта настроена 🎉",
+        intro="Это тестовое письмо из админ-панели. Если вы его видите — отправка писем работает, "
+        "и пользователи будут получать уведомления о продлении и окончании подписки.",
+        rows=[
+            EmailRow("Сервер", (settings.smtp_host or "Resend API").strip()),
+            EmailRow("Отправитель", sender),
+        ],
+        button_text="Открыть сайт",
+        button_url=site_url(settings) or None,
+        note="Так выглядят все письма сервиса: код подтверждения, продление и напоминания об окончании.",
+        badge="Тест",
+        settings=settings,
+    )
+
+
+@router.post("/settings/email/test")
+async def admin_settings_email_test(request: Request, email: str = Form("")) -> RedirectResponse:
+    denied = _require_login(request)
+    if denied is not None:
+        return denied
+    norm = normalize_email(email)
+    if norm is None:
+        return RedirectResponse("/admin/settings?mail_err=" + quote_plus("Некорректный email"), status_code=303)
+    ok, err = await _send_admin_test_email(norm, get_settings())
+    if not ok:
+        return RedirectResponse("/admin/settings?mail_err=" + quote_plus(err[:400]), status_code=303)
+    return RedirectResponse("/admin/settings?mail_ok=1", status_code=303)
 
 
 @router.post("/users/{user_id}/risk-notify/reset")
@@ -9391,6 +9609,13 @@ async def admin_settings(request: Request) -> HTMLResponse:
             + _esc(backup_err)
             + "</span></div>"
         )
+    mail_note = ""
+    if request.query_params.get("mail_ok") == "1":
+        mail_note = "<div class='alert alert-success shadow-sm'><span>Тестовое письмо отправлено — проверьте ящик (и папку «Спам»).</span></div>"
+    mail_err = (request.query_params.get("mail_err") or "").strip()
+    if mail_err:
+        mail_note = "<div class='alert alert-error shadow-sm'><span>Письмо не отправлено: " + _esc(mail_err) + "</span></div>"
+    mail_help_block = _admin_mail_help_block(get_settings(), open_tab=bool(mail_note))
     env_tabs_script = """
     <script>
     (function(){
@@ -9401,6 +9626,10 @@ async def admin_settings(request: Request) -> HTMLResponse:
         var bgBlock=document.getElementById('env-admin-bg-block');
         if(bgBlock){
           bgBlock.classList.toggle('hidden', id!=='panel');
+        }
+        var mailBlock=document.getElementById('env-mail-help-block');
+        if(mailBlock){
+          mailBlock.classList.toggle('hidden', id!=='mail');
         }
         document.querySelectorAll('[data-env-tab]').forEach(function(b){
           var on=b.getAttribute('data-env-tab')===id;
@@ -9585,9 +9814,11 @@ async def admin_settings(request: Request) -> HTMLResponse:
         <h2 class="card-title text-2xl"><i class="fa-solid fa-sliders text-primary mr-2" aria-hidden="true"></i>Настройки .env</h2>
         {saved_note}
         {backup_note}
+        {mail_note}
         <div role="tablist" class="flex flex-wrap gap-2 border-b border-base-content/10 pb-3">
           {''.join(tab_buttons)}
         </div>
+        {mail_help_block}
         <form method="post" action="/admin/settings/env" class="flex flex-col gap-4">
           <div id="env-admin-bg-block" class="env-soft-card rounded-2xl border p-4">
             <div class="flex flex-col gap-4">

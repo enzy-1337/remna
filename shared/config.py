@@ -571,6 +571,25 @@ class Settings(BaseSettings):
         validation_alias="SUBSCRIPTION_EXPIRY_NOTIFY_INTERVAL_SEC",
         description="Как часто проверять подписки на напоминания (сек)",
     )
+    email_site_url: str = Field(
+        default="https://my.flux-network.store",
+        validation_alias="EMAIL_SITE_URL",
+        description="Адрес сайта в письмах: ссылка в подвале, кнопки «Личный кабинет»/«Продлить», ссылка отписки. Пусто — PUBLIC_SITE_URL.",
+    )
+    email_support_bot_username: str = Field(
+        default="flux_network_support_bot",
+        validation_alias="EMAIL_SUPPORT_BOT_USERNAME",
+        description="Telegram-бот поддержки (без @) — ссылка «Поддержка» в подвале писем. Пусто — SUPPORT_USERNAME.",
+    )
+    subscription_email_notify_enabled: bool = Field(
+        default=True,
+        validation_alias="SUBSCRIPTION_EMAIL_NOTIFY_ENABLED",
+        description=(
+            "Транзакционные письма на привязанную почту: чек о пополнении, продление подписки, "
+            "напоминания за ~3 дня / ~6 часов до её окончания. "
+            "Работает только если настроен SMTP_* (или RESEND_*) и у пользователя подтверждена почта."
+        ),
+    )
     billing_payg_subscription_days: int = Field(
         default=365,
         ge=30,

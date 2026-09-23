@@ -337,7 +337,9 @@ window.remnaToast = function(kind, text){
       '2fa_off': 'Двухфакторная аутентификация выключена.',
       sessions_revoked: 'Сессии завершены.',
       google_linked: 'Google привязан.',
-      email_linked: 'Почта привязана.'
+      email_linked: 'Почта привязана.',
+      mkt_on: 'Рассылка на почту включена.',
+      mkt_off: 'Рассылка отключена. Чеки и уведомления о подписке продолжат приходить.'
     };
     if (n && map[n]) window.remnaToast('success', map[n]);
     if (err) window.remnaToast('error', err);

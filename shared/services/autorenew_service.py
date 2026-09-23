@@ -20,6 +20,7 @@ from shared.services.optimized_route_service import remnawave_squads_for_db_user
 from shared.services.remnawave_description import build_remnawave_panel_description
 from shared.services.billing_v2.balance_floor_panel_service import sync_hybrid_balance_floor_panel_state
 from shared.services.remnawave_user_panel_sync import update_rw_user_respecting_hwid_limit
+from shared.services.subscription_email_notify import queue_subscription_renewed_email
 from shared.services.subscription_service import get_base_subscription_plan
 from shared.services.feature_flags import tariff_purchases_enabled
 
@@ -150,6 +151,14 @@ async def process_subscription_autorenewals(session: AsyncSession, settings: Set
         )
         if user.billing_mode == "hybrid" and settings.billing_v2_enabled:
             await sync_hybrid_balance_floor_panel_state(session, user, settings)
+        queue_subscription_renewed_email(
+            session,
+            user=user,
+            settings=settings,
+            new_expires=new_expires,
+            plan_name=base_plan.name,
+            auto=True,
+        )
         renewed += 1
 
     return renewed

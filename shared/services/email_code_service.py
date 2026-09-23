@@ -5,17 +5,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
-import httpx
 import redis.asyncio as redis
 
 from shared.config import Settings, get_settings
+from shared.services.email_sender import email_sending_configured, send_branded_email
+
+__all__ = ["email_sending_configured", "normalize_email", "start_email_code", "verify_email_code"]
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +27,6 @@ _MAX_ATTEMPTS = 5
 
 def _client(url: str) -> redis.Redis:
     return redis.from_url(url, encoding="utf-8", decode_responses=True)
-
-
-def _smtp_configured(s: Settings) -> bool:
-    return bool((s.smtp_host or "").strip() and (s.smtp_user or "").strip() and (s.smtp_password or "").strip())
-
-
-def _resend_configured(s: Settings) -> bool:
-    return bool((s.resend_api_key or "").strip() and (s.resend_from_email or "").strip())
-
-
-def email_sending_configured(settings: Settings | None = None) -> bool:
-    s = settings or get_settings()
-    return _smtp_configured(s) or _resend_configured(s)
 
 
 def normalize_email(raw: str) -> str | None:
@@ -123,61 +108,15 @@ async def verify_email_code(
     return True, ""
 
 
-def _code_email_html(code: str) -> str:
-    return (
-        f"<div style='font-family:sans-serif;font-size:15px;color:#111'>"
-        f"<p>Код подтверждения для Flux Network:</p>"
-        f"<p style='font-size:28px;font-weight:800;letter-spacing:.15em;'>{code}</p>"
-        f"<p style='color:#666;font-size:13px;'>Код действует 10 минут. Если вы не запрашивали его — просто проигнорируйте письмо.</p>"
-        f"</div>"
-    )
-
-
 async def _send_code_email(email: str, code: str, *, settings: Settings) -> bool:
-    if _smtp_configured(settings):
-        return await _send_via_smtp(email, code, settings=settings)
-    if _resend_configured(settings):
-        return await _send_via_resend(email, code, settings=settings)
-    return False
-
-
-def _send_via_smtp_sync(email: str, code: str, *, settings: Settings) -> None:
-    from_addr = (settings.smtp_from_email or settings.smtp_user).strip()
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Код подтверждения: {code}"
-    msg["From"] = from_addr
-    msg["To"] = email
-    msg.attach(MIMEText(_code_email_html(code), "html", "utf-8"))
-    with smtplib.SMTP(settings.smtp_host.strip(), int(settings.smtp_port), timeout=15) as smtp:
-        smtp.starttls()
-        smtp.login(settings.smtp_user.strip(), settings.smtp_password)
-        smtp.sendmail(from_addr, [email], msg.as_string())
-
-
-async def _send_via_smtp(email: str, code: str, *, settings: Settings) -> bool:
-    try:
-        await asyncio.to_thread(_send_via_smtp_sync, email, code, settings=settings)
-    except Exception:
-        logger.exception("smtp send failed")
-        return False
-    return True
-
-
-async def _send_via_resend(email: str, code: str, *, settings: Settings) -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
-                json={
-                    "from": settings.resend_from_email,
-                    "to": [email],
-                    "subject": f"Код подтверждения: {code}",
-                    "html": _code_email_html(code),
-                },
-            )
-            resp.raise_for_status()
-    except Exception:
-        logger.exception("resend send failed")
-        return False
-    return True
+    ok, _err = await send_branded_email(
+        email,
+        subject=f"Код подтверждения: {code}",
+        title="Код подтверждения",
+        intro="Введите этот код, чтобы подтвердить почту в Flux Network.",
+        big_code=code,
+        note="Код действует 10 минут. Если вы его не запрашивали — просто проигнорируйте письмо.",
+        badge="Безопасность",
+        settings=settings,
+    )
+    return ok
