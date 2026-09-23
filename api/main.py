@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from api.middleware.web_admin_rbac import WebAdminRbacMiddleware
+from api.middleware.admin_host import AdminHostMiddleware
 from api.routers import (
     flux_login,
     fraud_admin_pages,
@@ -270,6 +271,8 @@ app.add_middleware(
     https_only=settings.web_admin_session_https_only,
     max_age=86400 * 14,
 )
+# Последним добавлен — выполняется первым: на домене админки отсекаем клиентский сайт.
+app.add_middleware(AdminHostMiddleware)
 
 
 app.include_router(webhooks.router, prefix="/webhooks")

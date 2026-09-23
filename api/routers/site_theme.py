@@ -281,6 +281,11 @@ def icon(name: str, *, size: int = 16, color: str = "currentColor", stroke: floa
         "qr": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2M14 19h2M19 19h2"/>',
         "gift": '<rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M12 8v13M3 12h18"/><path d="M12 8c-1.5 0-3-.9-3-2.5S10.3 3 12 3s3 .9 3 2.5S13.5 8 12 8zm0 0c1.5 0 3-.9 3-2.5S13.7 3 12 3"/>',
         "x": '<path d="M18 6L6 18M6 6l12 12"/>',
+        "mic": '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+        "arrow-left": '<path d="M19 12H5M11 18l-6-6 6-6"/>',
+        "trash": '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+        "download": '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+        "stop": '<rect x="7" y="7" width="10" height="10" rx="2" fill="{c}" stroke="none"/>',
     }
     p = paths.get(name, "").replace("{c}", color)
     return (
@@ -594,7 +599,7 @@ def site_footer() -> str:
 <footer class="site-footer shell">
   <div style="display:flex;align-items:center;gap:10px;">
     <div style="width:22px;height:22px;border-radius:7px;background:linear-gradient(140deg,var(--accent),var(--accent-2));{_logo_box_style()}">{_logo_inner(22, 12) if site_logo_url() else ''}</div>
-    <span style="font:700 13px Manrope;color:var(--text-3);">© 2026 Flux Network</span>
+    <span style="font:700 13px Manrope;color:var(--text-3);">© 2025–2026 Flux Network</span>
   </div>
   <div class="footer-links">
     <a href="/legal/privacy">Политика конфиденциальности</a>
